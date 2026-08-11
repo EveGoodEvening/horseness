@@ -4,9 +4,9 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 
 ## Global status
 
-- **Planning state:** C00, C01, and C02 are complete; F001/F002 are closed; R001/R002 are complete; C03 is claimed and in progress
-- **Active claims:** C03 from base `bca4c85`
-- **Next eligible:** none while C03 is active
+- **Planning state:** C00, C01, C02, and C03 are complete; F001/F002 are closed; R001/R002 are complete
+- **Active claims:** none
+- **Next eligible:** C04 only
 - **Active blockers:** none
 - **Last integrated receipt:** immutable C01 `docs/checkpoints/C01/final/1.json`, envelope digest `17ddd75b49e35d3bf6f432c8c6acca30b4a66512229453aca4fc63e7f427ea7d`, indexed at A01 commit `223023330cb000b759d8a8b2419514638c1aa179`; receipt/index bytes must not be overwritten
 - **Release readiness:** not started
@@ -26,8 +26,8 @@ For C02 onward: commit the two tracker files to claim a dependency-ready chunk; 
 | R001 | Historical C01 planning/implementation remediation | F001 + C00 | complete; F001 closed |
 | R002 | Historical C01 verifier remediation | F002 + immutable C01 receipt | complete; F002 closed |
 | C02 | Domain and transition contracts | C01 | complete; final candidate `fd100bf`; 40 tests and 61 vectors green |
-| C03 | Protocol | C02 | claimed; in-progress from base `bca4c85` |
-| C04 | Policy/admission evaluator | C03 | not-started |
+| C03 | Protocol | C02 | complete; final candidate `2998e4f`; 23 package tests and 1,377 conformance checks green |
+| C04 | Policy/admission evaluator | C03 | next eligible |
 | C05 | SQLite 0001/artifacts | C04 | not-started |
 | C06 | Recovery/import/retention | C05 | not-started |
 | C07 | Admission service | C06 | not-started |
@@ -56,8 +56,8 @@ F001/R001 established the accepted `v4:C01-remediation` candidate and immutable 
 
 ## Resume instructions
 
-C02 completed from tracker-only claim base `ba7ee37` at final candidate `fd100bff3b7e577acf0838050fc8b89f7d1e870d`. The implementation commit `8034706` and review-fix commits `7c377f7`, `12d592a`, and `fd100bf` are integrated. The serialized `8034706` planning correction adding narrowly scoped root `package.json` and `docs/plan.md` ownership was reviewed before acceptance; no conflicting parallel work existed, and history was not rewritten. All three literal C02 gates ran under Node 22 with `CI=1 TZ=UTC LANG=C NODE_OPTIONS=--unhandled-rejections=strict`: typecheck exit 0, 40 tests exit 0, and 61 vectors across all eleven families exit 0. Blocker-only code and accounting re-reviews were clean. C03 is now claimed from integrated base `bca4c85` through this serialized `chore(progress): claim C03` tracker transaction. Before implementation, the same transaction records the necessary correction in `docs/plan.md`: C03 owns root `package.json` only for the frozen `protocol:conformance` and `generated:check` forwarding scripts; no other root-manifest change is authorized.
+C03 completed from tracker-only claim base `bca4c85` through claim commit `da6fa1a`. Implementation commit `2e8113e` and review-fix commits `c316ed8`, `b1f4734`, and `2998e4f` are integrated; final candidate is `2998e4f`. All four literal C03 gates ran under Node 22 with exact environment `CI=1 TZ=UTC LANG=C NODE_OPTIONS=--unhandled-rejections=strict`: typecheck exit 0; 23 package tests exit 0; protocol conformance 1,377 checks across 66 methods, 12 mappings, and 42 substitutions exit 0; generated check exit 0. The final blocker-only review was clean, all implemented C03 items are checked, and no blockers remain. C04 is the sole next eligible chunk.
 
 ## Planning review status
 
-The bootstrap workflow blocker remains closed. C02 is complete with all review findings resolved and exact acceptance evidence recorded. C03 is the sole active chunk under the simplified post-C01 tracker workflow; C04 remains ineligible until C03 completes, and no recursive development-attestation work is required.
+The bootstrap workflow blocker remains closed. C02 and C03 are complete with all review findings resolved and exact acceptance evidence recorded. No chunk is active; C04 is the sole next eligible chunk under the simplified post-C01 tracker workflow, and no recursive development-attestation work is required.
