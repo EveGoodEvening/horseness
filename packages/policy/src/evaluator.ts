@@ -64,11 +64,21 @@ function canonicalSecond(value: unknown, code: string): asserts value is string 
 }
 function composite(value: unknown): CompositeCursorV1 { const cursor = parseObservationCursorV1(value); if (cursor.kind !== "composite") fail("POLICY_CURSOR_INVALID"); return cursor; }
 function sameCursor(left: CompositeCursorV1, right: CompositeCursorV1): boolean { return canonicalJson(left) === canonicalJson(right); }
+function cursorComponentNotAfter(leftSequence: number, leftEnvelopeHash: string, leftEpoch: number, rightSequence: number, rightEnvelopeHash: string, rightEpoch: number): boolean {
+  if (leftSequence > rightSequence) return false;
+  if (leftSequence === rightSequence) return leftEnvelopeHash === rightEnvelopeHash && leftEpoch === rightEpoch;
+  return leftEpoch <= rightEpoch;
+}
 function cursorNotAfter(left: CompositeCursorV1, right: CompositeCursorV1): boolean {
-  return left.workspaceId === right.workspaceId && left.runId === right.runId && left.workspaceSequence <= right.workspaceSequence && left.runSequence <= right.runSequence && left.workspaceContextEpoch <= right.workspaceContextEpoch && left.runContextEpoch <= right.runContextEpoch;
+  return left.workspaceId === right.workspaceId && left.runId === right.runId
+    && cursorComponentNotAfter(left.workspaceSequence, left.workspaceEnvelopeHash, left.workspaceContextEpoch, right.workspaceSequence, right.workspaceEnvelopeHash, right.workspaceContextEpoch)
+    && cursorComponentNotAfter(left.runSequence, left.runEnvelopeHash, left.runContextEpoch, right.runSequence, right.runEnvelopeHash, right.runContextEpoch);
 }
 function sortExplanations(items: AdmissionExplanationV1[]): AdmissionExplanationV1[] {
   return items.sort((a, b) => compareUtf8(a.policyDigest, b.policyDigest) || compareUtf8(a.ruleId, b.ruleId) || compareUtf8(a.subject, b.subject) || compareUtf8(a.result, b.result) || compareUtf8(a.code, b.code));
+}
+function normalizeDecision(value: PolicyDecisionV1): PolicyDecisionV1 {
+  return { result: value.result, constraints: [...new Set(value.constraints)].sort(compareUtf8), explanations: sortExplanations(value.explanations as AdmissionExplanationV1[]) };
 }
 function subjectKey(rule: PolicyRuleV1): string { return `${rule.subject.action ?? "*"}|${rule.subject.pathPrefix ?? "*"}|${rule.subject.version ?? "*"}`; }
 function applies(rule: PolicyRuleV1, input: AdmissionEvaluationInputV1): boolean {
@@ -79,7 +89,7 @@ function applies(rule: PolicyRuleV1, input: AdmissionEvaluationInputV1): boolean
   return input.paths.some((path) => scopeContains(scope, path));
 }
 function decision(result: Exclude<AdmissionResult, "conflicted">, constraints: string[], explanations: AdmissionExplanationV1[]): PolicyDecisionV1 {
-  return { result, constraints: [...new Set(constraints)].sort(compareUtf8), explanations: sortExplanations(explanations) };
+  return normalizeDecision({ result, constraints, explanations });
 }
 function evaluateDocument(document: PolicySlotV1, input: AdmissionEvaluationInputV1): PolicyDecisionV1 {
   const parsed = parsePolicySlotV1(document); const digest = policySlotDigest(parsed);
@@ -111,7 +121,7 @@ function snapshotDecision(input: AdmissionEvaluationInputV1): PolicyDecisionV1 |
   return decision(explanations.some((item) => item.result === "rejected") ? "rejected" : "quarantined", [], explanations);
 }
 function approvalDecision(input: AdmissionEvaluationInputV1, combined: PolicyDecisionV1): PolicyDecisionV1 {
-  if (combined.result !== "approval_required" || input.approval === null) return combined;
+  if (combined.result !== "approval_required" || input.approval === null) return normalizeDecision(combined);
   const approval = input.approval;
   const valid = approval.proposalDigest === input.proposalDigest && approval.baseRevision === input.baseRevision && approval.baseStateHash === input.baseStateHash
     && approval.pinnedPolicyDigest === policySlotDigest(input.pinnedPolicy) && approval.currentPolicyDigest === policySlotDigest(input.currentPolicy)
@@ -121,7 +131,7 @@ function approvalDecision(input: AdmissionEvaluationInputV1, combined: PolicyDec
     && sameCursor(approval.evaluationObservationCursor, input.snapshots.evaluationObservationCursor)
     && cursorNotAfter(approval.issueObservationCursor, approval.evaluationObservationCursor)
     && Date.parse(input.evaluationClock.authorityTime) >= Date.parse(approval.issuedAt) && Date.parse(input.evaluationClock.authorityTime) < Date.parse(approval.expiresAt);
-  if (!valid) return combined;
+  if (!valid) return normalizeDecision(combined);
   const explanations = combined.explanations.map((item) => item.result === "approval_required" ? { ...item, result: "accepted" as const, code: "APPROVAL_SATISFIED" } : item) as AdmissionExplanationV1[];
   return decision(explanations.some((item) => item.result === "rejected") ? "rejected" : explanations.some((item) => item.result === "quarantined") ? "quarantined" : "accepted", combined.constraints, explanations);
 }
@@ -141,7 +151,7 @@ export function parseAdmissionEvaluationInputV1(value: unknown): AdmissionEvalua
 }
 export function evaluateAdmission(value: AdmissionEvaluationInputV1): AdmissionEvaluationV1 {
   const input = parseAdmissionEvaluationInputV1(value); const pinnedDigest = policySlotDigest(input.pinnedPolicy); const currentDigest = policySlotDigest(input.currentPolicy);
-  if (input.preconditionConflict !== null) return { schemaVersion:"1",result:"conflicted",constraints:[],explanations:[{policyDigest:pinnedDigest,ruleId:"PRECONDITION",subject:"proposal",result:"rejected",code:input.preconditionConflict}],pinnedPolicyDigest:pinnedDigest,currentPolicyDigest:currentDigest,evaluationObservationCursor:input.snapshots.evaluationObservationCursor,authorityTime:input.evaluationClock.authorityTime };
-  const snapshot = snapshotDecision(input); let combined = combinePolicyDecisions(evaluateDocument(input.pinnedPolicy,input),evaluateDocument(input.currentPolicy,input)); if(snapshot!==null) combined=combinePolicyDecisions(combined,snapshot); combined=approvalDecision(input,combined);
-  return { schemaVersion:"1",result:combined.result,constraints:combined.constraints,explanations:sortExplanations(combined.explanations as AdmissionExplanationV1[]),pinnedPolicyDigest:pinnedDigest,currentPolicyDigest:currentDigest,evaluationObservationCursor:input.snapshots.evaluationObservationCursor,authorityTime:input.evaluationClock.authorityTime };
+  if (input.preconditionConflict !== null) return { schemaVersion:"1",result:"conflicted",constraints:[],explanations:sortExplanations([{policyDigest:pinnedDigest,ruleId:"PRECONDITION",subject:"proposal",result:"rejected",code:input.preconditionConflict}]),pinnedPolicyDigest:pinnedDigest,currentPolicyDigest:currentDigest,evaluationObservationCursor:input.snapshots.evaluationObservationCursor,authorityTime:input.evaluationClock.authorityTime };
+  const snapshot = snapshotDecision(input); let combined = normalizeDecision(combinePolicyDecisions(evaluateDocument(input.pinnedPolicy,input),evaluateDocument(input.currentPolicy,input))); if(snapshot!==null) combined=normalizeDecision(combinePolicyDecisions(combined,snapshot)); combined=approvalDecision(input,combined);
+  return { schemaVersion:"1",result:combined.result,constraints:[...new Set(combined.constraints)].sort(compareUtf8),explanations:sortExplanations(combined.explanations as AdmissionExplanationV1[]),pinnedPolicyDigest:pinnedDigest,currentPolicyDigest:currentDigest,evaluationObservationCursor:input.snapshots.evaluationObservationCursor,authorityTime:input.evaluationClock.authorityTime };
 }

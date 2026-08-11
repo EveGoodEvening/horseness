@@ -37,10 +37,23 @@ test("full pinned by current result cross-product uses explicit canonical no-pol
   const neutral=evaluateAdmission(input()); assert.equal(neutral.result,"accepted"); assert.deepEqual(neutral.explanations.map((item)=>item.policyDigest),[NO_POLICY_DIGEST,NO_POLICY_DIGEST]);
 });
 
-test("UTF-8 canonical order is enforced and stable",()=>{
+test("UTF-8 canonical order is enforced and stable across combined decisions",()=>{
+  const privateUse="\uE000"; const supplementary="\u{10000}";
   const policy=core("p","accepted",{constraints:["z","é"]}); assert.doesNotThrow(()=>sealPolicyDocument(policy));
   assert.throws(()=>sealPolicyDocument(core("p","accepted",{constraints:["é","z"]})),/POLICY_RULE_INVALID/);
   const first=evaluateAdmission(input(sealPolicyDocument(policy))); assert.deepEqual(first.constraints,["z","é"]);
+  const combined=evaluateAdmission(input(
+    sealPolicyDocument(core("private","accepted",{constraints:[privateUse]})),
+    sealPolicyDocument(core("supplementary","accepted",{constraints:[supplementary]})),
+  ));
+  assert.deepEqual(combined.constraints,[privateUse,supplementary]);
+  const utf8Sorted=[...combined.explanations].sort((left,right)=>
+    Buffer.compare(Buffer.from(left.policyDigest),Buffer.from(right.policyDigest))
+      || Buffer.compare(Buffer.from(left.ruleId),Buffer.from(right.ruleId))
+      || Buffer.compare(Buffer.from(left.subject),Buffer.from(right.subject))
+      || Buffer.compare(Buffer.from(left.result),Buffer.from(right.result))
+      || Buffer.compare(Buffer.from(left.code),Buffer.from(right.code)));
+  assert.deepEqual(combined.explanations,utf8Sorted);
 });
 
 test("domain JSON Pointer containment handles root, tokens and escapes",()=>{
@@ -66,10 +79,16 @@ test("base revisions, timestamps and intervals are canonical",()=>{
   assert.throws(()=>parseAdmissionEvaluationInputV1({...base,approval:{...approval,baseRevision:-1}}),/POLICY_APPROVAL_INVALID/);
 });
 
-test("snapshot and cursor ordering rejects stale or substituted authority views",()=>{
+test("snapshot and cursor ordering rejects stale, substituted, or incomparable authority views",()=>{
   const policy=sealPolicyDocument(core("p","accepted")); const base=input(policy); const moved={...cursor,runSequence:5}; const future={...cursor,runSequence:6};
   assert(evaluateAdmission({...base,evaluationClock:{...base.evaluationClock,observationCursor:moved}}).explanations.some((item)=>item.code==="STALE_EVALUATION_CURSOR"));
   assert(evaluateAdmission({...base,snapshots:{...base.snapshots,issueObservationCursor:future}}).explanations.some((item)=>item.code==="ISSUE_CURSOR_AFTER_EVALUATION"));
+  for(const issueObservationCursor of [
+    {...cursor,workspaceEnvelopeHash:"workspace-substitution"},
+    {...cursor,workspaceContextEpoch:cursor.workspaceContextEpoch-1},
+    {...cursor,runEnvelopeHash:"run-substitution"},
+    {...cursor,runContextEpoch:cursor.runContextEpoch-1},
+  ]) assert(evaluateAdmission({...base,snapshots:{...base.snapshots,issueObservationCursor}}).explanations.some((item)=>item.code==="ISSUE_CURSOR_AFTER_EVALUATION"));
   assert(evaluateAdmission({...base,snapshots:{...base.snapshots,observedGrantDigest:"old"}}).explanations.some((item)=>item.code==="STALE_GRANT_SNAPSHOT"));
   assert.equal(evaluateAdmission({...base,snapshots:{...base.snapshots,quotaAvailable:false}}).result,"quarantined");
 });
@@ -86,6 +105,16 @@ test("approval binds author, authenticated approver, issue snapshot and evaluati
   ];
   for(const scenario of rejected) assert.equal(evaluateAdmission(scenario as AdmissionEvaluationInputV1).result,"approval_required");
   assert.equal(evaluateAdmission({...base,approval,evaluationClock:{...base.evaluationClock,authorityTime:approval.expiresAt}}).result,"approval_required");
+});
+
+test("approval rejects equal-sequence cursor hash and epoch substitutions",()=>{
+  const pinned=sealPolicyDocument(core("p","approval_required")); const base=input(pinned); const approval=approvalFor(base);
+  for(const evaluationObservationCursor of [
+    {...cursor,workspaceEnvelopeHash:"workspace-substitution"},
+    {...cursor,workspaceContextEpoch:cursor.workspaceContextEpoch+1},
+    {...cursor,runEnvelopeHash:"run-substitution"},
+    {...cursor,runContextEpoch:cursor.runContextEpoch+1},
+  ]) assert.equal(evaluateAdmission({...base,approval:{...approval,evaluationObservationCursor}}).result,"approval_required");
 });
 
 test("strict validators reject extras, duplicates and noncanonical collections",()=>{
