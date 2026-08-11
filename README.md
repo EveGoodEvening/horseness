@@ -6,6 +6,12 @@ The target uses Node.js 22, strict TypeScript, ESM, pnpm, SQLite WAL, and append
 
 Implementation status is intentionally maintained only in [docs/progress.md](docs/progress.md), so this overview remains accurate throughout delivery.
 
+## Development workspace
+
+The repository is a Node.js 22, strict-TypeScript ESM workspace managed by the exact pnpm version declared in `package.json`. Enable Corepack, then install reproducibly with `corepack pnpm install --frozen-lockfile`. The root commands `docs:lint`, `typecheck`, `lint`, `test`, and `boundaries:check` are the CI contract; package code is exposed only through each package's `src/index.ts` boundary.
+
+Claim and checkpoint verification is implemented by `scripts/progress-cas.mjs`. Its `verify-live-*` modes accept only canonical production records and reject fixture paths; `verify-fixture-bundle` is explicitly confined to the signed, synthetic C01 bundle. `scripts/acceptance.mjs` verifies exact ordered command evidence rather than executing or accepting abbreviated gates.
+
 ## Planning documents
 
 - [Architecture and invariants](docs/architecture.md)

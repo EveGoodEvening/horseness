@@ -1,0 +1,9 @@
+packages:
+  - packages/*
+  - apps/*
+  - adapters/*
+
+catalogMode: strict
+cleanupUnusedCatalogs: true
+linkWorkspacePackages: false
+preferWorkspacePackages: false
