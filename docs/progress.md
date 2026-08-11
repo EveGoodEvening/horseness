@@ -4,9 +4,9 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 
 ## Global status
 
-- **Planning state:** C00 and C01 are complete; F001/F002 are closed; R001/R002 are complete; C02 is in progress
-- **Active claims:** C02 (tracker-only claim base `ba7ee37`)
-- **Next eligible:** none; C03 waits on C02 completion
+- **Planning state:** C00, C01, and C02 are complete; F001/F002 are closed; R001/R002 are complete; C03 is next
+- **Active claims:** none
+- **Next eligible:** C03
 - **Active blockers:** none
 - **Last integrated receipt:** immutable C01 `docs/checkpoints/C01/final/1.json`, envelope digest `17ddd75b49e35d3bf6f432c8c6acca30b4a66512229453aca4fc63e7f427ea7d`, indexed at A01 commit `223023330cb000b759d8a8b2419514638c1aa179`; receipt/index bytes must not be overwritten
 - **Release readiness:** not started
@@ -25,8 +25,8 @@ For C02 onward: commit the two tracker files to claim a dependency-ready chunk; 
 | C01 | Bootstrap/CI | C00 | complete; immutable A01 evidence retained |
 | R001 | Historical C01 planning/implementation remediation | F001 + C00 | complete; F001 closed |
 | R002 | Historical C01 verifier remediation | F002 + immutable C01 receipt | complete; F002 closed |
-| C02 | Domain and transition contracts | C01 | in-progress; tracker-only claim at `ba7ee37` |
-| C03 | Protocol | C02 | not-started |
+| C02 | Domain and transition contracts | C01 | complete; final candidate `fd100bf`; 40 tests and 61 vectors green |
+| C03 | Protocol | C02 | next eligible; not-started |
 | C04 | Policy/admission evaluator | C03 | not-started |
 | C05 | SQLite 0001/artifacts | C04 | not-started |
 | C06 | Recovery/import/retention | C05 | not-started |
@@ -56,8 +56,8 @@ F001/R001 established the accepted `v4:C01-remediation` candidate and immutable 
 
 ## Resume instructions
 
-C02 is claimed from integrated base `ba7ee37` with C01 completion evidenced by `docs/progress/C01.md` and immutable receipt `docs/checkpoints/C01/final/1.json` (envelope digest `17ddd75b49e35d3bf6f432c8c6acca30b4a66512229453aca4fc63e7f427ea7d`). Implement only the exact paths recorded in `docs/progress/C02.md`, run its three literal acceptance commands in order, commit any review fixes within ownership, and finish with `chore(progress): complete C02`, changing only `docs/progress.md` and `docs/progress/C02.md`. C03 remains ineligible until that completion commit.
+C02 completed from tracker-only claim base `ba7ee37` at final candidate `fd100bff3b7e577acf0838050fc8b89f7d1e870d`. The implementation commit `8034706` and review-fix commits `7c377f7`, `12d592a`, and `fd100bf` are integrated. The serialized `8034706` planning correction adding narrowly scoped root `package.json` and `docs/plan.md` ownership was reviewed before acceptance; no conflicting parallel work existed, and history was not rewritten. All three literal C02 gates ran under Node 22 with `CI=1 TZ=UTC LANG=C NODE_OPTIONS=--unhandled-rejections=strict`: typecheck exit 0, 40 tests exit 0, and 61 vectors across all eleven families exit 0. Blocker-only code and accounting re-reviews were clean. Start C03 only with its serialized `chore(progress): claim C03` tracker transaction from the integrated C02 completion commit.
 
 ## Planning review status
 
-The bootstrap workflow blocker is closed. C02 is actively claimed, C03 remains dependency-blocked, and no recursive development-attestation work remains.
+The bootstrap workflow blocker remains closed. C02 is complete with all review findings resolved and exact acceptance evidence recorded; C03 is the sole next eligible chunk, and no recursive development-attestation work remains.
