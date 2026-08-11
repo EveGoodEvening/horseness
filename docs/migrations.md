@@ -2,9 +2,13 @@
 
 ## SQLite migration 0001 — initial authority
 
-Migration 0001 creates the append-only workspace and run event streams, command and idempotency deduplication, projection/snapshot metadata, and content-addressed artifact reference and pin ledgers. The store enables foreign keys, WAL journaling, and `synchronous=FULL`. Migration identity is recorded in `schema_migrations`; reopening is idempotent and a conflicting version/name pair fails closed.
+Migration 0001 creates the append-only workspace and run event streams, command and idempotency deduplication, projection/snapshot metadata, and content-addressed artifact reference and pin ledgers. The complete migration, including its ledger record, commits in one transaction and reopening is idempotent. Before enabling foreign keys, changing journal or synchronous mode, or beginning a write transaction, the migrator reads the existing migration ledger and rejects unknown versions newer than the implementation supports. Version 1 with a conflicting name also fails closed.
 
-Event writes use `BEGIN IMMEDIATE` and compare both expected sequence and envelope hash. A command identifier is bound to a canonical request digest; exact retries return the recorded result, while identifier reuse with different input is rejected. Dual workspace/run appends and their dedup result commit together.
+`workspace_id` is part of every stream, event, snapshot, projection, and command-dedup identity, key, lookup, and applicable foreign key. Consequently identical run IDs, event IDs, idempotency keys, and command IDs may safely exist in different workspaces without sharing heads, results, snapshots, or projections.
+
+Event writes use `BEGIN IMMEDIATE` and compare both expected sequence and envelope hash. The command-dedup lookup occurs after the write lock is acquired. A command identifier is bound, within its workspace, to a canonical request digest; exact concurrent or later retries return the originally committed result, while identifier reuse with different input is rejected. Dual workspace/run appends and their dedup result commit together.
+
+Both decoded and raw replay authenticate before returning data. Authentication parses every stored envelope, checks its workspace/stream identity and redundant row sequence, prior hash, and envelope hash, verifies the complete hash chain from genesis, and proves that its final event equals the stored stream head. A partial replay still authenticates the preceding chain and current stored head, so range selection cannot hide earlier or later corruption.
 
 Artifacts are staged with mode `0600`, fully written, file-fsynced, atomically renamed into their SHA-256 object path, and parent-directory-fsynced before a SQL reference may be registered. Reads verify the digest and recorded length. Missing, corrupt, or unknown referenced objects fail closed. References and pins protect objects from orphan collection; startup removes abandoned staging files.
 

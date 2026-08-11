@@ -22,15 +22,25 @@ export class ArtifactStore {
   publish(data:Uint8Array|string, mediaType:string|null=null):ArtifactRecord {
     const bytes=typeof data==="string"?Buffer.from(data):Buffer.from(data); const digest=sha256(bytes); const destination=this.pathFor(digest); this.ensureWithin(destination);
     if(!existsSync(destination)) {
-      const parent=dirname(destination); this.crash("artifact.mkdir.before"); mkdirSync(parent,{recursive:true}); this.crash("artifact.mkdir.after");
+      const parent=dirname(destination); const parentExisted=existsSync(parent); this.crash("artifact.mkdir.before"); mkdirSync(parent,{recursive:true}); this.crash("artifact.mkdir.after");
+      if(!parentExisted)this.syncDirectory(this.objects);
       const temporary=join(this.staging,`${digest}.${String(process.pid)}.${String(Date.now())}.tmp`); this.crash("artifact.open.before"); const fd=openSync(temporary,"wx",0o600); this.crash("artifact.open.after");
-      try { this.crash("artifact.write.before"); let offset=0; while(offset<bytes.length) offset+=writeSync(fd,bytes,offset,bytes.length-offset); this.crash("artifact.write.after"); this.crash("artifact.file-fsync.before"); fsyncSync(fd); this.crash("artifact.file-fsync.after"); this.crash("artifact.close.before"); closeSync(fd); this.crash("artifact.close.after"); this.crash("artifact.rename.before"); renameSync(temporary,destination); this.crash("artifact.rename.after"); this.syncDirectory(parent); this.syncDirectory(this.staging); }
-      catch(error){ try{closeSync(fd);}catch(closeError){void closeError;} if(existsSync(temporary))rmSync(temporary,{force:true}); throw error; }
+      let closed=false;
+      try {
+        this.crash("artifact.write.before"); let offset=0; while(offset<bytes.length) offset+=writeSync(fd,bytes,offset,bytes.length-offset); this.crash("artifact.write.after");
+        this.crash("artifact.file-fsync.before"); fsyncSync(fd); this.crash("artifact.file-fsync.after");
+        this.crash("artifact.close.before"); closeSync(fd); closed=true; this.crash("artifact.close.after");
+        this.syncDirectory(this.staging);
+        this.crash("artifact.rename.before"); renameSync(temporary,destination); this.crash("artifact.rename.after");
+        this.syncDirectory(parent);
+        this.syncDirectory(this.staging);
+      } catch(error){ if(!closed){try{closeSync(fd);}catch(closeError){void closeError;}} if(existsSync(temporary))rmSync(temporary,{force:true}); throw error; }
     }
     const actual=this.readVerifiedBytes(digest); if(actual.length!==bytes.length) throw new ArtifactIntegrityError("published artifact length mismatch");
     return {digest,byteLength:bytes.length,relativePath:relative(this.root,destination),mediaType};
   }
-  register(record:ArtifactRecord):void { this.crash("artifact.sql-reference.before"); this.db.prepare("INSERT OR IGNORE INTO artifacts(digest,byte_length,relative_path,media_type,published_at) VALUES(?,?,?,?,?)").run(record.digest,record.byteLength,record.relativePath,record.mediaType,new Date().toISOString()); this.crash("artifact.sql-reference.after"); }
+  verifyRecord(record:ArtifactRecord):void { const expectedPath=relative(this.root,this.pathFor(record.digest)); if(record.relativePath!==expectedPath)throw new ArtifactIntegrityError(`artifact path mismatch: ${record.digest}`); const bytes=this.readVerifiedBytes(record.digest); if(bytes.length!==record.byteLength)throw new ArtifactIntegrityError(`artifact metadata mismatch: ${record.digest}`); }
+  register(record:ArtifactRecord):void { this.verifyRecord(record); this.crash("artifact.sql-reference.before"); const existing=this.db.prepare("SELECT byte_length,relative_path,media_type FROM artifacts WHERE digest=?").get(record.digest) as {byte_length:number;relative_path:string;media_type:string|null}|undefined; if(existing&&(existing.byte_length!==record.byteLength||existing.relative_path!==record.relativePath||existing.media_type!==record.mediaType))throw new ArtifactIntegrityError(`artifact catalog conflict: ${record.digest}`); this.db.prepare("INSERT INTO artifacts(digest,byte_length,relative_path,media_type,published_at) VALUES(?,?,?,?,?) ON CONFLICT(digest) DO NOTHING").run(record.digest,record.byteLength,record.relativePath,record.mediaType,new Date().toISOString()); this.crash("artifact.sql-reference.after"); }
   publishAndRegister(data:Uint8Array|string,mediaType:string|null=null):ArtifactRecord { const record=this.publish(data,mediaType); this.register(record); return record; }
   readVerifiedBytes(digest:string):Buffer { const path=this.pathFor(digest); if(!existsSync(path))throw new ArtifactIntegrityError(`referenced artifact missing: ${digest}`); const data=readFileSync(path); if(sha256(data)!==digest)throw new ArtifactIntegrityError(`referenced artifact corrupt: ${digest}`); return data; }
   readReferenced(digest:string):Buffer { const row=this.db.prepare("SELECT byte_length FROM artifacts WHERE digest=?").get(digest) as {byte_length:number}|undefined; if(!row)throw new ArtifactIntegrityError(`unknown artifact reference: ${digest}`); const data=this.readVerifiedBytes(digest); if(data.length!==row.byte_length)throw new ArtifactIntegrityError(`artifact metadata mismatch: ${digest}`); return data; }
