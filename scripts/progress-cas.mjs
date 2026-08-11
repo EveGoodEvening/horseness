@@ -290,7 +290,6 @@ function readCanonicalBlob(ref, file) { const raw = readBlob(ref, file), value =
 function verifyIndexBlob(ref, file, kind) { const raw = readBlob(ref, file); return verifyIndexRaw(raw, kind); }
 function readBlob(ref, file) { assertBlobAt(ref, file); return gitPath(ref, file); }
 function assertBlobAt(ref, file) { const entry = git("ls-tree", ref, "--", normalizeRelative(file)).trim().split(/\s+/); assert(entry.length >= 3 && entry[0] === "100644" && entry[1] === "blob", `authoritative input is not a regular 100644 Git blob: ${file}`); }
-function blobOid(ref, file) { assertBlobAt(ref, file); return git("rev-parse", `${ref}:${normalizeRelative(file)}`).trim(); }
 function blobOidOptional(ref, file) { try { return git("rev-parse", `${ref}:${normalizeRelative(file)}`).trim(); } catch { return null; } }
 function deriveClaimCommit(head, claimPath, indexPath) {
   const matches = [];
