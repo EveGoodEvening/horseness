@@ -1,18 +1,5 @@
 {
-  "schemaVersion": "1",
-  "family": "authorization",
-  "case": "minimal-v1",
-  "domain": "horseness.authorization-matrix.v1",
-  "value": {
-    "schemaVersion": "1",
-    "role": "worker",
-    "allowed": [
-      "read-bound-context",
-      "submit-proposal",
-      "submit-receipt",
-      "cancel-own-attempt"
-    ]
-  },
-  "canonicalJson": "{\"allowed\":[\"read-bound-context\",\"submit-proposal\",\"submit-receipt\",\"cancel-own-attempt\"],\"role\":\"worker\",\"schemaVersion\":\"1\"}",
-  "digest": "fe9d415d096a57e68d92eaec2dc12a3970d3c5cabb00f3a3dd0ae9c46b496699"
+  "schemaVersion":"2", "familyVersion":"1", "family":"authorization", "case":"worker-submit-proposal", "action":"authorizeCommand",
+  "input":{"role":"worker","command":"submit-proposal","capability":{"schemaVersion":"1","workspaceId":"ws","commands":["submit-proposal"],"issuer":"authority","delegatee":"worker","issuedObservationSequence":1,"expiresObservationSequence":9,"nonce":"n","revocationSequence":null},"workspaceId":"ws","observationSequence":2,"grantDigest":"g","expectedGrantDigest":"g"},
+  "expected":{"allowed":true}
 }

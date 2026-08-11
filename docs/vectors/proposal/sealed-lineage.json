@@ -1,16 +1,5 @@
 {
-  "schemaVersion": "1",
-  "family": "proposal",
-  "case": "sealed-lineage",
-  "domain": "horseness.proposal.v1",
-  "value": {
-    "schemaVersion": "1",
-    "workspaceId": "ws_demo",
-    "runId": "run_demo",
-    "nonce": "golden-2",
-    "predecessorProposalDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-    "predecessorReason": "rebase"
-  },
-  "canonicalJson": "{\"nonce\":\"golden-2\",\"predecessorProposalDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"predecessorReason\":\"rebase\",\"runId\":\"run_demo\",\"schemaVersion\":\"1\",\"workspaceId\":\"ws_demo\"}",
-  "digest": "99969df6bf96e00ce6056439f77b4d220ec4d6b63e6aa4d4e07dd63a2c4d5095"
+  "schemaVersion":"2", "familyVersion":"1", "family":"proposal", "case":"mutated-proposal-id-rejected", "action":"verifyProposal",
+  "input":{"core":{"schemaVersion":"1","workspaceId":"ws","runId":"run","authorPrincipalId":"worker","authorGrantDigest":"grant","attemptId":"attempt","receiptDigests":[],"forkPinDigest":"fork","deltaAuthorityScopeDigest":"scope","baseRevision":1,"baseStateHash":"state","canonicalizerVersion":"jcs-v1","hashVersion":"sha256-v1","proposalSealingObservationCursor":{"schemaVersion":"1","kind":"composite","workspaceId":"ws","workspaceSequence":1,"workspaceEnvelopeHash":"wh","workspaceContextEpoch":0,"runId":"run","runSequence":1,"runEnvelopeHash":"rh","runContextEpoch":0},"proposalSealingContextVersion":{"schemaVersion":"1","kind":"composite","workspaceContextEpoch":0,"runContextEpoch":0,"observationCursor":{"schemaVersion":"1","kind":"composite","workspaceId":"ws","workspaceSequence":1,"workspaceEnvelopeHash":"wh","workspaceContextEpoch":0,"runId":"run","runSequence":1,"runEnvelopeHash":"rh","runContextEpoch":0}},"operations":[],"evidenceClaims":[],"pinnedPolicyDigest":"pinned","currentPolicyDigest":"current","nonce":"n","predecessorProposalDigest":null,"predecessorReason":null},"proposalDigest":"mutated","proposalId":"prp_mutated"},
+  "expectedError":"PROPOSAL_ID_MISMATCH"
 }

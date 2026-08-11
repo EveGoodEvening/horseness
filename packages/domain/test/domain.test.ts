@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  NO_POLICY_DIGEST, applyDelta, approvalIsValid, assertAcyclic, authorizeCommand, bindContext, canonicalJson, combinePolicyDecisions, completionPolicySatisfied, completionPredicateIdentity, contextManifestCoreDigest, createRunGenesis, createWorkspaceGenesis, deltaAuthorityScopeDigest, deriveSchedulability, deterministicReplay, domainDigest, intersectScopes, jsonValueDigest, noPolicyDecision, reduceCanonicalDocument, reduceDispatch, resolveTask, scopeContains, sealAttemptReceipt, sealDependencyJoinSnapshot, sealForkPin, sealProposal, verifyAttemptReceipt, verifyEventChain, verifyProposal,
-  type AttemptGenerationStateV1, type CompositeCursorV1, type ContextManifestCoreV1, type DeltaAuthorityScopeV1, type EventEnvelopeV1, type ForkPinCoreV1, type PolicyDecisionV1, type ProposalEnvelopeCoreV1
+  NO_POLICY_DIGEST, applyDelta, approvalIsValid, assertAcyclic, authorizeCommand, bindContext, canonicalJson, combinePolicyDecisions, completionPolicySatisfied, completionPredicateIdentity, contextManifestCoreDigest, createRunGenesis, createWorkspaceGenesis, deltaAuthorityScopeDigest, deriveSchedulability, deterministicReplay, domainDigest, intersectScopes, jsonValueDigest, noPolicyDecision, reduceCanonicalDocument, reduceDispatch, reduceOperationalState, reduceWorkspaceState, resolveTask, scopeContains, sealAttemptReceipt, sealDependencyJoinSnapshot, sealEventEnvelope, sealForkPin, sealProposal, verifyAttemptReceipt, verifyEventChain, verifyProposal,
+  type AttemptGenerationStateV1, type CompositeCursorV1, type ContextManifestCoreV1, type DeltaAuthorityScopeV1, type ForkPinCoreV1, type HashedEventEnvelopeV1, type PolicyDecisionV1, type ProposalEnvelopeCoreV1
 } from "../src/index.js";
 
 const composite: CompositeCursorV1 = { schemaVersion: "1", kind: "composite", workspaceId: "ws", workspaceSequence: 1, workspaceEnvelopeHash: "a".repeat(64), workspaceContextEpoch: 0, runId: "run", runSequence: 1, runEnvelopeHash: "b".repeat(64), runContextEpoch: 0 };
@@ -88,12 +88,41 @@ test("attempt receipts sort evidence, derive identity and detect substitution", 
   const receipt = sealAttemptReceipt({ schemaVersion: "1", workspaceId: "ws", runId: "run", taskId: "t", attemptId: "a", generation: 1, attemptContextBindingDigest: "b", contextManifestCoreDigest: "m", forkPinDigest: "f", providerId: "provider", providerOperationId: "operation", providerIdempotencyKeyDigest: "k", producerPrincipalId: "adapter", producerGrantDigest: "g", adapterId: "adapter", adapterVersion: "1", hostId: "host", hostVersion: "1", outcome: "succeeded", startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:00:01Z", outputDigest: "o", evidence: [{ digest: "z", mediaType: "text/plain", size: 1 }, { digest: "a", mediaType: "text/plain", size: 1 }], provenance: {}, nonce: "n" });
   verifyAttemptReceipt(receipt); assert.deepEqual(receipt.evidence.map((item) => item.digest), ["a", "z"]); assert.throws(() => verifyAttemptReceipt({ ...receipt, outputDigest: "changed" }), /RECEIPT_MISMATCH/);
 });
-test("canonical reducer ignores operational facts and advances only accepted deltas", () => {
-  const genesis = reduceCanonicalDocument(null, { eventType: "RunCreatedV1", sequence: 1, runId: "run", initialDocument: { n: 0 } }); const nextDoc = { n: 1 }; const accepted = reduceCanonicalDocument(genesis, { eventType: "DeltaAcceptedV1", sequence: 3, proposalId: "p", resultingDocument: nextDoc, priorStateHash: genesis.stateHash, resultingStateHash: domainDigest("horseness.canonical-document.v1", nextDoc) }); assert.equal(accepted.revision, 1); assert.equal(accepted.lastCanonicalEventSequence, 3);
+test("canonical reducer enforces identity, monotonicity and immutable documents", () => {
+  const initial = { nested: { n: 0 } }; const genesis = reduceCanonicalDocument(null, { eventType: "RunCreatedV1", sequence: 1, workspaceId: "ws", runId: "run", initialDocument: initial });
+  const final = { nested: { n: 1 } }; const accepted = reduceCanonicalDocument(genesis, { eventType: "DeltaAcceptedV1", sequence: 3, workspaceId: "ws", runId: "run", proposalId: "p", resultingDocument: final, priorStateHash: genesis.stateHash, resultingStateHash: domainDigest("horseness.canonical-document.v1", final) });
+  assert.equal(accepted.revision, 1); assert.notEqual(genesis.document, initial); assert.notEqual(accepted, genesis); initial.nested.n = 99; final.nested.n = 99; assert.deepEqual(genesis.document, { nested: { n: 0 } }); assert.deepEqual(accepted.document, { nested: { n: 1 } });
+  assert.throws(() => reduceCanonicalDocument(accepted, { eventType: "DeltaAcceptedV1", sequence: 3, workspaceId: "ws", runId: "run", proposalId: "p2", resultingDocument: final, priorStateHash: accepted.stateHash, resultingStateHash: accepted.stateHash }), /EVENT_SEQUENCE_INVALID/);
+  assert.throws(() => reduceCanonicalDocument(genesis, { eventType: "DeltaAcceptedV1", sequence: 2, workspaceId: "other", runId: "run", proposalId: "p", resultingDocument: final, priorStateHash: genesis.stateHash, resultingStateHash: domainDigest("horseness.canonical-document.v1", final) }), /AGGREGATE_IDENTITY_MISMATCH/);
 });
-test("deterministic replay produces byte-identical aggregate state", () => {
-  const initial = { n: 0 }; const state0 = domainDigest("horseness.canonical-document.v1", initial); const final = { n: 1 }; const state1 = domainDigest("horseness.canonical-document.v1", final);
-  const envelope = (sequence: number, eventType: string, payload: Record<string, unknown>): EventEnvelopeV1 => ({ schemaVersion: "1", streamKind: "run", workspaceId: "ws", streamId: "run", sequence, eventId: String(sequence), eventType, principalId: "p", causationId: "c", correlationId: "c", idempotencyKey: String(sequence), priorEnvelopeHash: null, payloadHash: "x", payload: payload as never });
-  const events = [envelope(1, "RunCreatedV1", { runId: "run", initialDocument: initial }), envelope(2, "ProposalSubmittedV1", { proposalId: "p" }), envelope(3, "DeltaAcceptedV1", { proposalId: "p", priorStateHash: state0, resultingStateHash: state1, resultingDocument: final })];
-  assert.equal(canonicalJson(deterministicReplay(events) as never), canonicalJson(deterministicReplay(events) as never));
+test("workspace and run operational reducers are exhaustive, monotonic and immutable", () => {
+  const workspace = reduceWorkspaceState(null, { eventType: "WorkspaceCreatedV1", sequence: 1, workspaceId: "ws", authorityPrincipalId: "authority", initialGrantDigest: "grant", authorityConsumptionMarker: "used", activePolicyDigest: "policy-1" });
+  const changed = reduceWorkspaceState(workspace, { eventType: "PolicyReferenceChangedV1", sequence: 2, workspaceId: "ws", activePolicyDigest: "policy-2" });
+  assert.equal(workspace.activePolicyDigest, "policy-1"); assert.equal(changed.activePolicyDigest, "policy-2"); assert.throws(() => reduceWorkspaceState(changed, { eventType: "PolicyReferenceChangedV1", sequence: 2, workspaceId: "ws", activePolicyDigest: "policy-3" }), /EVENT_SEQUENCE_INVALID/);
+  const run = reduceOperationalState(null, { eventType: "RunCreatedV1", sequence: 1, workspaceId: "ws", runId: "run" }); const submitted = reduceOperationalState(run, { eventType: "ProposalSubmittedV1", sequence: 2, workspaceId: "ws", runId: "run", proposalId: "p" });
+  assert.deepEqual(run.proposals, {}); assert.deepEqual(submitted.proposals, { p: "submitted" }); assert.throws(() => reduceOperationalState(submitted, { eventType: "ForkCreatedV1", sequence: 3, workspaceId: "ws", runId: "other" }), /AGGREGATE_IDENTITY_MISMATCH/);
+});
+function replayChain(): HashedEventEnvelopeV1<unknown>[] {
+  const initial = { n: 0 }; const final = { n: 1 }; const state0 = domainDigest("horseness.canonical-document.v1", initial); const state1 = domainDigest("horseness.canonical-document.v1", final);
+  const payloads = [
+    { eventType: "RunCreatedV1", workspaceId: "ws", runId: "run", initialDocument: initial, canonicalizerVersion: "jcs-v1", hashVersion: "sha256-v1" },
+    { eventType: "ProposalSubmittedV1", proposalId: "p" },
+    { eventType: "DeltaAcceptedV1", proposalId: "p", priorStateHash: state0, resultingStateHash: state1, resultingDocument: final }
+  ];
+  const result: HashedEventEnvelopeV1<unknown>[] = []; let priorEnvelopeHash: string | null = null;
+  for (let index = 0; index < payloads.length; index += 1) { const payload = payloads[index]!; const item: HashedEventEnvelopeV1<unknown> = sealEventEnvelope({ schemaVersion: "1", streamKind: "run", workspaceId: "ws", streamId: "run", sequence: index + 1, eventId: String(index + 1), eventType: payload.eventType, principalId: "p", causationId: "c", correlationId: "c", idempotencyKey: String(index + 1), priorEnvelopeHash, payload }); result.push(item); priorEnvelopeHash = item.envelopeHash; }
+  return result;
+}
+test("authenticated replay is deterministic and rejects chain attacks", () => {
+  const chain = replayChain(); const replay = deterministicReplay(chain); assert.equal(canonicalJson(replay as never), canonicalJson(deterministicReplay(chain) as never));
+  const corrupt = structuredClone(chain); corrupt[1]!.envelope.payload = { eventType: "ProposalSubmittedV1", proposalId: "mutated" }; assert.throws(() => deterministicReplay(corrupt), /EVENT_PAYLOAD_HASH_INVALID/);
+  assert.throws(() => deterministicReplay([chain[0]!, chain[2]!]), /EVENT_CHAIN_INVALID/);
+  assert.throws(() => deterministicReplay([chain[1]!, chain[0]!, chain[2]!]), /EVENT_CHAIN_INVALID/);
+  assert.throws(() => deterministicReplay([...chain, chain[2]!]), /EVENT_CHAIN_INVALID/);
+  const splice = replayChain(); const { payloadHash: _splicePayloadHash, ...spliceEnvelope } = splice[1]!.envelope; splice[1] = sealEventEnvelope({ ...spliceEnvelope, workspaceId: "other" }); assert.throws(() => deterministicReplay(splice), /EVENT_IDENTITY_INVALID/);
+});
+test("replay rejects unsupported versions, invalid genesis and malformed events", () => {
+  const chain = replayChain(); const version = structuredClone(chain); version[0]!.envelope.schemaVersion = "2" as "1"; assert.throws(() => deterministicReplay(version), /EVENT_VERSION_UNSUPPORTED/);
+  const unknownPayload = { eventType: "UnknownV1" }; const { payloadHash: _unknownPayloadHash, ...unknownEnvelope } = chain[1]!.envelope; const unknown = sealEventEnvelope({ ...unknownEnvelope, eventType: "UnknownV1", payload: unknownPayload }); assert.throws(() => deterministicReplay([chain[0]!, unknown]), /UNSUPPORTED_EVENT_TYPE/);
+  const malformedPayload = { eventType: "RunCreatedV1", workspaceId: "ws", runId: "run", initialDocument: {}, canonicalizerVersion: "bad", hashVersion: "sha256-v1" }; const { payloadHash: _malformedPayloadHash, ...malformedEnvelope } = chain[0]!.envelope; const malformed = sealEventEnvelope({ ...malformedEnvelope, payload: malformedPayload }); assert.throws(() => deterministicReplay([malformed]), /MALFORMED_EVENT/);
 });

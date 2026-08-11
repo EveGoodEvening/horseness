@@ -1,0 +1,1 @@
+{"schemaVersion":"2","familyVersion":"1","family":"task-dispatch","case":"recovery-ambiguous","action":"domainDigest","input":{"domain":"horseness.task-dispatch-transition.v1","value":{"from":"reconciliation_required","input":"reconcile-ambiguous","to":"unknown_outcome","retryPermitted":false}},"expected":"40d149d3c8272c52f4dae89aeb1b26261e007bdb33697694d21c7a330dbba2dd"}

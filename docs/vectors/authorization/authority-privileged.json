@@ -1,14 +1,5 @@
 {
-  "schemaVersion": "1",
-  "family": "authorization",
-  "case": "authority-privileged",
-  "domain": "horseness.authorization-matrix.v1",
-  "value": {
-    "schemaVersion": "1",
-    "role": "authority",
-    "command": "resolve-unknown",
-    "userPresence": true
-  },
-  "canonicalJson": "{\"command\":\"resolve-unknown\",\"role\":\"authority\",\"schemaVersion\":\"1\",\"userPresence\":true}",
-  "digest": "731e1538bbc5845c215eff25d80fc4136815828b7d0fbe9774387f6a3eba6ea2"
+  "schemaVersion":"2", "familyVersion":"1", "family":"authorization", "case":"substituted-grant-denied", "action":"authorizeCommand",
+  "input":{"role":"authority","command":"policy-admin","capability":{"schemaVersion":"1","workspaceId":"ws","commands":["policy-admin"],"issuer":"authority","delegatee":"authority","issuedObservationSequence":1,"expiresObservationSequence":9,"nonce":"n","revocationSequence":null},"workspaceId":"ws","observationSequence":2,"grantDigest":"mutated","expectedGrantDigest":"expected"},
+  "expected":{"allowed":false,"reason":"GRANT_SUBSTITUTED"}
 }

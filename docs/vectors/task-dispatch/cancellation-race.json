@@ -1,0 +1,1 @@
+{"schemaVersion":"2","familyVersion":"1","family":"task-dispatch","case":"cancellation-race","action":"domainDigest","input":{"domain":"horseness.task-dispatch-transition.v1","value":{"from":"cancel_requested","input":"terminal-receipt:succeeded","to":"succeeded","lateCancellation":"audit-only"}},"expected":"85e2ac466ef96875e12635f2c478da6db47c775ec490ce9c399a33e6aac78f48"}

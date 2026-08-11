@@ -1,21 +1,9 @@
 {
-  "schemaVersion": "1",
+  "schemaVersion": "2",
+  "familyVersion": "1",
   "family": "receipt",
-  "case": "failed-evidence",
-  "domain": "horseness.attempt-receipt.v1",
-  "value": {
-    "schemaVersion": "1",
-    "attemptId": "attempt_demo",
-    "generation": 2,
-    "outcome": "failed",
-    "evidence": [
-      {
-        "digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-        "mediaType": "text/plain",
-        "size": 3
-      }
-    ]
-  },
-  "canonicalJson": "{\"attemptId\":\"attempt_demo\",\"evidence\":[{\"digest\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"mediaType\":\"text/plain\",\"size\":3}],\"generation\":2,\"outcome\":\"failed\",\"schemaVersion\":\"1\"}",
-  "digest": "3a5d84c65e16c7541cff5272f31fe4828239422eabbf7f740cf4e4186607ffb6"
+  "case": "failed-receipt-evidence-digest",
+  "action": "domainDigest",
+  "input": { "domain": "horseness.attempt-receipt.v1", "value": { "schemaVersion": "1", "attemptId": "attempt_demo", "generation": 1, "outcome": "failed", "evidence": [{ "digest": "abc", "mediaType": "text/plain", "size": 3 }] } },
+  "expected": "8e9a75740763e2e8f1acaa2e84f640f717a847289c0afb71eb717ce608437b23"
 }

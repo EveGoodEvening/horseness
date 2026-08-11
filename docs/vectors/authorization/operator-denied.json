@@ -1,14 +1,5 @@
 {
-  "schemaVersion": "1",
-  "family": "authorization",
-  "case": "operator-denied",
-  "domain": "horseness.authorization-matrix.v1",
-  "value": {
-    "schemaVersion": "1",
-    "role": "operator",
-    "command": "duplicate-risk-launch",
-    "denial": "ROLE_FORBIDDEN"
-  },
-  "canonicalJson": "{\"command\":\"duplicate-risk-launch\",\"denial\":\"ROLE_FORBIDDEN\",\"role\":\"operator\",\"schemaVersion\":\"1\"}",
-  "digest": "f630dc2a55a263865a79b7fa263752fcbf8b80b987bc7f399525bb7e8ed12dfb"
+  "schemaVersion":"2", "familyVersion":"1", "family":"authorization", "case":"operator-policy-admin-denied", "action":"authorizeCommand",
+  "input":{"role":"operator","command":"policy-admin","capability":{"schemaVersion":"1","workspaceId":"ws","commands":["policy-admin"],"issuer":"authority","delegatee":"operator","issuedObservationSequence":1,"expiresObservationSequence":9,"nonce":"n","revocationSequence":null},"workspaceId":"ws","observationSequence":2,"grantDigest":"g","expectedGrantDigest":"g"},
+  "expected":{"allowed":false,"reason":"ROLE_FORBIDDEN"}
 }

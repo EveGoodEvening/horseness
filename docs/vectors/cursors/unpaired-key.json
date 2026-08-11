@@ -1,0 +1,4 @@
+{
+  "schemaVersion":"2", "familyVersion":"1", "family":"cursors", "case":"unpaired-surrogate-key-rejected", "action":"canonicalJson",
+  "input":{"\udfff":"invalid"}, "expectedError":"INVALID_UNICODE"
+}

@@ -9,9 +9,26 @@ export class DomainError extends Error {
     this.name = "DomainError";
   }
 }
+function assertValidUnicode(value: string): void {
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) throw new DomainError("INVALID_UNICODE");
+      index += 1;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      throw new DomainError("INVALID_UNICODE");
+    }
+  }
+}
+
 
 function assertJson(value: unknown, seen: Set<object>): asserts value is JsonValue {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+  if (value === null || typeof value === "boolean") return;
+  if (typeof value === "string") {
+    assertValidUnicode(value);
+    return;
+  }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new DomainError("INVALID_JSON_VALUE");
     return;
@@ -24,7 +41,14 @@ function assertJson(value: unknown, seen: Set<object>): asserts value is JsonVal
   } else {
     const prototype = Object.getPrototypeOf(value) as unknown;
     if (prototype !== Object.prototype && prototype !== null) throw new DomainError("INVALID_JSON_VALUE");
-    for (const item of Object.values(value)) assertJson(item, seen);
+    const keys = Reflect.ownKeys(value);
+    if (keys.some((key) => typeof key !== "string")) throw new DomainError("INVALID_JSON_VALUE");
+    for (const key of keys as string[]) {
+      assertValidUnicode(key);
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor?.enumerable || !("value" in descriptor)) throw new DomainError("INVALID_JSON_VALUE");
+      assertJson(descriptor.value, seen);
+    }
   }
   seen.delete(value);
 }

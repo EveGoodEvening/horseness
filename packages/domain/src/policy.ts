@@ -1,4 +1,4 @@
-import { domainDigest, DomainError, type JsonValue } from "./canonical.js";
+import { canonicalJson, domainDigest, DomainError, type JsonValue } from "./canonical.js";
 import type { CompositeCursorV1 } from "./events.js";
 
 export const NO_POLICY_V1 = { schemaVersion: "1", kind: "no-policy", rules: [] } as const;
@@ -10,11 +10,15 @@ export function noPolicyDecision(): PolicyDecisionV1 { return { result: "accepte
 const PRECEDENCE: Record<PolicyDecisionV1["result"], number> = { accepted: 0, approval_required: 1, quarantined: 2, rejected: 3 };
 export function combinePolicyDecisions(pinned: PolicyDecisionV1, current: PolicyDecisionV1): PolicyDecisionV1 {
   const result = PRECEDENCE[pinned.result] >= PRECEDENCE[current.result] ? pinned.result : current.result;
-  return { result, constraints: [...new Set([...pinned.constraints, ...current.constraints])].sort(), explanations: [...pinned.explanations, ...current.explanations].sort((a, b) => a.policyDigest.localeCompare(b.policyDigest) || a.ruleId.localeCompare(b.ruleId) || a.subject.localeCompare(b.subject)) };
+  const explanations = [...pinned.explanations, ...current.explanations].sort((a, b) => a.policyDigest.localeCompare(b.policyDigest) || a.ruleId.localeCompare(b.ruleId) || a.subject.localeCompare(b.subject) || a.result.localeCompare(b.result));
+  return { result, constraints: [...new Set([...pinned.constraints, ...current.constraints])].sort(), explanations };
 }
 export interface ApprovalBindingV1 { schemaVersion: "1"; approvalId: string; proposalDigest: string; baseRevision: number; baseStateHash: string; pinnedPolicyDigest: string; currentPolicyDigest: string; approverPrincipalId: string; approverGrantDigest: string; allowedAction: string; issueObservationCursor: CompositeCursorV1; evaluationObservationCursor: CompositeCursorV1; issuedAt: string; expiresAt: string }
-export function approvalIsValid(binding: ApprovalBindingV1, authorityTime: string, expected: Pick<ApprovalBindingV1, "proposalDigest" | "pinnedPolicyDigest" | "currentPolicyDigest" | "approverGrantDigest">): boolean {
-  return authorityTime < binding.expiresAt && authorityTime >= binding.issuedAt && binding.proposalDigest === expected.proposalDigest && binding.pinnedPolicyDigest === expected.pinnedPolicyDigest && binding.currentPolicyDigest === expected.currentPolicyDigest && binding.approverGrantDigest === expected.approverGrantDigest;
+export type ApprovalExpectationV1 = Pick<ApprovalBindingV1, "proposalDigest" | "baseRevision" | "baseStateHash" | "pinnedPolicyDigest" | "currentPolicyDigest" | "approverGrantDigest" | "allowedAction" | "evaluationObservationCursor">;
+export function approvalIsValid(binding: ApprovalBindingV1, authorityTime: string, expected: ApprovalExpectationV1): boolean {
+  const issued = Date.parse(binding.issuedAt); const expires = Date.parse(binding.expiresAt); const now = Date.parse(authorityTime);
+  if (![issued, expires, now].every(Number.isFinite) || issued >= expires || now < issued || now >= expires) return false;
+  return binding.proposalDigest === expected.proposalDigest && binding.baseRevision === expected.baseRevision && binding.baseStateHash === expected.baseStateHash && binding.pinnedPolicyDigest === expected.pinnedPolicyDigest && binding.currentPolicyDigest === expected.currentPolicyDigest && binding.approverGrantDigest === expected.approverGrantDigest && binding.allowedAction === expected.allowedAction && canonicalJson(binding.evaluationObservationCursor) === canonicalJson(expected.evaluationObservationCursor);
 }
 
 export type PrincipalRole = "authority" | "approver" | "operator" | "worker" | "adapter";
@@ -25,12 +29,13 @@ const ALLOWED: Record<PrincipalRole, readonly PrivilegedCommand[]> = {
 };
 export type AuthorizationDenial = "ROLE_FORBIDDEN" | "CAPABILITY_SCOPE_MISMATCH" | "CROSS_WORKSPACE_DENIED" | "GRANT_STALE" | "GRANT_SUBSTITUTED" | "USER_PRESENCE_REQUIRED" | "RECOVERY_QUORUM_REQUIRED";
 export interface CapabilityV1 { schemaVersion: "1"; workspaceId: string; runId?: string; taskId?: string; attemptId?: string; generation?: number; commands: PrivilegedCommand[]; issuer: string; delegatee: string; issuedObservationSequence: number; expiresObservationSequence: number; nonce: string; revocationSequence: number | null }
-export function authorizeCommand(input: { role: PrincipalRole; command: PrivilegedCommand; capability: CapabilityV1; workspaceId: string; observationSequence: number; grantDigest: string; expectedGrantDigest: string; userPresence?: boolean; recoveryQuorum?: boolean }): { allowed: true } | { allowed: false; reason: AuthorizationDenial } {
+export function authorizeCommand(input: { role: PrincipalRole; command: PrivilegedCommand; capability: CapabilityV1; workspaceId: string; runId?: string; taskId?: string; attemptId?: string; generation?: number; observationSequence: number; grantDigest: string; expectedGrantDigest: string; userPresence?: boolean; recoveryQuorum?: boolean }): { allowed: true } | { allowed: false; reason: AuthorizationDenial } {
   if (!ALLOWED[input.role].includes(input.command)) return { allowed: false, reason: "ROLE_FORBIDDEN" };
   if (input.capability.workspaceId !== input.workspaceId) return { allowed: false, reason: "CROSS_WORKSPACE_DENIED" };
   if (!input.capability.commands.includes(input.command)) return { allowed: false, reason: "CAPABILITY_SCOPE_MISMATCH" };
+  for (const key of ["runId", "taskId", "attemptId", "generation"] as const) if (input.capability[key] !== undefined && input.capability[key] !== input[key]) return { allowed: false, reason: "CAPABILITY_SCOPE_MISMATCH" };
   if (input.grantDigest !== input.expectedGrantDigest) return { allowed: false, reason: "GRANT_SUBSTITUTED" };
-  if (input.observationSequence > input.capability.expiresObservationSequence || (input.capability.revocationSequence !== null && input.capability.revocationSequence <= input.observationSequence)) return { allowed: false, reason: "GRANT_STALE" };
+  if (input.observationSequence < input.capability.issuedObservationSequence || input.observationSequence > input.capability.expiresObservationSequence || (input.capability.revocationSequence !== null && input.capability.revocationSequence <= input.observationSequence)) return { allowed: false, reason: "GRANT_STALE" };
   if (["duplicate-risk-launch", "rebind-workspace", "promote-import", "resolve-unknown"].includes(input.command) && !input.userPresence) return { allowed: false, reason: "USER_PRESENCE_REQUIRED" };
   if (input.command === "recovery-admin" && !input.recoveryQuorum) return { allowed: false, reason: "RECOVERY_QUORUM_REQUIRED" };
   if (input.role === "approver" && input.capability.delegatee === input.capability.issuer) throw new DomainError("ROLE_FORBIDDEN", "self approval forbidden");

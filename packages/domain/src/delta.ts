@@ -1,4 +1,4 @@
-import { deepClone, digestId, domainDigest, DomainError, jsonValueDigest, type JsonValue } from "./canonical.js";
+import { assertJsonValue, deepClone, digestId, domainDigest, DomainError, jsonValueDigest, type JsonValue } from "./canonical.js";
 import type { CompositeCursorV1, ContextVersionV1 } from "./events.js";
 
 export type DeltaOperationV1 =
@@ -10,22 +10,31 @@ export type DeltaReasonCode = "STALE_BASE" | "TEST_FAILED" | "ADD_PARENT_CHANGED
 export type DeltaResult = { outcome: "accepted"; document: JsonValue; stateHash: string; operationResultDigest: string } | { outcome: "conflicted" | "rejected"; reason: DeltaReasonCode };
 
 export interface DeltaAuthorityScopeV1 { schemaVersion: "1"; workspaceId: string; runId: string; taskId: string; roots: string[] }
+function encodePointerToken(token: string): string { return token.replaceAll("~", "~0").replaceAll("/", "~1"); }
 export function validatePointer(path: string): string[] {
+  if (typeof path !== "string") throw new DomainError("INVALID_POINTER");
+  try { assertJsonValue(path); } catch { throw new DomainError("INVALID_POINTER"); }
   if (path === "") return [];
   if (!path.startsWith("/")) throw new DomainError("INVALID_POINTER");
-  return path.slice(1).split("/").map((token) => {
+  const tokens = path.slice(1).split("/").map((token) => {
     if (/~(?:[^01]|$)/u.test(token)) throw new DomainError("INVALID_POINTER");
     return token.replaceAll("~1", "/").replaceAll("~0", "~");
   });
+  if (`/${tokens.map(encodePointerToken).join("/")}` !== path) throw new DomainError("INVALID_POINTER");
+  return tokens;
 }
 export function canonicalScope(scope: DeltaAuthorityScopeV1): DeltaAuthorityScopeV1 {
+  if (scope.schemaVersion !== "1" || typeof scope.workspaceId !== "string" || typeof scope.runId !== "string" || typeof scope.taskId !== "string" || !Array.isArray(scope.roots)) throw new DomainError("INVALID_ENVELOPE");
   for (const root of scope.roots) validatePointer(root);
   return { ...scope, roots: [...new Set(scope.roots)].sort() };
 }
 export function deltaAuthorityScopeDigest(scope: DeltaAuthorityScopeV1): string { return domainDigest("horseness.delta-authority-scope.v1", canonicalScope(scope)); }
 export function scopeContains(scope: DeltaAuthorityScopeV1, path: string): boolean {
-  validatePointer(path);
-  return scope.roots.some((root) => root === "" || path === root || path.startsWith(`${root}/`));
+  const pathTokens = validatePointer(path);
+  return scope.roots.some((root) => {
+    const rootTokens = validatePointer(root);
+    return rootTokens.length <= pathTokens.length && rootTokens.every((token, index) => token === pathTokens[index]);
+  });
 }
 export function intersectScopes(left: DeltaAuthorityScopeV1, right: DeltaAuthorityScopeV1): DeltaAuthorityScopeV1 {
   if (left.workspaceId !== right.workspaceId || left.runId !== right.runId || left.taskId !== right.taskId) throw new DomainError("CAPABILITY_SCOPE_MISMATCH");
@@ -58,10 +67,25 @@ function readAt(document: JsonValue, tokens: readonly string[]): { exists: boole
 function failure(reason: DeltaReasonCode): DeltaResult { return { outcome: ["STALE_BASE", "TEST_FAILED", "ADD_PARENT_CHANGED", "ADD_TARGET_EXISTS", "PATH_MISSING", "VALUE_DIGEST_MISMATCH", "ARRAY_INDEX_RANGE"].includes(reason) ? "conflicted" : "rejected", reason } as DeltaResult; }
 
 export function applyDelta(base: JsonValue, operations: readonly DeltaOperationV1[], scope: DeltaAuthorityScopeV1): DeltaResult {
-  const writes = operations.filter((operation) => operation.op !== "test").map((operation) => operation.path);
-  for (const path of writes) {
-    try { validatePointer(path); } catch { return failure("INVALID_POINTER"); }
-    if (!scopeContains(scope, path)) return failure("SCOPE_ESCAPE");
+  try {
+    assertJsonValue(base);
+    canonicalScope(scope);
+  } catch (error) {
+    return failure(error instanceof DomainError && error.code === "INVALID_POINTER" ? "INVALID_POINTER" : "INVALID_ENVELOPE");
+  }
+  if (!Array.isArray(operations)) return failure("INVALID_ENVELOPE");
+  const writes: string[] = [];
+  for (const operation of operations) {
+    if (operation === null || typeof operation !== "object" || !["test", "add", "replace", "remove"].includes(operation.op)) return failure("INVALID_ENVELOPE");
+    const requiredKeys = operation.op === "add" ? ["expectedParentDigest", "op", "path", "value"] : operation.op === "replace" ? ["expectedValueDigest", "op", "path", "value"] : ["expectedValueDigest", "op", "path"];
+    if (Object.keys(operation).sort().join("\0") !== requiredKeys.join("\0")) return failure("INVALID_ENVELOPE");
+    if (("expectedValueDigest" in operation && typeof operation.expectedValueDigest !== "string") || ("expectedParentDigest" in operation && typeof operation.expectedParentDigest !== "string")) return failure("INVALID_ENVELOPE");
+    try { validatePointer(operation.path); } catch { return failure("INVALID_POINTER"); }
+    if (!scopeContains(scope, operation.path)) return failure("SCOPE_ESCAPE");
+    if (operation.op === "add" || operation.op === "replace") {
+      try { assertJsonValue(operation.value); } catch { return failure("INVALID_JSON_VALUE"); }
+    }
+    if (operation.op !== "test") writes.push(operation.path);
   }
   if (new Set(writes).size !== writes.length) return failure("DUPLICATE_WRITE_TARGET");
   for (let index = 0; index < writes.length; index += 1) for (let other = index + 1; other < writes.length; other += 1) if ((writes[index] !== "" && writes[other]?.startsWith(`${writes[index]}/`)) || (writes[other] !== "" && writes[index]?.startsWith(`${writes[other]}/`)) || writes[index] === "" || writes[other] === "") return failure("OVERLAPPING_WRITE_TARGET");

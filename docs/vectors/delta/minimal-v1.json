@@ -1,16 +1,5 @@
 {
-  "schemaVersion": "1",
-  "family": "delta",
-  "case": "minimal-v1",
-  "domain": "horseness.json-value.v1",
-  "value": {
-    "items": [
-      "alpha"
-    ],
-    "meta": {
-      "ready": true
-    }
-  },
-  "canonicalJson": "{\"items\":[\"alpha\"],\"meta\":{\"ready\":true}}",
-  "digest": "0bbdcc87e953664397ead4aaccc8b97aacbcd5df628a16a146cfd03ab6df8a92"
+  "schemaVersion":"2", "familyVersion":"1", "family":"delta", "case":"replace-in-scope", "action":"applyDelta",
+  "input":{"base":{"items":["alpha"]},"operations":[{"op":"replace","path":"/items/0","expectedValueDigest":"bc8110ee70badab646a828d87965759a82a2a8f05d4b7ad2c075dd14c382243c","value":"beta"}],"scope":{"schemaVersion":"1","workspaceId":"ws","runId":"run","taskId":"task","roots":["/items"]}},
+  "select":["document"], "expected":{"items":["beta"]}
 }

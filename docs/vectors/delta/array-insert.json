@@ -1,18 +1,5 @@
 {
-  "schemaVersion": "1",
-  "family": "delta",
-  "case": "array-insert",
-  "domain": "horseness.json-value.v1",
-  "value": {
-    "base": [
-      "a"
-    ],
-    "operation": {
-      "op": "add",
-      "path": "/1",
-      "value": "b"
-    }
-  },
-  "canonicalJson": "{\"base\":[\"a\"],\"operation\":{\"op\":\"add\",\"path\":\"/1\",\"value\":\"b\"}}",
-  "digest": "f21e819d7a63fc16c51427c795ba1a004a01ea23569fdba64f3217663f3b451e"
+  "schemaVersion":"2", "familyVersion":"1", "family":"delta", "case":"test-scope-checked-before-read", "action":"applyDelta",
+  "input":{"base":{"public":0,"secret":1},"operations":[{"op":"test","path":"/secret","expectedValueDigest":"fe7ed06fcf744da3151c0ee64fdc6ac6bae2fd872cfceed0c56afb4a08c87afc"}],"scope":{"schemaVersion":"1","workspaceId":"ws","runId":"run","taskId":"task","roots":["/public"]}},
+  "expected":{"outcome":"rejected","reason":"SCOPE_ESCAPE"}
 }

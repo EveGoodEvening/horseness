@@ -52,15 +52,44 @@ export function createRunGenesis(input: { observationCursor: AbsentRunGenesisCur
   return { event, resultCursor: { schemaVersion: "1", kind: "composite", workspaceId: cursor.workspaceId, workspaceSequence: cursor.workspaceSequence, workspaceEnvelopeHash: cursor.workspaceEnvelopeHash, workspaceContextEpoch: cursor.workspaceContextEpoch, runId: cursor.runId, runSequence: 1, runEnvelopeHash: event.envelopeHash, runContextEpoch: 0 } };
 }
 
+function eventError(code: string): never { throw new Error(code); }
+
+function assertNonEmpty(value: unknown, code: string): asserts value is string {
+  if (typeof value !== "string" || value.length === 0) eventError(code);
+}
+
 export function verifyEventChain(events: readonly HashedEventEnvelopeV1<unknown>[]): void {
+  if (events.length === 0) eventError("EVENT_CHAIN_EMPTY");
+  const first = events[0];
+  if (first === undefined) eventError("EVENT_CHAIN_EMPTY");
+  const streamKind = first.envelope.streamKind;
+  const workspaceId = first.envelope.workspaceId;
+  const streamId = first.envelope.streamId;
+  if (streamKind !== "workspace" && streamKind !== "run") eventError("EVENT_VERSION_UNSUPPORTED");
+  if (first.envelope.schemaVersion !== "1") eventError("EVENT_VERSION_UNSUPPORTED");
+  if (streamKind === "workspace" && streamId !== workspaceId) eventError("EVENT_IDENTITY_INVALID");
   let prior: string | null = null;
-  let sequence = 1;
-  for (const item of events) {
-    if (item.envelope.sequence !== sequence || item.envelope.priorEnvelopeHash !== prior) throw new Error("EVENT_CHAIN_INVALID");
-    if (domainDigest("horseness.event-payload.v1", item.envelope.payload) !== item.envelope.payloadHash || domainDigest("horseness.event-envelope.v1", item.envelope) !== item.envelopeHash) throw new Error("EVENT_HASH_INVALID");
+  for (let index = 0; index < events.length; index += 1) {
+    const item = events[index];
+    if (item === undefined) eventError("EVENT_CHAIN_INVALID");
+    const envelope = item.envelope;
+    if (envelope.schemaVersion !== "1") eventError("EVENT_VERSION_UNSUPPORTED");
+    if (envelope.streamKind !== streamKind || envelope.workspaceId !== workspaceId || envelope.streamId !== streamId) eventError("EVENT_IDENTITY_INVALID");
+    if (!Number.isSafeInteger(envelope.sequence) || envelope.sequence !== index + 1 || envelope.priorEnvelopeHash !== prior) eventError("EVENT_CHAIN_INVALID");
+    assertNonEmpty(envelope.eventId, "EVENT_ENVELOPE_INVALID");
+    assertNonEmpty(envelope.eventType, "EVENT_ENVELOPE_INVALID");
+    assertNonEmpty(envelope.principalId, "EVENT_ENVELOPE_INVALID");
+    assertNonEmpty(envelope.causationId, "EVENT_ENVELOPE_INVALID");
+    assertNonEmpty(envelope.correlationId, "EVENT_ENVELOPE_INVALID");
+    assertNonEmpty(envelope.idempotencyKey, "EVENT_ENVELOPE_INVALID");
+    if (domainDigest("horseness.event-payload.v1", envelope.payload) !== envelope.payloadHash) eventError("EVENT_PAYLOAD_HASH_INVALID");
+    if (domainDigest("horseness.event-envelope.v1", envelope as unknown as JsonValue) !== item.envelopeHash) eventError("EVENT_ENVELOPE_HASH_INVALID");
+    const payload = envelope.payload;
+    if (typeof payload !== "object" || payload === null || Array.isArray(payload) || !("eventType" in payload) || payload.eventType !== envelope.eventType) eventError("EVENT_PAYLOAD_INVALID");
     prior = item.envelopeHash;
-    sequence += 1;
   }
+  const genesisType = streamKind === "workspace" ? "WorkspaceCreatedV1" : "RunCreatedV1";
+  if (first.envelope.eventType !== genesisType || first.envelope.priorEnvelopeHash !== null || first.envelope.sequence !== 1) eventError("INVALID_GENESIS");
 }
 
 export function eventCanonicalBytes(event: HashedEventEnvelopeV1): string { return canonicalJson(event as unknown as JsonValue); }

@@ -1,20 +1,5 @@
 {
-  "schemaVersion": "1",
-  "family": "delta",
-  "case": "root-replace",
-  "domain": "horseness.json-value.v1",
-  "value": {
-    "base": {
-      "old": true
-    },
-    "operation": {
-      "op": "replace",
-      "path": "",
-      "value": {
-        "new": true
-      }
-    }
-  },
-  "canonicalJson": "{\"base\":{\"old\":true},\"operation\":{\"op\":\"replace\",\"path\":\"\",\"value\":{\"new\":true}}}",
-  "digest": "bb4f36af8f8ea8dfe8258c282f570fb2f4c241f271342a0a3eb088177f06837f"
+  "schemaVersion":"2", "familyVersion":"1", "family":"delta", "case":"invalid-pointer-before-document-access", "action":"applyDelta",
+  "input":{"base":{"a":1},"operations":[{"op":"test","path":"/a~2","expectedValueDigest":"irrelevant"}],"scope":{"schemaVersion":"1","workspaceId":"ws","runId":"run","taskId":"task","roots":[""]}},
+  "expected":{"outcome":"rejected","reason":"INVALID_POINTER"}
 }

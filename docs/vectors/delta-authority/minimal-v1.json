@@ -1,18 +1,5 @@
 {
-  "schemaVersion": "1",
-  "family": "delta-authority",
-  "case": "minimal-v1",
-  "domain": "horseness.delta-authority-scope.v1",
-  "value": {
-    "schemaVersion": "1",
-    "workspaceId": "ws_demo",
-    "runId": "run_demo",
-    "taskId": "task_demo",
-    "roots": [
-      "/items",
-      "/meta"
-    ]
-  },
-  "canonicalJson": "{\"roots\":[\"/items\",\"/meta\"],\"runId\":\"run_demo\",\"schemaVersion\":\"1\",\"taskId\":\"task_demo\",\"workspaceId\":\"ws_demo\"}",
-  "digest": "1afc76529c765918ff48dd20a676ac99192b7eea58e194a1a0be3fbe703f09fa"
+  "schemaVersion":"2", "familyVersion":"1", "family":"delta-authority", "case":"deduplicate-and-sort-roots", "action":"canonicalScope",
+  "input":{"schemaVersion":"1","workspaceId":"ws","runId":"run","taskId":"task","roots":["/z","/a","/z"]},
+  "expected":{"schemaVersion":"1","workspaceId":"ws","runId":"run","taskId":"task","roots":["/a","/z"]}
 }

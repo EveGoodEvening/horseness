@@ -1,15 +1,9 @@
 {
-  "schemaVersion": "1",
+  "schemaVersion": "2",
+  "familyVersion": "1",
   "family": "events",
-  "case": "minimal-v1",
-  "domain": "horseness.event-payload.v1",
-  "value": {
-    "eventType": "RunCreatedV1",
-    "runId": "run_demo",
-    "initialDocument": {
-      "items": []
-    }
-  },
-  "canonicalJson": "{\"eventType\":\"RunCreatedV1\",\"initialDocument\":{\"items\":[]},\"runId\":\"run_demo\"}",
-  "digest": "56a0c73babea10d58d371af8be2b6a8af1021a481d7f937f421eaf3a8649f164"
+  "case": "run-genesis-payload-digest",
+  "action": "domainDigest",
+  "input": { "domain": "horseness.event-payload.v1", "value": { "eventType": "RunCreatedV1", "workspaceId": "ws_demo", "runId": "run_demo", "canonicalizerVersion": "jcs-v1", "hashVersion": "sha256-v1", "initialDocument": { "items": [] } } },
+  "expected": "a0b22413de173f4c9e8ffb9395aa99d4168c921c80c5dfe78ef8d4ce88cf21d7"
 }

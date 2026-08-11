@@ -1,0 +1,1 @@
+{"schemaVersion":"2","familyVersion":"1","family":"dependency-join","case":"cancellation-propagation","action":"domainDigest","input":{"domain":"horseness.dependency-edge.v1","value":{"sourceResolution":"cancelled","propagateCancellation":true,"schedulability":"ineligible"}},"expected":"9065e2633623beac3085026b901ccdd6e1a8f3cb9b9a154513984d78fac3366b"}

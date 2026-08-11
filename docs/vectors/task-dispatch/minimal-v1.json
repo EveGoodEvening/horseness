@@ -1,15 +1,1 @@
-{
-  "schemaVersion": "1",
-  "family": "task-dispatch",
-  "case": "minimal-v1",
-  "domain": "horseness.task-completion-predicate.v1",
-  "value": {
-    "kind": "canonical-change",
-    "proposalDigest": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp",
-    "acceptedEventDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-    "resultingRevision": 1,
-    "resultingStateHash": "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
-  },
-  "canonicalJson": "{\"acceptedEventDigest\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"kind\":\"canonical-change\",\"proposalDigest\":\"pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\",\"resultingRevision\":1,\"resultingStateHash\":\"ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss\"}",
-  "digest": "8cdbc80fa3cc1f9f67c7237bc80d64c41cd26a55bd02b97ae80889373393a538"
-}
+{"schemaVersion":"2","familyVersion":"1","family":"task-dispatch","case":"minimal-v1","action":"domainDigest","input":{"domain":"horseness.task-completion-predicate.v1","value":{"kind":"canonical-change","proposalDigest":"pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp","acceptedEventDigest":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","resultingRevision":1,"resultingStateHash":"ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"}},"expected":"8cdbc80fa3cc1f9f67c7237bc80d64c41cd26a55bd02b97ae80889373393a538"}
