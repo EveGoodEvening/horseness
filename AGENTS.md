@@ -8,10 +8,10 @@ Resolve conflicts in that order. An architectural change requires a dedicated pl
 
 ## Execution rules
 
-- Base chunks execute serially through `C25`; dependency-ready `PNNN`, `RNNN`, and `VNNN` nodes are explicit serial scheduling exceptions. The single priority is `P -> R -> V -> C`; a ready P preempts new lower-class claims. No source chunks overlap.
-- Never edit source before the integrated claim base defined in `docs/plan.md`. C00 uses `bootstrap-v1`, C01 uses the specified tool-free claim exception, and the ordinary versioned claim-attempt graph begins with C01 candidate production. A claim record, claim-index row, and Markdown ledger bind only the pre-claim parent SHA; the live verifier obtains K/B1 from integrated HEAD and proves commit/tree/path/parent/ancestry. Candidate `W`, integration `I`, and attestation `A` are distinct and no commit contains its own SHA. Renewed, blocked, or remediated work requires a new attempt generation and matching W/I tree. Dependency completion requires a valid indexed signed checkpoint envelope; acceptance-dependent task edges additionally require their durable `DeltaAcceptedV1` completion identity.
-- Work only in the exact claim-sealed `allowedPaths`, `affectedAdrPaths`, and `acceptanceRecordPaths` defined in the final addendum. No semantic shorthand grants ownership. Shared files use serialized integration.
-- Every package-changing chunk owns only its listed manifests and `pnpm-lock.yaml`; pnpm is the sole lockfile serializer.
+- Base chunks execute serially through `C25`; no source chunks overlap.
+- C00/C01 bootstrap claims, remediation records, signed receipts, and indexes are immutable historical evidence. Never rewrite them; focused CI verification continues to authenticate their version, signatures, digests, indexes, paths, and Git ancestry.
+- From C02 onward, use the conventional sequence in `docs/plan.md`: two-file tracker claim commit, owned-path implementation commits, exact acceptance gates, review-fix commits with affected gates rerun, then a two-file tracker completion commit. Do not create development claim JSON, per-chunk signed receipts, checkpoint-index rows, or P/R/V closure graphs.
+- Work only in the exact owned paths for the active chunk. Package-changing chunks own only their listed manifests and `pnpm-lock.yaml`; pnpm is the sole lockfile serializer.
 - Domain owns typed absent-workspace, workspace-only, absent-run, run-only, and composite observation/result cursors; `ForkPinCoreV1`, dependency/join snapshots and delta scopes; separate authorization and source-view context versions; acyclic manifest/binding hashes; proposal-sealing observations; canonical policy/delta outcomes; task resolution; launch-intent dispatch races; authorization denials; and authenticated receipts. Protocol maps them; policy consumes them.
 - `WorkspaceCreated` and `RunCreated` are explicit sequence-one genesis events with expected-absent CAS. Only `DeltaAccepted` advances canonical revision/hash. Never synthesize a composite cursor when either stream is absent.
 - `proposalId` is derived only from `proposalDigest`; operation preconditions and stable reason-code outcomes are normative. Never authorize or look up an alternate identity.
@@ -23,15 +23,14 @@ Resolve conflicts in that order. An architectural change requires a dedicated pl
 - External dispatch commits a durable launch intent before provider invocation; a first binding-valid receipt may terminalize from that intent or any later nonterminal state. Task success releases only the frozen `TaskCompletionPolicyV1` predicates. Never relaunch an unknown outcome absent reconciliation or explicit duplicate-risk authorization. C22–C25 effects require append-only integrated signed intent/result side-effect checkpoints and lookup-first recovery.
 - Store only opaque secret references. Consent binds exact release/capability/host/scope/identity. Uninstall writes the kill switch and disables discovery before reconciling authority revocation.
 - Bootstrap verification occurs before Horseness executes. Default doctor is non-executing. Publication is `stage -> reconcile -> black-box verify -> promote -> announce`; partial states require receipts and exact-digest reconciliation.
-- Every base chunk and V node runs exactly its frozen acceptance-contract-v3 command list. P nodes use the pre-frozen structural planning-correction validator and claim-sealed exact paths; P freezes immutable R/V ownership and machine command records. Receipts reject skipped, missing, reordered, optional, placeholder, or substituted commands.
-- Later defects use immutable F/P/R/V IDs and stale-evidence rules; detectors have only the atomic finding-plus-blocked-status grant, validation chunks never edit source, and resumed detectors use a fresh claim attempt.
+- Every base chunk runs its frozen ordered acceptance commands. Failed gates or review findings keep the chunk in progress; fixes are committed within ownership and affected gates rerun before the completion tracker commit.
+- Later product defects use the review-fix protocol in the active ledger. Architectural or out-of-scope corrections require an ordinary reviewed planning-correction commit, not a recursive cryptographic remediation graph.
 
 ## Planning-only baseline
 
-Until C00 and C01 complete, do not create implementation code, manifests, lockfiles, workflows, or generated scaffolding except where C01 explicitly owns them. C00 is tool-free and uses only commands available on the clean Node 22 baseline. Planning corrections must remain consistent across all five planning artifacts.
-- Integration and release identity use exactly `refs/heads/main`. Before W00 seal, normalize and evidence local/remote default/protection state. The live C01 checker rejects any other branch.
-- Production receipt verification uses only canonical live paths, complete index chains, integrated Git ancestry, canonical UTC-second timestamps, explicit trusted time, symlink rejection, and authenticated trust lookup. Synthetic algorithms run only through the explicit isolated fixture-bundle verifier.
-
+The planning-only baseline is complete. C00/C01 historical evidence remains read-only. C02 is the next eligible product chunk and MUST begin with `chore(progress): claim C02`; do not include C02 product code in that claim commit.
+- Integration and release identity use exactly `refs/heads/main`.
+- Focused production receipt verification for C00/C01 uses canonical live paths, complete index chains, integrated Git ancestry, canonical UTC-second timestamps, symlink rejection, and authenticated trust lookup. Synthetic algorithms run only through the isolated fixture-bundle verifier.
 ## Durable lessons
 
 - The repository began empty; conventions and ownership must be explicit.
@@ -42,3 +41,4 @@ Until C00 and C01 complete, do not create implementation code, manifests, lockfi
 - Serial chunks are deliberate: correctness and deterministic manifests/lockfiles outweigh speculative parallel throughput.
 
 - Claim commits cannot content-bind their own object IDs. Persist only the pre-claim parent in `ClaimAttemptV1`, claim index, and ledger; derive the integrated claim SHA from the verified Git graph.
+- Repository development receipts are not product runtime receipts. Simplifying C02+ chunk tracking does not weaken evidence-gated canonical deltas, authenticated worker returns, immutable context/fork bindings, installer trust, or release/external-effect evidence.

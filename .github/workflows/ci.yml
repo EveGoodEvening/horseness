@@ -30,11 +30,11 @@ jobs:
           node-version-file: .node-version
           cache: pnpm
       - run: corepack enable
-      - run: node scripts/acceptance.mjs verify-manifest --subject C01 --version v4:C01
+      - run: node scripts/acceptance.mjs verify-manifest --subject C01 --version v4:C01-remediation
       - run: node -e "$(cat docs/validation/c00-contract-gate.node-e.txt)"
       - run: node scripts/c00-contract-gate.mjs
       - run: node scripts/progress-cas.mjs verify-live-bootstrap --receipt docs/checkpoints/C00/bootstrap/0.json --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --integrated-head HEAD --strict
-      - run: node scripts/progress-cas.mjs verify-live-claim --claim docs/claims/C01/1.json --claim-index docs/claims/index.jsonl --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --now 2026-08-11T16:11:30Z --integrated-head HEAD --strict
+      - run: node scripts/progress-cas.mjs verify-live-remediation-claim --claim docs/claims/R001/1.json --original-claim docs/claims/C01/1.json --claim-index docs/claims/index.jsonl --finding docs/findings/F001.json --finding-index docs/findings/index.jsonl --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --now 2026-08-11T17:30:00Z --integrated-head HEAD --strict
       - run: node scripts/progress-cas.mjs verify-fixture-bundle --bundle docs/checkpoints/fixtures/c01-bundle-v1 --strict
       - run: corepack pnpm install --frozen-lockfile
       - run: corepack pnpm run docs:lint
@@ -42,24 +42,8 @@ jobs:
       - run: corepack pnpm run lint
       - run: corepack pnpm run test
       - run: corepack pnpm run boundaries:check
-      - name: Detect final attestation
-        id: attestation
-        shell: bash
+      - name: Verify immutable C01 receipt and resume
         run: |
-          if [[ -f docs/checkpoints/C01/final/1.json ]]; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "head=$(git log -1 --format=%H -- docs/checkpoints/C01/final/1.json)" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            if grep -Eq '^\| C01 \|.*\| complete \|$' docs/progress.md; then
-              echo "C01 is complete but its final receipt is absent" >&2
-              exit 1
-            fi
-          fi
-      - if: steps.attestation.outputs.exists == 'true'
-        run: node scripts/progress-cas.mjs verify-live-receipt --receipt docs/checkpoints/C01/final/1.json --claim docs/claims/C01/1.json --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --integrated-head HEAD --strict
-      - if: steps.attestation.outputs.exists == 'true'
-        run: node scripts/acceptance.mjs verify C01 docs/checkpoints/C01/final/1.json
-      - name: Verify atomic live attestation
-        if: steps.attestation.outputs.exists == 'true'
-        run: node scripts/progress-cas.mjs verify-live-resume --receipt docs/checkpoints/C01/final/1.json --claim docs/claims/C01/1.json --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --progress docs/progress.md --subject-progress docs/progress/C01.md --integrated-head "${{ steps.attestation.outputs.head }}" --strict
+          node scripts/progress-cas.mjs verify-live-receipt --receipt docs/checkpoints/C01/final/1.json --claim docs/claims/C01/1.json --remediation-claim docs/claims/R001/1.json --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --integrated-head HEAD --strict
+          node scripts/acceptance.mjs verify C01 docs/checkpoints/C01/final/1.json
+          node scripts/progress-cas.mjs verify-live-resume --receipt docs/checkpoints/C01/final/1.json --claim docs/claims/C01/1.json --remediation-claim docs/claims/R001/1.json --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --progress docs/progress.md --subject-progress docs/progress/C01.md --integrated-head HEAD --strict

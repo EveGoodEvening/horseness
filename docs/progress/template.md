@@ -1,25 +1,20 @@
 # <ID> Execution Ledger
 
 - Status: `not-started`
-- Attempt generation: `0`
-- Dependencies: `<ordered receipt digests>`
-- Claim/expiry: `<canonical docs/claims/<ID>/<generation>.json path and digest; pre-claim base (never the claim commit SHA); issued/expiry; sealing/attestation proof>`
-- Supersession lineage: `<prior attempt/receipt digests>`
-- Allowed paths: `<exact allowedPaths>`
-- Affected ADR paths: `<exact affectedAdrPaths>`
-- Acceptance record paths: `<exact config/acceptance paths>`
-- Acceptance contract: `v3:<ID-or-parameterized-kind>`
-- Candidate: `<worker SHA/tree and integration SHA>`
-- Verification evidence: `<typed ordered command results and artifact digests>`
-- Side-effect head: `<digest or null>`
-- Final checkpoint receipt: `<docs/checkpoints/<ID>/final/<generation>.json and digest>`
-- Blocker/finding: `none`
-- Supersedes/superseded by: `none`
+- Dependencies: `<ordered completed chunk IDs and tracker evidence>`
+- Claim base: `<integrated commit before chore(progress): claim <ID>>`
+- Owned paths: `<exact paths from docs/plan.md>`
+- Acceptance commands: `<literal ordered commands from docs/plan.md>`
+- Candidate: `<final implementation/review-fix commit>`
+- Verification evidence: `<command, environment, exit, output digest or durable CI URL>`
+- Review findings: `none`
+- Completion commit: `pending`
+- Blocker: `none`
 
 ## Checklist
 
-- [ ] Dependencies and priority verified
-- [ ] Exact ownership verified
-- [ ] Candidate sealed from current attempt base
-- [ ] Frozen acceptance completed in order
-- [ ] Receipt/index integrated
+- [ ] Dependencies and exact ownership verified
+- [ ] Tracker claim commit integrated before source edits
+- [ ] Implementation and review fixes committed within ownership
+- [ ] Exact acceptance commands completed in order
+- [ ] Tracker completion commit records candidate, evidence, review disposition, and next eligible chunk

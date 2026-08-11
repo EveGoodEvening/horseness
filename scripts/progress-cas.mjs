@@ -105,13 +105,7 @@ function verifyLiveResume() {
   const head = gitRev(args["integrated-head"]);
   const receipt = readCanonicalBlob(head, args.receipt);
   const attestationCommit = deriveAttestationCommit(head, receipt);
-  if (head !== attestationCommit) {
-    const remediationCommit = deriveR002ClaimCommit(head, attestationCommit, receipt);
-    assert(isAncestor(attestationCommit, remediationCommit), "R002 claim does not descend from A01");
-    assert(isAncestor(remediationCommit, head), "R002 claim is not an ancestor of the remediation head");
-    const remediation = readClaimBlob(remediationCommit, "docs/claims/R002/1.json");
-    assertExactChangedPaths(remediationCommit, head, remediation.allowedPaths, "R002 candidate");
-  }
+  assert(isAncestor(attestationCommit, head), "historical A01 is not an ancestor of the supplied head");
 }
 
 function verifyFixtureBundle() {
@@ -403,36 +397,6 @@ function deriveAttestationCommit(head, receipt) {
   return matches[0];
 }
 
-function deriveR002ClaimCommit(head, attestationCommit, receipt) {
-  const claimPath = "docs/claims/R002/1.json", indexPath = "docs/claims/index.jsonl", matches = [];
-  for (const commit of git("rev-list", head).trim().split("\n").filter(Boolean)) {
-    const parents = gitParents(commit);
-    if (parents.length !== 1 || parents[0] !== attestationCommit) continue;
-    try {
-      const claim = readClaimBlob(commit, claimPath);
-      assert(claim.subjectId === "R002" && claim.attemptGeneration === 1 && claim.preClaimBaseSha === attestationCommit, "invalid R002 claim identity");
-      assert(jcs(claim.allowedPaths) === jcs(["docs/plan.md", "scripts/progress-cas.mjs"]), "R002 allowed paths mismatch");
-      assert(jcs(claim.dependencyReceiptDigests) === jcs(["a83655867f97f91480a2bf42f12ce78d278b2b3f301e9408c8893c47da52db9e", receipt.envelopeDigest]), "R002 dependencies mismatch");
-      assert(domain("horseness.claim-attempt.v1", without(claim, "claimDigest")) === claim.claimDigest, "R002 claim digest mismatch");
-      assertExactChangedPaths(attestationCommit, commit, [claimPath, indexPath, "docs/findings/F002.json", "docs/findings/index.jsonl", "docs/progress/R002.md", "docs/progress/C01.md", "docs/progress.md"], "R002 claim");
-      assert(blobOidOptional(attestationCommit, claimPath) === null, "R002 claim must be newly introduced");
-      assertSingleIndexAppend(attestationCommit, commit, indexPath, "claim", (row) => row.claimPath === claimPath && row.claimDigest === claim.claimDigest && row.preClaimBaseSha === attestationCommit && row.subjectId === "R002");
-      const finding = readClaimBlob(commit, "docs/findings/F002.json");
-      assert(finding.findingId === "F002" && finding.findingDigest === claim.dependencyReceiptDigests[0], "R002 finding provenance mismatch");
-      const findingRows = verifyIndexBlob(commit, "docs/findings/index.jsonl", "finding");
-      requireUnique(findingRows, (row) => row.findingId === "F002" && row.findingDigest === finding.findingDigest, "F002 index membership");
-      const ledger = readBlob(commit, "docs/progress/R002.md"), global = readBlob(commit, "docs/progress.md"), subject = readBlob(commit, "docs/progress/C01.md");
-      assert(ledger.includes("- Status: `in-progress`") && ledger.includes(`claim digest \`${claim.claimDigest}\``), "R002 ledger mismatch");
-      assert(global.includes("`R002` generation 1 is active") && global.includes("C02 remains ineligible"), "global R002 ledger mismatch");
-      assert(subject.includes("`F002`") && subject.includes("formal remediation `R002`"), "C01 R002 ledger mismatch");
-      matches.push(commit);
-    } catch {
-      // Only the exact append-only R002 claim transition is eligible.
-    }
-  }
-  assert(matches.length === 1, `expected exactly one R002 transition, found ${matches.length}`);
-  return matches[0];
-}
 
 function changedPaths(base, candidate) { return git("diff", "--name-only", "--diff-filter=ACDMRTUXB", `${base}..${candidate}`).trim().split("\n").filter(Boolean).sort(); }
 function assertExactChangedPaths(base, candidate, expected, label) { assert(jcs(changedPaths(base, candidate)) === jcs([...expected].sort()), `${label} changed paths mismatch`); }
