@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://horseness.dev/schemas/finding-contracts-v1.json",
+  "title": "FindingContractsV1",
+  "oneOf": [{ "$ref": "#/$defs/FindingV1" }, { "$ref": "#/$defs/FindingIndexRecordV1" }],
+  "$defs": {
+    "Digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "ReproductionV1": {
+      "type": "object",
+      "required": ["command", "environmentDigest", "exitCode", "stdoutDigest", "stderrDigest", "resultDigest"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1 }, "environmentDigest": { "$ref": "#/$defs/Digest" }, "exitCode": { "type": "integer" },
+        "stdoutDigest": { "$ref": "#/$defs/Digest" }, "stderrDigest": { "$ref": "#/$defs/Digest" }, "resultDigest": { "$ref": "#/$defs/Digest" }
+      }, "additionalProperties": false
+    },
+    "FindingV1": {
+      "type": "object",
+      "required": ["schemaVersion", "findingId", "detectorChunk", "detectorAttemptGeneration", "detectorWorkerCandidateSha", "detectorIntegrationCandidateSha", "affectedPaths", "affectedContracts", "severity", "reproduction", "expected", "observed", "discoveredAt", "findingDigest"],
+      "properties": {
+        "schemaVersion": { "const": "1" }, "findingId": { "type": "string", "pattern": "^F[0-9]{3}$" }, "detectorChunk": { "type": "string", "minLength": 1 }, "detectorAttemptGeneration": { "type": "integer", "minimum": 0 },
+        "detectorWorkerCandidateSha": { "type": "string", "minLength": 1 }, "detectorIntegrationCandidateSha": { "type": "string", "minLength": 1 },
+        "affectedPaths": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }, "affectedContracts": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "severity": { "enum": ["blocker", "high", "medium", "low"] }, "reproduction": { "$ref": "#/$defs/ReproductionV1" }, "expected": {}, "observed": {}, "discoveredAt": { "type": "string", "format": "date-time" }, "findingDigest": { "$ref": "#/$defs/Digest" }
+      }, "additionalProperties": false
+    },
+    "FindingIndexRecordV1": {
+      "type": "object",
+      "required": ["recordType", "schemaVersion", "ordinal", "findingId", "findingDigest", "lifecycle", "planningReceiptDigest", "remediationReceiptDigest", "closureReceiptDigest", "priorRecordHash", "recordHash"],
+      "properties": {
+        "recordType": { "enum": ["FindingIndexGenesisV1", "FindingIndexRecordV1"] }, "schemaVersion": { "const": "1" }, "ordinal": { "type": "integer", "minimum": 0 }, "findingId": { "type": ["string", "null"] },
+        "findingDigest": { "oneOf": [{ "$ref": "#/$defs/Digest" }, { "type": "null" }] }, "lifecycle": { "enum": ["genesis", "recorded", "planned", "remediated", "closed"] },
+        "planningReceiptDigest": { "oneOf": [{ "$ref": "#/$defs/Digest" }, { "type": "null" }] }, "remediationReceiptDigest": { "oneOf": [{ "$ref": "#/$defs/Digest" }, { "type": "null" }] }, "closureReceiptDigest": { "oneOf": [{ "$ref": "#/$defs/Digest" }, { "type": "null" }] },
+        "priorRecordHash": { "oneOf": [{ "$ref": "#/$defs/Digest" }, { "type": "null" }] }, "recordHash": { "$ref": "#/$defs/Digest" }
+      }, "additionalProperties": false
+    }
+  }
+}
