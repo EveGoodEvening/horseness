@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {createAuthenticatedContextV1,failureResponse,isAuthorizedMethod,METHOD_REGISTRY_V1,parseJsonRpcRequestV1,ProtocolError,successResponse,validateTransportSecurity,type PrincipalRole,type ProtocolMethodV1} from "../src/index.js";
+import {createAuthenticatedContextV1,failureResponse,isAuthorizedMethod,METHOD_REGISTRY_V1,parseJsonRpcRequestV1,parsePageResultV1,parseSubscriptionResultV1,ProtocolError,successResponse,validateTransportSecurity,type PageResultV1,type PrincipalRole,type ProtocolMethodV1,type SubscriptionResultV1} from "../src/index.js";
 const workspace={schemaVersion:"1",kind:"workspace-only",workspaceId:"ws",workspaceSequence:1,workspaceEnvelopeHash:"h",workspaceContextEpoch:0} as const;
 const composite={...workspace,kind:"composite",runId:"run",runSequence:1,runEnvelopeHash:"r",runContextEpoch:0} as const;
 function context(role:PrincipalRole,allowedMethods:readonly ProtocolMethodV1[]){return createAuthenticatedContextV1({transport:"stdio",localOnly:true,peerVerified:true,peerIdentity:"uid:1000",processInherited:true},{schemaVersion:"1",principalId:"p",principalRole:role,grantDigest:"g",peerIdentity:"uid:1000",expiresAt:"2030-01-01T00:00:00Z",revoked:false,workspaceId:"ws",runId:"run",taskId:"task",attemptId:"attempt",generation:1,proposalId:"proposal",adapterId:"adapter",allowedMethods},"2029-01-01T00:00:00Z")}
@@ -10,3 +10,31 @@ test("strict request parsing and command idempotency",()=>{const body={schemaVer
 test("queries reject idempotency keys and insufficient cursors",()=>{const auth=context("authority",["workspace.get.v1","canonical.get.v1"]),workspaceBody={schemaVersion:"1",workspaceId:"ws",input:{schemaVersion:"1",requestType:"workspace.get.v1",value:{schemaVersion:"1",queryType:"GetWorkspaceV1",observationCursor:workspace}}} as const;assert.throws(()=>parseJsonRpcRequestV1({jsonrpc:"2.0",id:1,method:"workspace.get.v1",params:{protocolVersion:"1",observationCursor:workspace,idempotencyKey:"x",body:workspaceBody}},auth),(error:unknown)=>error instanceof ProtocolError&&error.reasonCode==="IDEMPOTENCY_FORBIDDEN");assert.throws(()=>parseJsonRpcRequestV1({jsonrpc:"2.0",id:1,method:"canonical.get.v1",params:{protocolVersion:"1",observationCursor:workspace,body:{schemaVersion:"1",workspaceId:"ws",runId:"run",input:{schemaVersion:"1",requestType:"canonical.get.v1"}}}},auth),(error:unknown)=>error instanceof ProtocolError&&error.reasonCode==="CURSOR_SCOPE_INSUFFICIENT")});
 test("responses parse the exact method result before emission",()=>{const data={schemaVersion:"1",resultType:"canonical.get.v1",value:{outcomeId:"canonical-outcome",status:"completed",canonicalRevision:3,canonicalStateHash:"hash",document:{schemaVersion:"1"}}} as const;assert.deepEqual(successResponse("1","canonical.get.v1",data),{jsonrpc:"2.0",id:"1",result:{schemaVersion:"1",method:"canonical.get.v1",resultCursor:null,data}});assert.throws(()=>successResponse("1","canonical.get.v1",{schemaVersion:"1",resultType:"run.status.v1",value:{outcomeId:"other",status:"completed",runStatus:"open",activeAttemptCount:0,observationCursor:{sequence:1}}}),ProtocolError);assert.throws(()=>successResponse("1","canonical.get.v1",{revision:0}),ProtocolError);assert.equal(failureResponse("1",new ProtocolError("STALE_OBSERVATION",-32006,true)).error.data.retryable,true)});
 test("legacy security metadata is inspection-only",()=>{assert.equal(validateTransportSecurity({schemaVersion:"1",transport:"unix-socket",localOnly:true,tcpEnabled:false,authenticatedPrincipalId:"p",principalRole:"worker",workspaceId:"ws",grantDigest:"g",osIdentity:"uid:1000",endpointPermissions:"owner-only-0600"}).transport,"unix-socket")});
+
+test("page and resume request metadata are method-kind exact",()=>{
+ const queryBody={schemaVersion:"1",workspaceId:"ws",runId:"run",input:{schemaVersion:"1",requestType:"run.status.v1",value:{operationId:"status-op",includeAttemptSummary:false}}} as const;
+ const query={jsonrpc:"2.0",id:1,method:"run.status.v1",params:{protocolVersion:"1",observationCursor:composite,body:queryBody}} as const;
+ const page={schemaVersion:"1",limit:10,afterObservationCursor:composite,continuationToken:null} as const;
+ assert.equal(parseJsonRpcRequestV1({...query,params:{...query.params,page}},context("authority",["run.status.v1"])).params.page?.limit,10);
+ assert.throws(()=>parseJsonRpcRequestV1({...query,params:{...query.params,resume:{schemaVersion:"1",subscriptionId:"sub",afterObservationCursor:composite,resumeToken:"token"}}},context("authority",["run.status.v1"])),ProtocolError);
+ const commandBody={schemaVersion:"1",workspaceId:"ws",runId:"run",input:{schemaVersion:"1",requestType:"run.close.v1",value:{operationId:"close-op",reason:"complete",expectedRunStatus:"running"}}} as const;
+ assert.throws(()=>parseJsonRpcRequestV1({jsonrpc:"2.0",id:1,method:"run.close.v1",params:{protocolVersion:"1",observationCursor:composite,idempotencyKey:"close",body:commandBody,page}},context("authority",["run.close.v1"])),ProtocolError);
+ const subscriptionBody={schemaVersion:"1",workspaceId:"ws",runId:"run",proposalId:"proposal",input:{schemaVersion:"1",requestType:"admission.subscribe.v1",value:{operationId:"subscribe-op",proposalId:"proposal",afterSequence:0,resumeToken:"fresh"}}} as const;
+ assert.throws(()=>parseJsonRpcRequestV1({jsonrpc:"2.0",id:1,method:"admission.subscribe.v1",params:{protocolVersion:"1",observationCursor:composite,body:subscriptionBody,page}},context("worker",["admission.subscribe.v1"])),ProtocolError);
+});
+
+test("success metadata is parsed exactly and bound to method kind",()=>{
+ const queryData={schemaVersion:"1",resultType:"run.status.v1",value:{outcomeId:"status-outcome",status:"completed",runStatus:"open",activeAttemptCount:0,observationCursor:{sequence:1}}} as const;
+ const page:PageResultV1={schemaVersion:"1",items:[],emittedResultCursors:[composite],nextAfterObservationCursor:composite,continuationToken:"next"};
+ assert.equal(successResponse(1,"run.status.v1",queryData,composite,{page}).result.page?.continuationToken,"next");
+ assert.throws(()=>successResponse(1,"run.status.v1",queryData,composite,{subscription:{schemaVersion:"1",subscriptionId:"sub",resumeToken:"token",afterObservationCursor:composite,emittedResultCursor:null}}),ProtocolError);
+ const subscriptionData={schemaVersion:"1",resultType:"admission.subscribe.v1",value:{outcomeId:"subscription-outcome",status:"completed",subscriptionId:"sub",events:[{}],resumeToken:"token"}} as Parameters<typeof successResponse>[2];
+ assert.throws(()=>successResponse(1,"admission.subscribe.v1",subscriptionData,composite),ProtocolError);
+ const subscription:SubscriptionResultV1={schemaVersion:"1",subscriptionId:"sub",resumeToken:"token",afterObservationCursor:composite,emittedResultCursor:composite};
+ assert.equal(successResponse(1,"admission.subscribe.v1",subscriptionData,composite,{subscription}).result.subscription?.subscriptionId,"sub");
+ assert.throws(()=>successResponse(1,"admission.subscribe.v1",subscriptionData,composite,{page,subscription}),ProtocolError);
+ assert.throws(()=>parsePageResultV1({...page,extra:true}),ProtocolError);
+ assert.throws(()=>parsePageResultV1({...page,emittedResultCursors:[{...composite,kind:"absent-run-genesis"}]}),ProtocolError);
+ assert.throws(()=>parseSubscriptionResultV1({...subscription,resumeToken:""}),ProtocolError);
+ assert.throws(()=>parseSubscriptionResultV1({...subscription,extra:true}),ProtocolError);
+});

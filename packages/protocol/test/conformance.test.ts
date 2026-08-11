@@ -11,6 +11,7 @@ test("executable protocol conformance covers every method and named mapping",()=
  const result=run("bin/conformance.ts");
  assert.equal(result.status,0,String(result.stderr||result.stdout));
  assert.match(String(result.stdout),/protocol conformance: \d+ checks, \d+ methods, \d+ named mappings/);
+ assert.match(String(result.stdout),/\b[1-9]\d* same-union substitution negatives\b/);
 });
 
 test("generated Draft 2020-12 schemas are canonical and current",()=>{

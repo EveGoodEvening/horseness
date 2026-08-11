@@ -3,7 +3,7 @@ import test from "node:test";
 import {createAuthenticatedContextV1,inspectAndAuthenticateTransportV1,isAuthenticatedContextV1,parseJsonRpcRequestV1,ProtocolError,PROTOCOL_RPC_CODES,type AuthenticatedGrantV1,type SubscriptionResumeClaimsV1,type TransportInspectionV1} from "../src/index.js";
 
 const cursor={schemaVersion:"1",kind:"composite",workspaceId:"ws",workspaceSequence:3,workspaceEnvelopeHash:"wh",workspaceContextEpoch:1,runId:"run",runSequence:7,runEnvelopeHash:"rh",runContextEpoch:2} as const;
-const inspection={transport:"unix-socket",localOnly:true,peerVerified:true,peerIdentity:"uid:1000",endpointPath:"/run/user/1000/horseness.sock",realPath:"/run/user/1000/horseness.sock",endpointType:"socket",isSymbolicLink:false,ownerMatchesProcess:true,mode:0o600,parentOwnerMatchesProcess:true,parentMode:0o700} as const satisfies TransportInspectionV1;
+const inspection={transport:"unix-socket",localOnly:true,peerVerified:true,peerIdentity:"uid:1000",endpointPath:"/run/user/1000/horseness.sock",realPath:"/run/user/1000/horseness.sock",endpointType:"socket",isSymbolicLink:false,ownerMatchesProcess:true,mode:0o600,parentPath:"/run/user/1000",parentRealPath:"/run/user/1000",parentType:"directory",parentIsSymbolicLink:false,parentOwnerMatchesProcess:true,parentMode:0o700} as const satisfies TransportInspectionV1;
 const grant={schemaVersion:"1",principalId:"principal",principalRole:"worker",grantDigest:"grant",peerIdentity:"uid:1000",expiresAt:"2030-01-01T00:00:00.000Z",revoked:false,workspaceId:"ws",runId:"run",taskId:null,attemptId:null,generation:null,proposalId:"proposal",adapterId:null,allowedMethods:["admission.subscribe.v1"]} as const satisfies AuthenticatedGrantV1;
 const context=createAuthenticatedContextV1(inspection,grant,"2029-01-01T00:00:00.000Z");
 const body={schemaVersion:"1",workspaceId:"ws",runId:"run",proposalId:"proposal",input:{schemaVersion:"1",requestType:"admission.subscribe.v1",value:{operationId:"subscribe-op",proposalId:"proposal",afterSequence:0,resumeToken:"fresh"}}} as const;
@@ -53,8 +53,13 @@ test("unix socket inspection proves endpoint and private parent",()=>{
  assert.throws(make({...inspection,isSymbolicLink:true}),denied("TRANSPORT_NOT_ALLOWED"));
  assert.throws(make({...inspection,realPath:"/tmp/redirect.sock"}),denied("TRANSPORT_NOT_ALLOWED"));
  assert.throws(make({...inspection,endpointType:"other"}),denied("TRANSPORT_NOT_ALLOWED"));
+ assert.throws(make({...inspection,parentPath:"/tmp"}),denied("TRANSPORT_NOT_ALLOWED"));
+ assert.throws(make({...inspection,parentRealPath:"/tmp/substitute"}),denied("TRANSPORT_NOT_ALLOWED"));
+ assert.throws(make({...inspection,parentType:"other"}),denied("TRANSPORT_NOT_ALLOWED"));
+ assert.throws(make({...inspection,parentIsSymbolicLink:true}),denied("TRANSPORT_NOT_ALLOWED"));
  assert.throws(make({...inspection,parentOwnerMatchesProcess:false}),denied("TRANSPORT_OWNER_INVALID"));
- assert.throws(make({...inspection,parentMode:0o777}),denied("TRANSPORT_PERMISSIONS_INVALID"));
+ assert.throws(make({...inspection,parentMode:0o755}),denied("TRANSPORT_PERMISSIONS_INVALID"));
+ assert.doesNotThrow(make({...inspection,parentMode:0o700}));
 });
 
 test("privileged inspection precedes grant lookup and rejects unsafe pipes",async()=>{

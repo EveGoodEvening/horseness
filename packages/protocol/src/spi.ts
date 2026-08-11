@@ -17,7 +17,7 @@ export interface DoctorProbeResultV1{schemaVersion:"1";checks:readonly {code:str
 /** Output of privileged OS inspection, never JSON supplied by an RPC peer. */
 export type TransportInspectionV1=
  |{readonly transport:"stdio";readonly localOnly:true;readonly peerVerified:true;readonly peerIdentity:string;readonly processInherited:true}
- |{readonly transport:"unix-socket";readonly localOnly:true;readonly peerVerified:boolean;readonly peerIdentity:string|null;readonly endpointPath:string;readonly realPath:string;readonly endpointType:"socket"|"other";readonly isSymbolicLink:boolean;readonly ownerMatchesProcess:boolean;readonly mode:number;readonly parentOwnerMatchesProcess:boolean;readonly parentMode:number}
+ |{readonly transport:"unix-socket";readonly localOnly:true;readonly peerVerified:boolean;readonly peerIdentity:string|null;readonly endpointPath:string;readonly realPath:string;readonly endpointType:"socket"|"other";readonly isSymbolicLink:boolean;readonly ownerMatchesProcess:boolean;readonly mode:number;readonly parentPath:string;readonly parentRealPath:string;readonly parentType:"directory"|"other";readonly parentIsSymbolicLink:boolean;readonly parentOwnerMatchesProcess:boolean;readonly parentMode:number}
  |{readonly transport:"windows-named-pipe";readonly localOnly:true;readonly peerVerified:boolean;readonly peerIdentity:string|null;readonly ownerMatchesProcess:boolean;readonly ownerOnlyDacl:boolean;readonly daclInheriting:boolean}
  |{readonly transport:"tcp";readonly localOnly:boolean;readonly peerVerified:boolean;readonly peerIdentity:string|null};
 

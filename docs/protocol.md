@@ -8,7 +8,7 @@
 
 Every exported method ends in `.v1`, every params object carries `protocolVersion: "1"`, and every request has exactly `jsonrpc`, `id`, `method`, and `params`. The generated Draft 2020-12 request schema is a mutually exclusive `oneOf` whose branches bind both the JSON-RPC `method` and nested `requestType`. Response branches bind `method` and `resultType`. Unknown methods, versions, fields, cursor variants, and role/method combinations fail closed before dispatch. Notifications are not part of v1; an ID is always required.
 
-Command and adapter-SPI methods require a non-empty idempotency key. Query and subscription methods forbid one. Every request carries an exact named observation cursor; unnamed persisted `cursor` properties are rejected. Successful mutation results carry the distinct post-transaction `resultCursor`. Pagination uses only `afterObservationCursor`, reports ordered emitted result cursors, and keeps its continuation token separate. A subscription may start fresh without `resume`; resumed subscriptions bind the subscription ID, principal, grant, complete scope, exact after-observation cursor, opaque token, and authority-time expiry.
+Command and adapter-SPI methods require a non-empty idempotency key. Query and subscription methods forbid one. Every request carries an exact named observation cursor; unnamed persisted `cursor` properties are rejected. Query requests alone may carry exact `page` metadata; subscription requests alone may carry optional exact `resume` metadata; command and adapter-SPI requests forbid both. Successful mutation results carry the distinct post-transaction `resultCursor`. Query successes alone may carry exact `page` result metadata. Subscription successes require exact `subscription` metadata and forbid `page`; every other success forbids `subscription`. Pagination uses only `afterObservationCursor`, reports validated ordered result cursors, and keeps its non-empty continuation token separate. A subscription may start fresh without `resume`; resumed subscriptions bind the subscription ID, principal, grant, complete scope, exact after-observation cursor, non-empty opaque token, and authority-time expiry.
 
 ## Authorization
 
@@ -22,7 +22,7 @@ Success is `{jsonrpc:"2.0",id,result:{schemaVersion:"1",method,resultCursor,data
 
 ## Local transport security
 
-V1 permits inherited stdio, owner-only Unix sockets (`0600` endpoint in an owner-only directory), and non-inheriting owner-DACL Windows named pipes. Metadata always records authenticated principal, role, workspace, grant digest, and OS identity. `localOnly` must be true and `tcpEnabled` must be false. TCP has no v1 encoding.
+V1 permits inherited stdio, owner-only Unix sockets, and non-inheriting owner-DACL Windows named pipes. Unix inspection proves that the requested endpoint path equals its real path, is a non-symlink socket owned by the process with mode `0600`, and that its lexical parent path equals the inspected parent path and real path, is a non-symlink directory owned by the process, and has no group or world permission bits (`mode & 0077 === 0`; `0755` is rejected). Path substitution, symlink, non-directory, owner mismatch, and permissive-parent evidence fail closed before grant lookup. Metadata always records authenticated principal, role, workspace, grant digest, and OS identity. `localOnly` must be true and `tcpEnabled` must be false. TCP has no v1 encoding.
 
 ## Adapter SPI
 
