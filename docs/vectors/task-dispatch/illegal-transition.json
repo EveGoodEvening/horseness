@@ -1,1 +1,1 @@
-{"schemaVersion":"2","familyVersion":"1","family":"task-dispatch","case":"illegal-transition","action":"domainDigest","input":{"domain":"horseness.task-dispatch-transition.v1","value":{"from":"planned","input":"acknowledge","result":"ILLEGAL_DISPATCH_TRANSITION"}},"expected":"96fee3c8ad95382888ded486267010db174b10fe4671bec393d060af7354c6f9"}
+{"schemaVersion":"2","familyVersion":"1","family":"task-dispatch","case":"ack-before-handle-rejected","action":"taskDispatchScenario","input":"illegal","expectedError":"ILLEGAL_DISPATCH_TRANSITION"}

@@ -1,0 +1,1 @@
+{"schemaVersion":"2","familyVersion":"1","family":"receipt","case":"receipt-field-mutation-rejected","action":"receiptScenario","input":"mutated","expectedError":"RECEIPT_MISMATCH"}

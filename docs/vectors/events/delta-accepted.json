@@ -1,9 +1,1 @@
-{
-  "schemaVersion": "2",
-  "familyVersion": "1",
-  "family": "events",
-  "case": "delta-accepted-payload-digest",
-  "action": "domainDigest",
-  "input": { "domain": "horseness.event-payload.v1", "value": { "eventType": "DeltaAcceptedV1", "proposalId": "prp_demo", "revision": 1 } },
-  "expected": "2fd2f9bfc343b23e6682f9c79cfe61d44194514f04260f3ce96c10f0d75bfa91"
-}
+{"schemaVersion":"2","familyVersion":"1","family":"events","case":"payload-hash-corruption-fails-closed","action":"eventReplayCorruption","input":"payload-hash","expectedError":"EVENT_PAYLOAD_HASH_INVALID"}

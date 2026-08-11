@@ -1,9 +1,1 @@
-{
-  "schemaVersion": "2",
-  "familyVersion": "1",
-  "family": "receipt",
-  "case": "minimal-receipt-core-digest",
-  "action": "domainDigest",
-  "input": { "domain": "horseness.attempt-receipt.v1", "value": { "schemaVersion": "1", "attemptId": "attempt_demo", "generation": 1, "outcome": "succeeded", "evidence": [] } },
-  "expected": "a6bb21b928dccf586393776e537a0bac25049fefa9104986bf1b9220385b031f"
-}
+{"schemaVersion":"2","familyVersion":"1","family":"receipt","case":"seal-and-verify-receipt-exact-id","action":"receiptScenario","input":"ok","select":["receiptId"],"expected":"rcp_hq7n4rs7p3kxf7qm5ctsonol7ws6kf564cmx6jibgeo3qf2vp27q"}

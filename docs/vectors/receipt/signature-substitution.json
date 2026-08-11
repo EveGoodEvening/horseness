@@ -1,0 +1,1 @@
+{"schemaVersion":"2","familyVersion":"1","family":"receipt","case":"checkpoint-signature-substitution-rejected","action":"checkpointSignatureScenario","input":"substitution","expectedError":"SIGNATURE_INVALID"}

@@ -1,1 +1,1 @@
-{"schemaVersion":"2","familyVersion":"1","family":"fork-pin","case":"minimal-v1","action":"domainDigest","input":{"domain":"horseness.fork-pin-core.v1","value":{"schemaVersion":"1","forkId":"fork_demo","pinVersion":1,"ancestry":[],"parentForkPinDigest":null}},"expected":"8e07e8b0866fcfc2efcf6e743eb10ee14306306e11e5f94113d62bdcdceba578"}
+{"schemaVersion":"2","familyVersion":"1","family":"fork-pin","case":"create-pin-exact-id","action":"forkScenario","input":"create","select":["forkPinId"],"expected":"fpk_leccug2wrbbgopgincd22xnsy72ikhlyavfytpwyv7grnfdmevfq"}

@@ -35,6 +35,7 @@ export function reduceCanonicalDocument(state: CanonicalDocument | null, event: 
       const document = deepClone(event.resultingDocument);
       return { ...state, revision: state.revision + 1, document, stateHash: event.resultingStateHash, acceptedProposalId: event.proposalId, lastCanonicalEventSequence: event.sequence };
     }
+    default: throw new DomainError("UNSUPPORTED_EVENT_TYPE");
   }
 }
 
@@ -52,16 +53,17 @@ export function reduceWorkspaceState(state: WorkspaceState | null, event: Worksp
       if (event.workspaceId !== state.workspaceId) throw new DomainError("AGGREGATE_IDENTITY_MISMATCH");
       if (event.sequence <= state.lastEventSequence) throw new DomainError("EVENT_SEQUENCE_INVALID");
       return { ...state, activePolicyDigest: event.activePolicyDigest, contextEpoch: state.contextEpoch + 1, lastEventSequence: event.sequence };
+    default: throw new DomainError("UNSUPPORTED_EVENT_TYPE");
   }
 }
 
-export interface RunOperationalState { workspaceId: string; runId: string; eventCount: number; proposals: Readonly<Record<string, string>>; receipts: Readonly<Record<string, string>>; taskStates: Readonly<Record<string, string>>; contextEpoch: number; lastEventSequence: number }
+export interface RunOperationalState { workspaceId: string; runId: string; eventCount: number; proposals: Readonly<Record<string, { status: "submitted" | "accepted"; proposalDigest: string }>>; receipts: Readonly<Record<string, { receiptDigest: string; outcome: "succeeded" | "failed" | "cancelled" }>>; taskStates: Readonly<Record<string, "succeeded" | "failed" | "cancelled">>; contextEpoch: number; lastEventSequence: number }
 export type RunOperationalEvent =
   | { eventType: "RunCreatedV1"; sequence: number; workspaceId: string; runId: string }
-  | { eventType: "ProposalSubmittedV1"; sequence: number; workspaceId: string; runId: string; proposalId: string }
-  | { eventType: "DeltaAcceptedV1"; sequence: number; workspaceId: string; runId: string; proposalId: string }
-  | { eventType: "AttemptReceiptRecordedV1"; sequence: number; workspaceId: string; runId: string; receiptId: string; outcome: string }
-  | { eventType: "TaskResolvedV1"; sequence: number; workspaceId: string; runId: string; taskId: string; resolution: string }
+  | { eventType: "ProposalSubmittedV1"; sequence: number; workspaceId: string; runId: string; proposalId: string; proposalDigest: string }
+  | { eventType: "DeltaAcceptedV1"; sequence: number; workspaceId: string; runId: string; proposalId: string; proposalDigest: string }
+  | { eventType: "AttemptReceiptRecordedV1"; sequence: number; workspaceId: string; runId: string; receiptId: string; receiptDigest: string; outcome: "succeeded" | "failed" | "cancelled" }
+  | { eventType: "TaskResolvedV1"; sequence: number; workspaceId: string; runId: string; taskId: string; resolution: "succeeded" | "failed" | "cancelled" }
   | { eventType: "ForkCreatedV1" | "ContextManifestPublishedV1"; sequence: number; workspaceId: string; runId: string };
 export function reduceOperationalState(state: RunOperationalState | null, event: RunOperationalEvent): RunOperationalState {
   if (event.eventType === "RunCreatedV1") {
@@ -73,11 +75,32 @@ export function reduceOperationalState(state: RunOperationalState | null, event:
   if (event.sequence <= state.lastEventSequence) throw new DomainError("EVENT_SEQUENCE_INVALID");
   const next: RunOperationalState = { ...state, eventCount: state.eventCount + 1, proposals: { ...state.proposals }, receipts: { ...state.receipts }, taskStates: { ...state.taskStates }, contextEpoch: state.contextEpoch + 1, lastEventSequence: event.sequence };
   switch (event.eventType) {
-    case "ProposalSubmittedV1": return { ...next, proposals: { ...next.proposals, [event.proposalId]: "submitted" } };
-    case "DeltaAcceptedV1": return { ...next, proposals: { ...next.proposals, [event.proposalId]: "accepted" } };
-    case "AttemptReceiptRecordedV1": return { ...next, receipts: { ...next.receipts, [event.receiptId]: event.outcome } };
-    case "TaskResolvedV1": return { ...next, taskStates: { ...next.taskStates, [event.taskId]: event.resolution } };
+    case "ProposalSubmittedV1": {
+      const existing = next.proposals[event.proposalId];
+      if (existing !== undefined && existing.proposalDigest !== event.proposalDigest) throw new DomainError("PROPOSAL_IDENTITY_CONFLICT");
+      if (existing !== undefined) throw new DomainError("DUPLICATE_PROPOSAL_TRANSITION");
+      return { ...next, proposals: { ...next.proposals, [event.proposalId]: { status: "submitted", proposalDigest: event.proposalDigest } } };
+    }
+    case "DeltaAcceptedV1": {
+      const existing = next.proposals[event.proposalId];
+      if (existing !== undefined && existing.proposalDigest !== event.proposalDigest) throw new DomainError("PROPOSAL_IDENTITY_CONFLICT");
+      if (existing === undefined || existing.status !== "submitted") throw new DomainError("PROPOSAL_NOT_SUBMITTED");
+      return { ...next, proposals: { ...next.proposals, [event.proposalId]: { ...existing, status: "accepted" } } };
+    }
+    case "AttemptReceiptRecordedV1": {
+      const existing = next.receipts[event.receiptId];
+      if (existing !== undefined && (existing.receiptDigest !== event.receiptDigest || existing.outcome !== event.outcome)) throw new DomainError("RECEIPT_IDENTITY_CONFLICT");
+      if (existing !== undefined) throw new DomainError("DUPLICATE_RECEIPT_TRANSITION");
+      return { ...next, receipts: { ...next.receipts, [event.receiptId]: { receiptDigest: event.receiptDigest, outcome: event.outcome } } };
+    }
+    case "TaskResolvedV1": {
+      const existing = next.taskStates[event.taskId];
+      if (existing !== undefined && existing !== event.resolution) throw new DomainError("TASK_IDENTITY_CONFLICT");
+      if (existing !== undefined) throw new DomainError("DUPLICATE_TASK_TRANSITION");
+      return { ...next, taskStates: { ...next.taskStates, [event.taskId]: event.resolution } };
+    }
     case "ForkCreatedV1": case "ContextManifestPublishedV1": return next;
+    default: throw new DomainError("UNSUPPORTED_EVENT_TYPE");
   }
 }
 
@@ -106,15 +129,21 @@ export function deterministicReplay(events: readonly HashedEventEnvelopeV1<unkno
         operational = reduceOperationalState(operational, { eventType: "RunCreatedV1", ...common });
         break;
       }
-      case "ProposalSubmittedV1": operational = reduceOperationalState(operational, { eventType: "ProposalSubmittedV1", ...common, proposalId: text(payload.proposalId) }); break;
+      case "ProposalSubmittedV1": operational = reduceOperationalState(operational, { eventType: "ProposalSubmittedV1", ...common, proposalId: text(payload.proposalId), proposalDigest: text(payload.proposalDigest) }); break;
       case "DeltaAcceptedV1": {
-        const proposalId = text(payload.proposalId);
+        const proposalId = text(payload.proposalId); const proposalDigest = text(payload.proposalDigest);
         canonical = reduceCanonicalDocument(canonical, { eventType: "DeltaAcceptedV1", ...common, proposalId, priorStateHash: text(payload.priorStateHash), resultingStateHash: text(payload.resultingStateHash), resultingDocument: json(payload.resultingDocument) });
-        operational = reduceOperationalState(operational, { eventType: "DeltaAcceptedV1", ...common, proposalId });
+        operational = reduceOperationalState(operational, { eventType: "DeltaAcceptedV1", ...common, proposalId, proposalDigest });
         break;
       }
-      case "AttemptReceiptRecordedV1": operational = reduceOperationalState(operational, { eventType: "AttemptReceiptRecordedV1", ...common, receiptId: text(payload.receiptId), outcome: text(payload.outcome) }); break;
-      case "TaskResolvedV1": operational = reduceOperationalState(operational, { eventType: "TaskResolvedV1", ...common, taskId: text(payload.taskId), resolution: text(payload.resolution) }); break;
+      case "AttemptReceiptRecordedV1": {
+        const outcome = text(payload.outcome); if (outcome !== "succeeded" && outcome !== "failed" && outcome !== "cancelled") throw new DomainError("MALFORMED_EVENT");
+        operational = reduceOperationalState(operational, { eventType: "AttemptReceiptRecordedV1", ...common, receiptId: text(payload.receiptId), receiptDigest: text(payload.receiptDigest), outcome }); break;
+      }
+      case "TaskResolvedV1": {
+        const resolution = text(payload.resolution); if (resolution !== "succeeded" && resolution !== "failed" && resolution !== "cancelled") throw new DomainError("MALFORMED_EVENT");
+        operational = reduceOperationalState(operational, { eventType: "TaskResolvedV1", ...common, taskId: text(payload.taskId), resolution }); break;
+      }
       case "ForkCreatedV1": operational = reduceOperationalState(operational, { eventType: "ForkCreatedV1", ...common }); break;
       case "ContextManifestPublishedV1": operational = reduceOperationalState(operational, { eventType: "ContextManifestPublishedV1", ...common }); break;
       default: throw new DomainError("UNSUPPORTED_EVENT_TYPE");

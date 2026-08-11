@@ -1,9 +1,1 @@
-{
-  "schemaVersion": "2",
-  "familyVersion": "1",
-  "family": "receipt",
-  "case": "failed-receipt-evidence-digest",
-  "action": "domainDigest",
-  "input": { "domain": "horseness.attempt-receipt.v1", "value": { "schemaVersion": "1", "attemptId": "attempt_demo", "generation": 1, "outcome": "failed", "evidence": [{ "digest": "abc", "mediaType": "text/plain", "size": 3 }] } },
-  "expected": "8e9a75740763e2e8f1acaa2e84f640f717a847289c0afb71eb717ce608437b23"
-}
+{"schemaVersion":"2","familyVersion":"1","family":"receipt","case":"evidence-affects-receipt-digest","action":"receiptScenario","input":"failed","select":["receiptDigest"],"expected":"13fc2c4409ceab4668072f55c1a606a8ab7fdedbfac40522457b1a1f2bcbc438"}

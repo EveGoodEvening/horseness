@@ -63,6 +63,7 @@ export function dependencySatisfied(edge: DependencyEdgeV1, resolution: TaskReso
     case "requires_success": return resolution === "succeeded";
     case "requires_terminal": return true;
     case "requires_outcome": return edge.allowedOutcomes?.includes(resolution) ?? false;
+    default: throw new DomainError("UNSUPPORTED_DEPENDENCY_TYPE");
   }
 }
 export function evaluateDependencies(edges: readonly DependencyEdgeV1[], outcomes: ReadonlyMap<string, DependencyOutcomeV1 & { resolution: TaskResolution }>): { satisfied: boolean; unknown: boolean; cancellationPropagated: boolean; reasonCodes: string[] } {
@@ -110,12 +111,16 @@ export function reduceDispatch(state: AttemptGenerationStateV1, input: DispatchI
     case "request-cancel": if (["launch_intent_committed", "provider_handle_recorded", "acknowledged", "reconciliation_required", "unknown_outcome"].includes(state.state)) return { ...state, state: "cancel_requested" }; break;
     case "cancel-handed-off": if (state.state === "cancel_requested") return { ...state, state: "cancel_handed_off" }; break;
     case "require-reconciliation": if (["launch_intent_committed", "provider_handle_recorded", "acknowledged", "cancel_requested", "cancel_handed_off"].includes(state.state)) return { ...state, state: "reconciliation_required" }; break;
-    case "reconcile-found": if (state.state === "reconciliation_required") return { ...state, state: "provider_handle_recorded", providerHandle: input.handle }; break;
+    case "reconcile-found": if (state.state === "reconciliation_required") { if (!input.handle) throw new DomainError("INVALID_PROVIDER_HANDLE"); if (state.providerHandle && state.providerHandle !== input.handle) return finding(state, "CONFLICTING_PROVIDER_HANDLE"); return { ...state, state: "provider_handle_recorded", providerHandle: input.handle }; } break;
     case "reconcile-not-found-idempotent": if (state.state === "reconciliation_required") return { ...state, state: "planned", providerHandle: null }; break;
     case "reconcile-ambiguous": if (state.state === "reconciliation_required") return { ...state, state: "unknown_outcome" }; break;
     case "manual-resolution": if (state.state === "unknown_outcome" && input.eventSequence > 0) return { ...state, state: input.outcome, terminalEventSequence: input.eventSequence }; break;
   }
   throw new DomainError("ILLEGAL_DISPATCH_TRANSITION");
+}
+
+export function assertEvaluationClock(clock: { schemaVersion: "1"; authorityTime: string; observationCursor: CompositeCursorV1 }, expectedCursor: CompositeCursorV1): void {
+  if (clock.schemaVersion !== "1" || !Number.isFinite(Date.parse(clock.authorityTime)) || domainDigest("horseness.evaluation-cursor.v1", clock.observationCursor as unknown as JsonValue) !== domainDigest("horseness.evaluation-cursor.v1", expectedCursor as unknown as JsonValue)) throw new DomainError("INVALID_EVALUATION_CLOCK");
 }
 export interface RetryScheduledV1 { schemaVersion: "1"; attemptId: string; priorGeneration: number; generation: number; retryOrdinal: number; retryPolicyDigest: string; notBefore: string; pinDecision: "reuse" | "refresh"; forkPinDigest: string; reason: string; providerIdempotencyKeyDigest: string }
 export function scheduleRetry(input: Omit<RetryScheduledV1, "schemaVersion" | "generation"> & { prior: AttemptGenerationStateV1 }): RetryScheduledV1 {

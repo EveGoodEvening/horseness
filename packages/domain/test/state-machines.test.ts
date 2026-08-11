@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
-  NO_POLICY_DIGEST, approvalIsValid, authorizeCommand, authorizeDuplicateRiskGeneration, bindContext, combinePolicyDecisions, createForkPin, deriveSchedulability, domainDigest, evaluateDependencies, reduceDispatch, reduceTaskLifecycle, refreshForkPin, resolveTask, scheduleRetry, sealDependencyJoinSnapshot,
+  NO_POLICY_DIGEST, approvalIsValid, assertEvaluationClock, authorizeCommand, authorizeDuplicateRiskGeneration, bindContext, combinePolicyDecisions, createForkPin, deriveSchedulability, evaluateDependencies, reduceDispatch, reduceTaskLifecycle, refreshForkPin, resolveTask, scheduleRetry, sealDependencyJoinSnapshot,
   type AttemptGenerationStateV1, type CapabilityV1, type CompositeCursorV1, type ContextManifestCoreV1, type DependencyEdgeV1, type ForkPinCoreV1, type PolicyDecisionV1, type TaskResolution
 } from "../src/index.js";
 
@@ -68,6 +67,17 @@ test("dispatch, cancellation and recovery races preserve terminal truth and find
   assert.throws(() => reduceDispatch(intent, { type: "bogus" } as never), /ILLEGAL_DISPATCH_TRANSITION/);
 });
 
+test("reconcile-found validates handles and evaluation clocks are observation-bound", () => {
+  const reconciling = reduceDispatch(reduceDispatch(generation(1, "planned"), { type: "commit-launch-intent" }), { type: "require-reconciliation" });
+  assert.throws(() => reduceDispatch(reconciling, { type: "reconcile-found", handle: "" }), /INVALID_PROVIDER_HANDLE/);
+  const withHandle = reduceDispatch(reconciling, { type: "record-handle", handle: "provider-1" });
+  const conflict = reduceDispatch(reduceDispatch(withHandle, { type: "require-reconciliation" }), { type: "reconcile-found", handle: "provider-2" });
+  assert.deepEqual(conflict.findingCodes, ["CONFLICTING_PROVIDER_HANDLE"]);
+  assert.doesNotThrow(() => assertEvaluationClock({ schemaVersion: "1", authorityTime: "2026-01-01T00:00:00Z", observationCursor: cursor }, cursor));
+  assert.throws(() => assertEvaluationClock({ schemaVersion: "1", authorityTime: "invalid", observationCursor: cursor }, cursor), /INVALID_EVALUATION_CLOCK/);
+  assert.throws(() => assertEvaluationClock({ schemaVersion: "1", authorityTime: "2026-01-01T00:00:00Z", observationCursor: { ...cursor, runSequence: 5 } }, cursor), /INVALID_EVALUATION_CLOCK/);
+});
+
 test("retry and duplicate-risk generations require terminal or explicitly unknown predecessors", () => {
   const retry = scheduleRetry({ attemptId: "attempt", priorGeneration: 1, prior: generation(1, "failed", 3), retryOrdinal: 1, retryPolicyDigest: "policy", notBefore: "2026-01-01T00:00:00Z", pinDecision: "reuse", forkPinDigest: "pin", reason: "transient", providerIdempotencyKeyDigest: "key-2" });
   assert.equal(retry.generation, 2);
@@ -95,17 +105,3 @@ test("policy conjunction, approval replacement and fully scoped capabilities fai
   assert.deepEqual(authorizeCommand({ role: "adapter", command: "submit-receipt", capability: { ...capability, commands: [...capability.commands] }, workspaceId: "ws", runId: "run", taskId: "task", attemptId: "attempt", generation: 2, observationSequence: 3, grantDigest: "grant", expectedGrantDigest: "grant" }), { allowed: false, reason: "CAPABILITY_SCOPE_MISMATCH" });
 });
 
-test("assigned golden vectors execute exported state-machine APIs", () => {
-  const load = (family: string, name: string): { input: { domain: string; value: Record<string, unknown> }; expected: string } => JSON.parse(readFileSync(new URL(`../../../docs/vectors/${family}/${name}.json`, import.meta.url), "utf8")) as { input: { domain: string; value: Record<string, unknown> }; expected: string };
-  const assignedVectors = [["fork-pin", "ancestry-refresh"], ["dependency-join", "acceptance-edge"], ["dependency-join", "cancellation-propagation"], ["context-binding", "separated-views"], ["task-dispatch", "cancellation-race"], ["task-dispatch", "recovery-ambiguous"], ["task-dispatch", "late-receipt"], ["task-dispatch", "illegal-transition"]] as const;
-  for (const [family, name] of assignedVectors) {
-    const vector = load(family, name); assert.equal(domainDigest(vector.input.domain, vector.input.value), vector.expected);
-  }
-  const cancellation = load("task-dispatch", "cancellation-race").input.value;
-  assert.equal(reduceDispatch(generation(1, cancellation.from as AttemptGenerationStateV1["state"]), { type: "terminal-receipt", outcome: "succeeded", eventSequence: 3 }).state, cancellation.to);
-  const recovery = load("task-dispatch", "recovery-ambiguous").input.value;
-  assert.equal(reduceDispatch(generation(1, recovery.from as AttemptGenerationStateV1["state"]), { type: "reconcile-ambiguous" }).state, recovery.to);
-  const late = load("task-dispatch", "late-receipt").input.value;
-  assert.deepEqual(reduceDispatch(generation(1, late.from as AttemptGenerationStateV1["state"], 2), { type: "terminal-receipt", outcome: "failed", eventSequence: 3 }).findingCodes, [late.finding]);
-  assert.throws(() => reduceDispatch(generation(1, "planned"), { type: "acknowledge" }), new RegExp(String(load("task-dispatch", "illegal-transition").input.value.result)));
-});

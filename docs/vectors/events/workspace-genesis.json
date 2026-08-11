@@ -1,9 +1,1 @@
-{
-  "schemaVersion": "2",
-  "familyVersion": "1",
-  "family": "events",
-  "case": "workspace-genesis-payload-digest",
-  "action": "domainDigest",
-  "input": { "domain": "horseness.event-payload.v1", "value": { "eventType": "WorkspaceCreatedV1", "workspaceId": "ws_demo", "sequence": 1, "priorEnvelopeHash": null } },
-  "expected": "cc722424ae3928b81c6312c972b169c24bfb50f5bcb39c8a2f0797952664c4ae"
-}
+{"schemaVersion":"2","familyVersion":"1","family":"events","case":"workspace-genesis-exact-envelope","action":"createWorkspaceGenesis","input":{"workspaceId":"ws","authorityPrincipalId":"p","initialGrantDigest":"g","authorityConsumptionMarker":"m","activePolicyDigest":"policy","commandId":"cmd"},"select":["event","envelopeHash"],"expected":"dfbc5b777e461427b3e0e21a1b0dbabec6755808afb08f6c12ad2f44193c1155"}

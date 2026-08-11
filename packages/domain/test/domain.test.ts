@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  NO_POLICY_DIGEST, applyDelta, approvalIsValid, assertAcyclic, authorizeCommand, bindContext, canonicalJson, combinePolicyDecisions, completionPolicySatisfied, completionPredicateIdentity, contextManifestCoreDigest, createRunGenesis, createWorkspaceGenesis, deltaAuthorityScopeDigest, deriveSchedulability, deterministicReplay, domainDigest, intersectScopes, jsonValueDigest, noPolicyDecision, reduceCanonicalDocument, reduceDispatch, reduceOperationalState, reduceWorkspaceState, resolveTask, scopeContains, sealAttemptReceipt, sealDependencyJoinSnapshot, sealEventEnvelope, sealForkPin, sealProposal, verifyAttemptReceipt, verifyEventChain, verifyProposal,
+  DOMAIN_PROTOCOL_VERSION, NO_POLICY_DIGEST, applyDelta, approvalIsValid, assertAcyclic, assertAtomicAppendContract, authorizeCommand, bindContext, canonicalJson, combinePolicyDecisions, completionPolicySatisfied, completionPredicateIdentity, contextManifestCoreDigest, createRunGenesis, createWorkspaceGenesis, deltaAuthorityScopeDigest, deriveSchedulability, deterministicReplay, domainDigest, intersectScopes, jsonValueDigest, noPolicyDecision, reduceCanonicalDocument, reduceDispatch, reduceOperationalState, reduceWorkspaceState, resolveTask, scopeContains, sealAttemptReceipt, sealDependencyJoinSnapshot, sealEventEnvelope, sealForkPin, sealProposal, verifyAttemptReceipt, verifyEventChain, verifyProposal,
   type AttemptGenerationStateV1, type CompositeCursorV1, type ContextManifestCoreV1, type DeltaAuthorityScopeV1, type ForkPinCoreV1, type HashedEventEnvelopeV1, type PolicyDecisionV1, type ProposalEnvelopeCoreV1
 } from "../src/index.js";
 
@@ -16,6 +16,13 @@ test("workspace and run genesis are deterministic and chained independently", ()
   const workspace = createWorkspaceGenesis({ workspaceId: "ws", authorityPrincipalId: "p", initialGrantDigest: "g", authorityConsumptionMarker: "used", activePolicyDigest: NO_POLICY_DIGEST, commandId: "cmd-w" });
   const run = createRunGenesis({ observationCursor: { ...workspace.resultCursor, kind: "absent-run-genesis", runId: "run", expectedRunHead: "absent" }, initialDocument: { items: [] }, principalId: "p", commandId: "cmd-r" });
   assert.equal(workspace.event.envelope.sequence, 1); assert.equal(run.event.envelope.sequence, 1); assert.equal(run.resultCursor.workspaceEnvelopeHash, workspace.event.envelopeHash); verifyEventChain([run.event]);
+});
+test("public protocol is versioned and atomic append contracts fail closed", () => {
+  assert.equal(DOMAIN_PROTOCOL_VERSION, "1");
+  const workspace = createWorkspaceGenesis({ workspaceId: "ws", authorityPrincipalId: "p", initialGrantDigest: "g", authorityConsumptionMarker: "m", activePolicyDigest: NO_POLICY_DIGEST, commandId: "c" });
+  assert.doesNotThrow(() => assertAtomicAppendContract({ schemaVersion: "1", appendKind: "single-stream", observationCursor: { schemaVersion: "1", kind: "absent-workspace-genesis", workspaceId: "ws", expectedWorkspaceHead: "absent" }, append: { streamKind: "workspace", expectedSequence: 0, expectedEnvelopeHash: null, events: [workspace.event] } }));
+  assert.throws(() => assertAtomicAppendContract({ schemaVersion: "1", appendKind: "unknown" } as never), /ATOMIC_APPEND_KIND_UNSUPPORTED/);
+  assert.throws(() => assertAtomicAppendContract({ schemaVersion: "1", appendKind: "single-stream", observationCursor: workspace.resultCursor, append: { streamKind: "run", expectedSequence: 0, expectedEnvelopeHash: null, events: [workspace.event] } }), /ATOMIC_APPEND_INVALID/);
 });
 test("delta applies object add, array insert/append and ordered preconditions", () => {
   const base = { items: ["a"], meta: {} };
@@ -99,15 +106,15 @@ test("workspace and run operational reducers are exhaustive, monotonic and immut
   const workspace = reduceWorkspaceState(null, { eventType: "WorkspaceCreatedV1", sequence: 1, workspaceId: "ws", authorityPrincipalId: "authority", initialGrantDigest: "grant", authorityConsumptionMarker: "used", activePolicyDigest: "policy-1" });
   const changed = reduceWorkspaceState(workspace, { eventType: "PolicyReferenceChangedV1", sequence: 2, workspaceId: "ws", activePolicyDigest: "policy-2" });
   assert.equal(workspace.activePolicyDigest, "policy-1"); assert.equal(changed.activePolicyDigest, "policy-2"); assert.throws(() => reduceWorkspaceState(changed, { eventType: "PolicyReferenceChangedV1", sequence: 2, workspaceId: "ws", activePolicyDigest: "policy-3" }), /EVENT_SEQUENCE_INVALID/);
-  const run = reduceOperationalState(null, { eventType: "RunCreatedV1", sequence: 1, workspaceId: "ws", runId: "run" }); const submitted = reduceOperationalState(run, { eventType: "ProposalSubmittedV1", sequence: 2, workspaceId: "ws", runId: "run", proposalId: "p" });
-  assert.deepEqual(run.proposals, {}); assert.deepEqual(submitted.proposals, { p: "submitted" }); assert.throws(() => reduceOperationalState(submitted, { eventType: "ForkCreatedV1", sequence: 3, workspaceId: "ws", runId: "other" }), /AGGREGATE_IDENTITY_MISMATCH/);
+  const run = reduceOperationalState(null, { eventType: "RunCreatedV1", sequence: 1, workspaceId: "ws", runId: "run" }); const submitted = reduceOperationalState(run, { eventType: "ProposalSubmittedV1", sequence: 2, workspaceId: "ws", runId: "run", proposalId: "p", proposalDigest: "pd" });
+  assert.deepEqual(run.proposals, {}); assert.deepEqual(submitted.proposals, { p: { status: "submitted", proposalDigest: "pd" } }); assert.throws(() => reduceOperationalState(submitted, { eventType: "ForkCreatedV1", sequence: 3, workspaceId: "ws", runId: "other" }), /AGGREGATE_IDENTITY_MISMATCH/);
 });
 function replayChain(): HashedEventEnvelopeV1<unknown>[] {
   const initial = { n: 0 }; const final = { n: 1 }; const state0 = domainDigest("horseness.canonical-document.v1", initial); const state1 = domainDigest("horseness.canonical-document.v1", final);
   const payloads = [
     { eventType: "RunCreatedV1", workspaceId: "ws", runId: "run", initialDocument: initial, canonicalizerVersion: "jcs-v1", hashVersion: "sha256-v1" },
-    { eventType: "ProposalSubmittedV1", proposalId: "p" },
-    { eventType: "DeltaAcceptedV1", proposalId: "p", priorStateHash: state0, resultingStateHash: state1, resultingDocument: final }
+    { eventType: "ProposalSubmittedV1", workspaceId: "ws", runId: "run", proposalId: "p", proposalDigest: "pd" },
+    { eventType: "DeltaAcceptedV1", workspaceId: "ws", runId: "run", proposalId: "p", proposalDigest: "pd", priorStateHash: state0, resultingStateHash: state1, resultingDocument: final }
   ];
   const result: HashedEventEnvelopeV1<unknown>[] = []; let priorEnvelopeHash: string | null = null;
   for (let index = 0; index < payloads.length; index += 1) { const payload = payloads[index]!; const item: HashedEventEnvelopeV1<unknown> = sealEventEnvelope({ schemaVersion: "1", streamKind: "run", workspaceId: "ws", streamId: "run", sequence: index + 1, eventId: String(index + 1), eventType: payload.eventType, principalId: "p", causationId: "c", correlationId: "c", idempotencyKey: String(index + 1), priorEnvelopeHash, payload }); result.push(item); priorEnvelopeHash = item.envelopeHash; }
@@ -125,4 +132,15 @@ test("replay rejects unsupported versions, invalid genesis and malformed events"
   const chain = replayChain(); const version = structuredClone(chain); version[0]!.envelope.schemaVersion = "2" as "1"; assert.throws(() => deterministicReplay(version), /EVENT_VERSION_UNSUPPORTED/);
   const unknownPayload = { eventType: "UnknownV1" }; const { payloadHash: _unknownPayloadHash, ...unknownEnvelope } = chain[1]!.envelope; const unknown = sealEventEnvelope({ ...unknownEnvelope, eventType: "UnknownV1", payload: unknownPayload }); assert.throws(() => deterministicReplay([chain[0]!, unknown]), /UNSUPPORTED_EVENT_TYPE/);
   const malformedPayload = { eventType: "RunCreatedV1", workspaceId: "ws", runId: "run", initialDocument: {}, canonicalizerVersion: "bad", hashVersion: "sha256-v1" }; const { payloadHash: _malformedPayloadHash, ...malformedEnvelope } = chain[0]!.envelope; const malformed = sealEventEnvelope({ ...malformedEnvelope, payload: malformedPayload }); assert.throws(() => deterministicReplay([malformed]), /MALFORMED_EVENT/);
+});
+
+test("reducers reject runtime-unknown variants and conflicting identity order", () => {
+  const workspace = reduceWorkspaceState(null, { eventType: "WorkspaceCreatedV1", sequence: 1, workspaceId: "ws", authorityPrincipalId: "a", initialGrantDigest: "g", authorityConsumptionMarker: "m", activePolicyDigest: "p" });
+  assert.throws(() => reduceWorkspaceState(workspace, { eventType: "UnknownV1", sequence: 2 } as never), /UNSUPPORTED_EVENT_TYPE/);
+  const run = reduceOperationalState(null, { eventType: "RunCreatedV1", sequence: 1, workspaceId: "ws", runId: "run" });
+  assert.throws(() => reduceOperationalState(run, { eventType: "DeltaAcceptedV1", sequence: 2, workspaceId: "ws", runId: "run", proposalId: "p", proposalDigest: "d" }), /PROPOSAL_NOT_SUBMITTED/);
+  const submitted = reduceOperationalState(run, { eventType: "ProposalSubmittedV1", sequence: 2, workspaceId: "ws", runId: "run", proposalId: "p", proposalDigest: "d1" });
+  assert.throws(() => reduceOperationalState(submitted, { eventType: "DeltaAcceptedV1", sequence: 3, workspaceId: "ws", runId: "run", proposalId: "p", proposalDigest: "d2" }), /PROPOSAL_IDENTITY_CONFLICT/);
+  assert.throws(() => reduceOperationalState(run, { eventType: "UnknownV1", sequence: 2, workspaceId: "ws", runId: "run" } as never), /UNSUPPORTED_EVENT_TYPE/);
+  assert.throws(() => reduceCanonicalDocument(null, { eventType: "UnknownV1" } as never), /UNSUPPORTED_EVENT_TYPE/);
 });

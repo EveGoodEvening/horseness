@@ -1,9 +1,1 @@
-{
-  "schemaVersion": "2",
-  "familyVersion": "1",
-  "family": "events",
-  "case": "run-genesis-payload-digest",
-  "action": "domainDigest",
-  "input": { "domain": "horseness.event-payload.v1", "value": { "eventType": "RunCreatedV1", "workspaceId": "ws_demo", "runId": "run_demo", "canonicalizerVersion": "jcs-v1", "hashVersion": "sha256-v1", "initialDocument": { "items": [] } } },
-  "expected": "a0b22413de173f4c9e8ffb9395aa99d4168c921c80c5dfe78ef8d4ce88cf21d7"
-}
+{"schemaVersion":"2","familyVersion":"1","family":"events","case":"genesis-deterministic-replay","action":"eventGenesisReplay","input":"ok","select":["canonical","stateHash"],"expected":"7bce63264b75b95c5221483b32911b36753984405d006f7295e8e4c66636d426"}

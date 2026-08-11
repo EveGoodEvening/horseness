@@ -8,3 +8,4 @@ export * from "./receipt.js";
 export * from "./tasks.js";
 
 export const DOMAIN_PACKAGE = "@horseness/domain" as const;
+export const DOMAIN_PROTOCOL_VERSION = "1" as const;
