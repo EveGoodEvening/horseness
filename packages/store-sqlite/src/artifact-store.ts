@@ -1,0 +1,43 @@
+import { createHash } from "node:crypto";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+import { noCrash, type CrashInjector } from "./crash.js";
+
+export interface ArtifactRecord { digest: string; byteLength: number; relativePath: string; mediaType: string | null }
+export interface GarbageCollectionResult { removedDigests: string[]; removedBytes: number }
+export class ArtifactIntegrityError extends Error { constructor(message: string) { super(message); this.name="ArtifactIntegrityError"; } }
+const sha256=(data:Uint8Array):string=>createHash("sha256").update(data).digest("hex");
+
+export class ArtifactStore {
+  readonly root: string; readonly objects: string; readonly staging: string;
+  constructor(root:string, private readonly db:DatabaseSync, private readonly crash:CrashInjector=noCrash) {
+    this.root=resolve(root); this.objects=join(this.root,"objects"); this.staging=join(this.root,"stage");
+    this.crash("artifact.mkdir.before"); mkdirSync(this.objects,{recursive:true}); mkdirSync(this.staging,{recursive:true}); this.crash("artifact.mkdir.after");
+    this.recoverStaging();
+  }
+  private pathFor(digest:string):string { if(!/^[a-f0-9]{64}$/.test(digest)) throw new ArtifactIntegrityError("invalid artifact digest"); return join(this.objects,digest.slice(0,2),digest.slice(2)); }
+  private ensureWithin(path:string):void { const rel=relative(this.root,path); if(rel.startsWith(`..${sep}`)||rel==="..") throw new ArtifactIntegrityError("artifact path escape"); }
+  private syncDirectory(path:string):void { this.crash("artifact.dir-fsync.before"); const fd=openSync(path,"r"); try{fsyncSync(fd);}finally{closeSync(fd);} this.crash("artifact.dir-fsync.after"); }
+  publish(data:Uint8Array|string, mediaType:string|null=null):ArtifactRecord {
+    const bytes=typeof data==="string"?Buffer.from(data):Buffer.from(data); const digest=sha256(bytes); const destination=this.pathFor(digest); this.ensureWithin(destination);
+    if(!existsSync(destination)) {
+      const parent=dirname(destination); this.crash("artifact.mkdir.before"); mkdirSync(parent,{recursive:true}); this.crash("artifact.mkdir.after");
+      const temporary=join(this.staging,`${digest}.${String(process.pid)}.${String(Date.now())}.tmp`); this.crash("artifact.open.before"); const fd=openSync(temporary,"wx",0o600); this.crash("artifact.open.after");
+      try { this.crash("artifact.write.before"); let offset=0; while(offset<bytes.length) offset+=writeSync(fd,bytes,offset,bytes.length-offset); this.crash("artifact.write.after"); this.crash("artifact.file-fsync.before"); fsyncSync(fd); this.crash("artifact.file-fsync.after"); this.crash("artifact.close.before"); closeSync(fd); this.crash("artifact.close.after"); this.crash("artifact.rename.before"); renameSync(temporary,destination); this.crash("artifact.rename.after"); this.syncDirectory(parent); this.syncDirectory(this.staging); }
+      catch(error){ try{closeSync(fd);}catch(closeError){void closeError;} if(existsSync(temporary))rmSync(temporary,{force:true}); throw error; }
+    }
+    const actual=this.readVerifiedBytes(digest); if(actual.length!==bytes.length) throw new ArtifactIntegrityError("published artifact length mismatch");
+    return {digest,byteLength:bytes.length,relativePath:relative(this.root,destination),mediaType};
+  }
+  register(record:ArtifactRecord):void { this.crash("artifact.sql-reference.before"); this.db.prepare("INSERT OR IGNORE INTO artifacts(digest,byte_length,relative_path,media_type,published_at) VALUES(?,?,?,?,?)").run(record.digest,record.byteLength,record.relativePath,record.mediaType,new Date().toISOString()); this.crash("artifact.sql-reference.after"); }
+  publishAndRegister(data:Uint8Array|string,mediaType:string|null=null):ArtifactRecord { const record=this.publish(data,mediaType); this.register(record); return record; }
+  readVerifiedBytes(digest:string):Buffer { const path=this.pathFor(digest); if(!existsSync(path))throw new ArtifactIntegrityError(`referenced artifact missing: ${digest}`); const data=readFileSync(path); if(sha256(data)!==digest)throw new ArtifactIntegrityError(`referenced artifact corrupt: ${digest}`); return data; }
+  readReferenced(digest:string):Buffer { const row=this.db.prepare("SELECT byte_length FROM artifacts WHERE digest=?").get(digest) as {byte_length:number}|undefined; if(!row)throw new ArtifactIntegrityError(`unknown artifact reference: ${digest}`); const data=this.readVerifiedBytes(digest); if(data.length!==row.byte_length)throw new ArtifactIntegrityError(`artifact metadata mismatch: ${digest}`); return data; }
+  addReference(ownerKind:string,ownerId:string,digest:string):void { this.readReferenced(digest); this.db.prepare("INSERT OR IGNORE INTO artifact_refs(owner_kind,owner_id,digest,created_at) VALUES(?,?,?,?)").run(ownerKind,ownerId,digest,new Date().toISOString()); }
+  removeReference(ownerKind:string,ownerId:string,digest:string):void { this.db.prepare("DELETE FROM artifact_refs WHERE owner_kind=? AND owner_id=? AND digest=?").run(ownerKind,ownerId,digest); }
+  pin(pinId:string,digest:string):void { this.readReferenced(digest); this.db.prepare("INSERT OR IGNORE INTO artifact_pins(pin_id,digest,created_at) VALUES(?,?,?)").run(pinId,digest,new Date().toISOString()); }
+  unpin(pinId:string,digest:string):void { this.db.prepare("DELETE FROM artifact_pins WHERE pin_id=? AND digest=?").run(pinId,digest); }
+  collectOrphans():GarbageCollectionResult { const rows=this.db.prepare("SELECT digest,byte_length FROM artifacts WHERE NOT EXISTS(SELECT 1 FROM artifact_refs r WHERE r.digest=artifacts.digest) AND NOT EXISTS(SELECT 1 FROM artifact_pins p WHERE p.digest=artifacts.digest) ORDER BY digest").all() as unknown as {digest:string;byte_length:number}[]; let removedBytes=0; this.db.exec("BEGIN IMMEDIATE"); try{for(const row of rows){const path=this.pathFor(row.digest); if(existsSync(path)){const size=statSync(path).size; rmSync(path); removedBytes+=size;} this.db.prepare("DELETE FROM artifacts WHERE digest=?").run(row.digest);} this.db.exec("COMMIT");}catch(error){if(this.db.isTransaction)this.db.exec("ROLLBACK");throw error;} return {removedDigests:rows.map(r=>r.digest),removedBytes}; }
+  recoverStaging():void { for(const entry of readdirSync(this.staging)){if(entry.endsWith(".tmp"))rmSync(join(this.staging,entry),{force:true});} }
+}
