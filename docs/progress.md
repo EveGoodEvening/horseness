@@ -4,14 +4,14 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 
 ## Global status
 
-- **Planning state:** C01 live-graph correction v4 is active; candidate `2d4e4f62fb779c988bc7a774cd402ae47736b105` has no valid integrated A01
-- **Active claims:** C01 generation 1 only
-- **Next eligible:** none; C02 remains ineligible until corrected C01 evidence and A01 integrate
-- **Active blockers:** candidate reseal, K01-from-graph verifier correction, universal gate evidence, and integrated re-attestation; install-output cleanup is complete
+- **Planning state:** formal C01 remediation `R001` for finding `F001` is active from pre-claim base `d416ddfeee62c31f09f702b24393a1774ef687e1`; C01 remains in progress and has no valid integrated A01
+- **Active claims:** C01 generation 1 (historical K01 source claim) and R001 generation 1 (current remediation claim)
+- **Next eligible:** none; R001 is the active priority node and C02 remains ineligible until R001 integrates, corrected C01 evidence succeeds, and A01 integrates
+- **Active blockers:** F001 records that the three required planning-correction paths were outside K01 candidate ownership; R001 must correct them without weakening verification or merging K01/A01 write scopes
 - **Last integrated receipt:** C00 `docs/checkpoints/C00/bootstrap/0.json`, envelope digest `ef53151d3b520d1175a8ca0a1a3fece3526de18e9c3cd9cf30299bb6b3b28c87`
 - **Release readiness:** not started
 - **Base chunk count:** 26 (`C00`–`C25`)
-- **Dynamic planning/remediation/revalidation count:** 1 versioned C01 contract correction; no P/R/V node completed
+- **Dynamic planning/remediation/revalidation count:** 2 (`F001` finding and active `R001` remediation); no remediation or revalidation node completed
 
 ## Atomic claim and attestation protocol
 
@@ -27,6 +27,7 @@ Durable findings use one atomic emergency transaction for `FindingV1`, index app
 |---|---|---|---|
 | C00 | Tool-free contract freeze | — | complete |
 | C01 | Bootstrap/CI | C00 | in-progress |
+| R001 | Correct C01 planning digests and implementation under a distinct remediation claim | F001 + last-good C00 receipt | in-progress; active priority node |
 | C02 | Domain and transition contracts | C01 | not-started; ineligible |
 | C03 | Protocol | C02 | not-started |
 | C04 | Policy/admission evaluator | C03 | not-started |
@@ -54,12 +55,12 @@ Durable findings use one atomic emergency transaction for `FindingV1`, index app
 
 ## Planning correction, remediation, and revalidation accounting
 
-The C01 v4 correction is a narrowly authorized bootstrap-contract remediation, not a retroactive expansion of candidate ownership and not a completed P/R/V checkpoint. It changes only the impossible live K01 selection rule, permits the named `.mjs` gate to be a versioned universal executable rather than a byte-identical copy, and makes prior C01 acceptance/receipt evidence stale. K01 claim writes, W01/I01 source writes, and A01 attestation writes are accounted separately. Unauthorized install outputs and workspace `node_modules` symlinks have been removed rather than added to the claim. C01 remains in progress pending reseal, corrected acceptance, and A01; C02 remains ineligible until corrected evidence and a new signed A01 integrate.
+Finding `F001` records the blocker at `d416ddfeee62c31f09f702b24393a1774ef687e1`: the required corrections to `docs/plan.md`, `docs/validation/c00-contract-gate.node-e.txt`, and `docs/checkpoints/fixtures/digests.json` were not sealed by K01. Remediation claim `R001` generation 1 is the active node. Its candidate owns exactly those three planning paths plus the C01 implementation source/config path set inherited from K01 after excluding all K01 claim-transaction and A01 attestation paths. K01 remains the immutable C01 generation-1 claim transaction; A01 remains a later receipt-only attestation transaction. C01 stays `in-progress`, no receipt is created, and C02 stays ineligible until R001 integrates, the strict `v4:C01` acceptance contract succeeds, and A01 integrates.
 
 ## Resume instructions
 
-Read `AGENTS.md`, architecture, plan, compatibility, trust root, this summary, the claim/checkpoint indexes, and `docs/progress/C01.md`. Resume C01 generation 1 after completed install-output cleanup: reseal the candidate from derived K01 `2e6b9e40a2cdacf4ebff154cbd2a6edc163fe1f1`, make live verification derive K01 from immutable Git blobs while invoked at candidate/attestation HEAD, regenerate corrected gate/acceptance evidence, and integrate a new signed A01. Do not claim or start C02.
+Read `AGENTS.md`, architecture, plan, compatibility, trust root, this summary, both claim/checkpoint indexes, `docs/findings/F001.json`, `docs/progress/R001.md`, and `docs/progress/C01.md`. Resume only R001 generation 1 from pre-claim base `d416ddfeee62c31f09f702b24393a1774ef687e1`; modify only its sealed candidate paths, preserve immutable K01 and separate A01 ownership, do not weaken any gate, and do not claim or start C02.
 
 ## Planning review status
 
-The definitive review is reopened only for C01 live-graph correction v4. C00 remains historically complete under its signed bootstrap receipt. C01 is `in-progress`; its prior receipt/evidence is stale because live verification equated current HEAD with K01 and the byte-equality gate is superseded. C02 remains `not-started` and ineligible.
+The definitive review is reopened only for formal finding `F001` and active remediation `R001`. C00 remains historically complete under its signed bootstrap receipt. C01 remains `in-progress`; corrected evidence and A01 are pending. C02 remains `not-started` and ineligible.
