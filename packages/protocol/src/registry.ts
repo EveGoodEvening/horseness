@@ -1,38 +1,34 @@
-export const PROTOCOL_VERSION = "1" as const;
-export type PrincipalRole = "authority" | "approver" | "operator" | "worker" | "adapter";
-export type MethodKind = "command" | "query" | "subscription" | "adapter-spi";
-export type CursorRequirement = "absent-workspace" | "workspace" | "absent-run" | "run" | "composite";
-export interface MethodDefinitionV1 {
-  readonly method: string;
-  readonly kind: MethodKind;
-  readonly roles: readonly PrincipalRole[];
-  readonly cursor: CursorRequirement;
-  readonly idempotency: "required" | "forbidden";
-  readonly scope: "workspace" | "run" | "task" | "attempt" | "proposal" | "adapter";
-}
-const command = (method: string, roles: readonly PrincipalRole[], cursor: CursorRequirement, scope: MethodDefinitionV1["scope"]): MethodDefinitionV1 => ({method,kind:"command",roles,cursor,idempotency:"required",scope});
-const query = (method: string, roles: readonly PrincipalRole[], cursor: CursorRequirement, scope: MethodDefinitionV1["scope"]): MethodDefinitionV1 => ({method,kind:"query",roles,cursor,idempotency:"forbidden",scope});
-const subscription = (method: string, roles: readonly PrincipalRole[], scope: MethodDefinitionV1["scope"]): MethodDefinitionV1 => ({method,kind:"subscription",roles,cursor:"composite",idempotency:"forbidden",scope});
-const spi = (method: string): MethodDefinitionV1 => ({method,kind:"adapter-spi",roles:["adapter"],cursor:"composite",idempotency:"required",scope:"adapter"});
-const A=["authority"] as const, AO=["authority","operator"] as const, AA=["authority","approver"] as const, AOW=["authority","operator","worker"] as const, AOWD=["authority","operator","worker","adapter"] as const, ALL=["authority","approver","operator","worker","adapter"] as const;
-export const METHOD_REGISTRY_V1 = [
- command("workspace.create.v1",A,"absent-workspace","workspace"), query("workspace.get.v1",ALL,"workspace","workspace"),
- command("run.create.v1",A,"absent-run","run"), query("run.get.v1",ALL,"composite","run"), query("run.list.v1",AO,"workspace","workspace"), query("run.status.v1",ALL,"composite","run"), command("run.close.v1",A,"composite","run"),
- command("task.create.v1",AO,"composite","task"), command("task.update.v1",AO,"composite","task"), command("task.cancel.v1",AO,"composite","task"), command("task.resolve.v1",A,"composite","task"), query("task.get.v1",AOWD,"composite","task"), query("task.list.v1",AO,"composite","run"),
- command("dependency.add.v1",AO,"composite","task"), query("dependency.list.v1",AOW,"composite","task"), query("join.get.v1",AOW,"composite","task"), query("join.list.v1",AO,"composite","run"),
- command("fork.create.v1",AO,"composite","task"), command("fork.refresh.v1",AO,"composite","task"), query("fork.get.v1",AOWD,"composite","task"),
- command("context.materialize.v1",AO,"composite","attempt"), command("context.bind.v1",AO,"composite","attempt"), query("context.get.v1",AOWD,"composite","attempt"),
- command("dispatch.launch.v1",AO,"composite","attempt"), command("dispatch.cancel.v1",AO,"composite","attempt"), command("dispatch.reconcile.v1",AO,"composite","attempt"), command("dispatch.resolveUnknown.v1",A,"composite","attempt"), command("dispatch.authorizeDuplicateRisk.v1",A,"composite","attempt"), query("dispatch.get.v1",AOWD,"composite","attempt"),
- command("artifact.publish.v1",AOWD,"composite","attempt"), query("artifact.get.v1",AOWD,"composite","attempt"),
- command("receipt.submit.v1",["worker","adapter"],"composite","attempt"), query("receipt.get.v1",AOWD,"composite","attempt"),
- command("proposal.submit.v1",["worker","adapter"],"composite","proposal"), query("proposal.get.v1",AOWD,"composite","proposal"), command("proposal.evaluate.v1",A,"composite","proposal"), command("proposal.approve.v1",AA,"composite","proposal"), command("proposal.reject.v1",AA,"composite","proposal"), command("proposal.release.v1",A,"composite","proposal"), command("proposal.rebase.v1",AOW,"composite","proposal"),
- query("admission.decision.v1",AOWD,"composite","proposal"), subscription("admission.subscribe.v1",AOWD,"proposal"), query("admission.history.v1",AOW,"composite","proposal"),
- query("canonical.get.v1",ALL,"composite","run"), query("history.list.v1",AOW,"composite","run"), subscription("history.subscribe.v1",AOW,"run"),
- command("policy.set.v1",A,"workspace","workspace"), query("policy.get.v1",AO,"workspace","workspace"), command("grant.issue.v1",A,"workspace","workspace"), command("grant.delegate.v1",A,"workspace","workspace"), command("grant.revoke.v1",A,"workspace","workspace"), query("grant.list.v1",A,"workspace","workspace"), command("quota.set.v1",A,"workspace","workspace"), query("quota.get.v1",AO,"workspace","workspace"),
- query("adapter.capabilities.v1",["authority","operator","adapter"],"composite","adapter"), spi("adapter.launch.v1"), spi("adapter.cancel.v1"), spi("adapter.reconcile.v1"), spi("adapter.resume.v1"), spi("adapter.reattach.v1"), spi("adapter.injectContext.v1"), spi("adapter.collectReceipt.v1"), spi("adapter.nativePackageMetadata.v1"), spi("adapter.installContributions.v1"), spi("adapter.doctor.v1"), spi("adapter.workerReturn.v1")
+import {parseMethodRequestV1,parseMethodResultV1,type MethodRequestV1,type MethodResultV1} from "./dto.js";
+import type {DomainMappingNameV1} from "./mappings.js";
+export const PROTOCOL_VERSION="1" as const;
+export type PrincipalRole="authority"|"approver"|"operator"|"worker"|"adapter";
+export type MethodKind="command"|"query"|"subscription"|"adapter-spi";
+export type CursorRequirement="absent-workspace"|"workspace"|"absent-run"|"run"|"composite";
+export type ResourceScopeV1="workspace"|"run"|"task"|"attempt"|"proposal"|"adapter";
+export interface MethodCapabilityPolicyV1 {readonly required:true;readonly action:string;readonly scope:ResourceScopeV1}
+export interface MethodDefinitionV1 {readonly method:string;readonly kind:MethodKind;readonly roles:readonly PrincipalRole[];readonly capability:MethodCapabilityPolicyV1;readonly cursor:CursorRequirement;readonly idempotency:"required"|"forbidden";readonly scope:ResourceScopeV1;readonly inputMapping:DomainMappingNameV1|null;readonly resultMapping:DomainMappingNameV1|null;readonly parseInput:(value:unknown)=>MethodRequestV1;readonly parseResult:(value:unknown)=>MethodResultV1}
+type Options={input?:DomainMappingNameV1;result?:DomainMappingNameV1};
+const define=<M extends string>(method:M,kind:MethodKind,roles:readonly PrincipalRole[],cursor:CursorRequirement,scope:ResourceScopeV1,options:Options={}):MethodDefinitionV1&{readonly method:M}=>{const definition:MethodDefinitionV1&{readonly method:M}={method,kind,roles,capability:{required:true,action:method,scope},cursor,idempotency:kind==="command"||kind==="adapter-spi"?"required":"forbidden",scope,inputMapping:options.input??null,resultMapping:options.result??null,parseInput:(value:unknown)=>parseMethodRequestV1(method as ProtocolMethodV1,definition,value),parseResult:(value:unknown)=>parseMethodResultV1(method as ProtocolMethodV1,definition,value)};return definition};
+const A=["authority"] as const,AO=["authority","operator"] as const,AA=["authority","approver"] as const,AOW=["authority","operator","worker"] as const,AOWD=["authority","operator","worker","adapter"] as const,WA=["worker","adapter"] as const,AD=["adapter"] as const;
+export const METHOD_REGISTRY_V1=[
+ define("workspace.create.v1","command",A,"absent-workspace","workspace",{input:"domain-command",result:"domain-command-result"}),define("workspace.get.v1","query",AO,"workspace","workspace",{input:"domain-query",result:"domain-query-result"}),
+ define("run.create.v1","command",A,"absent-run","run",{input:"domain-command",result:"domain-command-result"}),define("run.get.v1","query",AO,"composite","run",{input:"domain-query",result:"domain-query-result"}),define("run.list.v1","query",AO,"workspace","workspace"),define("run.status.v1","query",AO,"composite","run"),define("run.close.v1","command",A,"composite","run"),
+ define("task.create.v1","command",AO,"composite","task"),define("task.update.v1","command",AO,"composite","task"),define("task.cancel.v1","command",AO,"composite","task"),define("task.resolve.v1","command",A,"composite","task",{input:"domain-command",result:"domain-command-result"}),define("task.get.v1","query",AOWD,"composite","task"),define("task.list.v1","query",AO,"composite","run"),
+ define("dependency.add.v1","command",AO,"composite","task",{input:"dependency-edge"}),define("dependency.list.v1","query",AOW,"composite","task",{result:"dependency-edge"}),define("join.get.v1","query",AOW,"composite","task",{result:"dependency-join-snapshot"}),define("join.list.v1","query",AO,"composite","run",{result:"dependency-join-snapshot"}),
+ define("fork.create.v1","command",AO,"composite","task",{input:"fork-pin",result:"fork-pin"}),define("fork.refresh.v1","command",AO,"composite","task",{input:"fork-pin",result:"fork-pin"}),define("fork.get.v1","query",AOWD,"composite","task",{result:"fork-pin"}),
+ define("context.materialize.v1","command",AO,"composite","attempt",{input:"context-manifest",result:"context-manifest"}),define("context.bind.v1","command",AO,"composite","attempt",{input:"attempt-context-binding",result:"attempt-context-binding"}),define("context.get.v1","query",AOWD,"composite","attempt",{result:"context-manifest"}),
+ define("dispatch.launch.v1","command",AO,"composite","attempt"),define("dispatch.cancel.v1","command",AO,"composite","attempt"),define("dispatch.reconcile.v1","command",AO,"composite","attempt"),define("dispatch.resolveUnknown.v1","command",A,"composite","attempt"),define("dispatch.authorizeDuplicateRisk.v1","command",A,"composite","attempt"),define("dispatch.get.v1","query",AOWD,"composite","attempt"),
+ define("artifact.publish.v1","command",AOWD,"composite","attempt"),define("artifact.get.v1","query",AOWD,"composite","attempt"),
+ define("receipt.submit.v1","command",WA,"composite","attempt",{input:"attempt-receipt",result:"domain-command-result"}),define("receipt.get.v1","query",AOWD,"composite","attempt",{result:"attempt-receipt"}),
+ define("proposal.submit.v1","command",WA,"composite","proposal",{input:"proposal-envelope",result:"domain-command-result"}),define("proposal.get.v1","query",AOWD,"composite","proposal",{result:"proposal-envelope"}),define("proposal.evaluate.v1","command",A,"composite","proposal",{input:"proposal-envelope"}),define("proposal.approve.v1","command",AA,"composite","proposal"),define("proposal.reject.v1","command",AA,"composite","proposal"),define("proposal.release.v1","command",A,"composite","proposal",{input:"proposal-envelope",result:"domain-command-result"}),define("proposal.rebase.v1","command",AOW,"composite","proposal",{input:"proposal-envelope",result:"proposal-envelope"}),
+ define("admission.decision.v1","query",AOWD,"composite","proposal"),define("admission.subscribe.v1","subscription",AOWD,"composite","proposal"),define("admission.history.v1","query",AOW,"composite","proposal"),
+ define("canonical.get.v1","query",AO,"composite","run"),define("history.list.v1","query",AO,"composite","run"),define("history.subscribe.v1","subscription",AO,"composite","run"),
+ define("policy.set.v1","command",A,"workspace","workspace",{input:"domain-command",result:"domain-command-result"}),define("policy.get.v1","query",AO,"workspace","workspace"),define("grant.issue.v1","command",A,"workspace","workspace"),define("grant.delegate.v1","command",A,"workspace","workspace"),define("grant.revoke.v1","command",A,"workspace","workspace"),define("grant.list.v1","query",A,"workspace","workspace"),define("quota.set.v1","command",A,"workspace","workspace"),define("quota.get.v1","query",AO,"workspace","workspace"),
+ define("adapter.capabilities.v1","query",["authority","operator","adapter"],"composite","adapter"),
+ define("adapter.launch.v1","adapter-spi",AD,"composite","adapter"),define("adapter.cancel.v1","adapter-spi",AD,"composite","adapter"),define("adapter.reconcile.v1","adapter-spi",AD,"composite","adapter"),define("adapter.resume.v1","adapter-spi",AD,"composite","adapter"),define("adapter.reattach.v1","adapter-spi",AD,"composite","adapter"),define("adapter.injectContext.v1","adapter-spi",AD,"composite","adapter"),define("adapter.collectReceipt.v1","adapter-spi",AD,"composite","adapter"),define("adapter.nativePackageMetadata.v1","adapter-spi",AD,"composite","adapter"),define("adapter.installContributions.v1","adapter-spi",AD,"composite","adapter"),define("adapter.doctor.v1","adapter-spi",AD,"composite","adapter"),define("adapter.workerReturn.v1","adapter-spi",AD,"composite","adapter"),
 ] as const satisfies readonly MethodDefinitionV1[];
-export type ProtocolMethodV1 = typeof METHOD_REGISTRY_V1[number]["method"];
-const registry = new Map<string, MethodDefinitionV1>(METHOD_REGISTRY_V1.map((definition)=>[definition.method,definition]));
-if (registry.size !== METHOD_REGISTRY_V1.length) throw new Error("duplicate protocol method");
+export type ProtocolMethodV1=typeof METHOD_REGISTRY_V1[number]["method"];
+const registry=new Map<string,MethodDefinitionV1>(METHOD_REGISTRY_V1.map((definition)=>[definition.method,definition]));
+if(registry.size!==METHOD_REGISTRY_V1.length)throw new Error("duplicate protocol method");
 export function methodDefinition(method:string):MethodDefinitionV1|undefined{return registry.get(method)}
-export function isAuthorizedMethod(role:PrincipalRole,method:string):boolean{return registry.get(method)?.roles.includes(role)??false}
+export function isAuthorizedMethod(role:PrincipalRole,method:string,capabilityActions:ReadonlySet<string>=new Set()):boolean{const definition=registry.get(method);return definition!==undefined&&definition.roles.includes(role)&&capabilityActions.has(definition.capability.action)}
