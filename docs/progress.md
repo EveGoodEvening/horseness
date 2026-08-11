@@ -4,11 +4,11 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 
 ## Global status
 
-- **Planning state:** claim self-SHA blocker corrected; definitive blocker/high closure corrected; C00 contract frozen and eligible for W00/A00 on integration branch `main`
+- **Planning state:** C00 bootstrap candidate `9182cba4d2e43d2bab1e044febfab8a1ce2c3db8` / tree `949bbcc2dda270a85cd0fbab3cdb861ab7199076` is signed, indexed, and complete on integration branch `main`
 - **Active claims:** none
-- **Next eligible:** C00 (`bootstrap-v1`); before W00 seal normalize/verify `main`; after signed indexed A00, K01 is exactly `docs/claims/C01/1.json`
+- **Next eligible:** C01; first perform the sole tool-free K01 claim transaction at `docs/claims/C01/1.json`, then run the frozen live checker with explicit trusted `--now`; do not edit C01 source before it passes
 - **Active blockers:** none
-- **Last integrated receipt:** none
+- **Last integrated receipt:** C00 `docs/checkpoints/C00/bootstrap/0.json`, envelope digest `ef53151d3b520d1175a8ca0a1a3fece3526de18e9c3cd9cf30299bb6b3b28c87`
 - **Release readiness:** not started
 - **Base chunk count:** 26 (`C00`–`C25`)
 - **Dynamic planning/remediation/revalidation count:** 0
@@ -25,7 +25,7 @@ Durable findings use one atomic emergency transaction for `FindingV1`, index app
 
 | IDs | Purpose | Dependency | Status |
 |---|---|---|---|
-| C00 | Tool-free contract freeze | — | not-started |
+| C00 | Tool-free contract freeze | — | complete |
 | C01 | Bootstrap/CI | C00 | not-started |
 | C02 | Domain and transition contracts | C01 | not-started |
 | C03 | Protocol | C02 | not-started |
@@ -64,4 +64,4 @@ Read `AGENTS.md`, architecture, plan, compatibility, trust root, this summary, `
 
 ## Planning review status
 
-The definitive correction resolves every blocker/high in `local://plan-definitive-findings.json`: authenticated live A00/K01 and index/Git ancestry, canonical trusted time and symlink rejection, production/fixture separation, corrected C01 provenance/chronology, non-cyclic signed receipt envelopes and vectors, acceptance-gated task completion across races/restarts/four hosts, native worker-return paths, exhaustive coordinator APIs/CLI, `main` branch normalization, and remaining adapter/security controls. C00 remains contract-frozen, unblocked, and eligible for its W00/A00 bootstrap transaction.
+The definitive correction resolves every blocker/high in `local://plan-definitive-findings.json`. C00 is complete under signed indexed bootstrap receipt `docs/checkpoints/C00/bootstrap/0.json` with envelope digest `ef53151d3b520d1175a8ca0a1a3fece3526de18e9c3cd9cf30299bb6b3b28c87`; C01 is the next eligible node and must begin only with its frozen K01 tool-free claim transaction.
