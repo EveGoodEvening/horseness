@@ -5,14 +5,14 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-export const C01_ACCEPTANCE_VERSION = "v4:C01";
-export const C01_CLAIM_NOW = "2026-08-11T16:11:30Z";
+export const C01_ACCEPTANCE_VERSION = "v4:C01-remediation";
+export const C01_CLAIM_NOW = "2026-08-11T17:30:00Z";
 export const C01_ACCEPTANCE_COMMANDS = Object.freeze([
   `node scripts/acceptance.mjs verify-manifest --subject C01 --version ${C01_ACCEPTANCE_VERSION}`,
   `node -e "$(cat docs/validation/c00-contract-gate.node-e.txt)"`,
   "node scripts/c00-contract-gate.mjs",
   "node scripts/progress-cas.mjs verify-live-bootstrap --receipt docs/checkpoints/C00/bootstrap/0.json --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --integrated-head HEAD --strict",
-  `node scripts/progress-cas.mjs verify-live-claim --claim docs/claims/C01/1.json --claim-index docs/claims/index.jsonl --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --now ${C01_CLAIM_NOW} --integrated-head HEAD --strict`,
+  `node scripts/progress-cas.mjs verify-live-remediation-claim --claim docs/claims/R001/1.json --original-claim docs/claims/C01/1.json --claim-index docs/claims/index.jsonl --finding docs/findings/F001.json --finding-index docs/findings/index.jsonl --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --now ${C01_CLAIM_NOW} --integrated-head HEAD --strict`,
   "node scripts/progress-cas.mjs verify-fixture-bundle --bundle docs/checkpoints/fixtures/c01-bundle-v1 --strict",
   "corepack pnpm install --frozen-lockfile",
   "corepack pnpm run docs:lint",
@@ -29,6 +29,7 @@ const mode = args._[0];
 if (isMain) try {
   if (mode === "verify-live-bootstrap") verifyLiveBootstrap();
   else if (mode === "verify-live-claim") verifyLiveClaim();
+  else if (mode === "verify-live-remediation-claim") verifyLiveRemediationClaim();
   else if (mode === "verify-live-receipt") verifyLiveReceipt();
   else if (mode === "verify-live-resume") verifyLiveResume();
   else if (mode === "verify-fixture-bundle") verifyFixtureBundle();
@@ -78,7 +79,7 @@ function verifyLiveClaim() {
 }
 
 function verifyLiveReceipt() {
-  requireOptions("receipt", "claim", "checkpoint-index", "trust", "integrated-head");
+  requireOptions("receipt", "claim", "remediation-claim", "checkpoint-index", "trust", "integrated-head");
   rejectFixturePaths(args.receipt, args.claim, args["checkpoint-index"], args.trust);
   const head = gitRev(args["integrated-head"]);
   const receipt = readCanonicalBlob(head, args.receipt);
@@ -91,7 +92,11 @@ function verifyLiveReceipt() {
   const rows = verifyIndexBlob(head, args["checkpoint-index"], "checkpoint");
   requireUnique(rows, (r) => r.receiptPath === args.receipt && r.receiptDigest === receipt.envelopeDigest && r.candidateIntegrationSha === receipt.core.candidateIntegrationSha, "receipt index membership");
   assert(isAncestor(receipt.core.candidateIntegrationSha, head), "receipt candidate is not integrated");
-  verifyAuthorizedCandidate(claimCommit, receipt.core.candidateIntegrationSha, claim.allowedPaths);
+  const remediationCommit = deriveRemediationClaimCommit(head, args["remediation-claim"], "docs/claims/index.jsonl");
+  const remediation = readClaimBlob(remediationCommit, args["remediation-claim"]);
+  assert(remediation.subjectId === "R001", "unexpected remediation subject");
+  assert(isAncestor(claimCommit, remediation.preClaimBaseSha), "receipt does not preserve K01 provenance");
+  verifyAuthorizedCandidate(remediationCommit, receipt.core.candidateIntegrationSha, remediation.allowedPaths);
 }
 
 function verifyLiveResume() {
@@ -100,7 +105,7 @@ function verifyLiveResume() {
   const head = gitRev(args["integrated-head"]);
   const receipt = readCanonicalBlob(head, args.receipt);
   const parents = gitParents(head);
-  assert(parents.length === 1 && isAncestor(receipt.core.candidateIntegrationSha, parents[0]), "resume head must be the atomic attestation commit");
+  assert(parents.length === 1 && parents[0] === receipt.core.candidateIntegrationSha, "A01 must be the direct child of the sealed candidate integration commit");
   const parent = parents[0];
   const expectedPaths = [args.receipt, args["checkpoint-index"], args.progress, args["subject-progress"]].sort();
   assertExactChangedPaths(parent, head, expectedPaths, "A01");
@@ -135,6 +140,33 @@ function verifyFixtureBundle() {
   verifyOrdinary(ordinary.core, claim, adapter);
   for (const [ancestor, descendant] of graph.requiredRelations) assert(adapter.isAncestor(ancestor, descendant), `fixture ancestry missing: ${ancestor}->${descendant}`);
   verifySignatureVectors(`${bundle}/signature-vectors.json`, ordinary, bootstrap, trust);
+}
+function verifyLiveRemediationClaim() {
+  requireOptions("claim", "original-claim", "claim-index", "finding", "finding-index", "checkpoint-index", "trust", "now", "integrated-head");
+  rejectFixturePaths(args.claim, args["original-claim"], args["claim-index"], args.finding, args["finding-index"], args["checkpoint-index"], args.trust);
+  const head = gitRev(args["integrated-head"]);
+  const remediationCommit = deriveRemediationClaimCommit(head, args.claim, args["claim-index"]);
+  const remediation = readClaimBlob(remediationCommit, args.claim);
+  verifyClaim(remediation, args.now);
+  assert(remediation.subjectId === "R001" && remediation.attemptGeneration === 1, "unexpected remediation claim");
+  const originalCommit = deriveClaimCommit(remediation.preClaimBaseSha, args["original-claim"], args["claim-index"]);
+  const original = readCanonicalBlob(originalCommit, args["original-claim"]);
+  verifyClaim(original, original.issuedAt, true);
+  assert(original.subjectId === "C01" && original.attemptGeneration === 1, "unexpected original claim");
+  assert(isAncestor(originalCommit, remediation.preClaimBaseSha), "K01 provenance is not preserved before remediation");
+  const claimRows = verifyIndexBlob(remediationCommit, args["claim-index"], "claim");
+  requireUnique(claimRows, (r) => r.claimPath === args.claim && r.claimDigest === remediation.claimDigest && r.preClaimBaseSha === remediation.preClaimBaseSha, "remediation claim index membership");
+  const findingRows = verifyIndexBlob(remediationCommit, args["finding-index"], "finding");
+  const finding = readClaimBlob(remediationCommit, args.finding);
+  assert(finding.findingId === "F001" && finding.detectorChunk === "C01", "unexpected remediation finding");
+  requireUnique(findingRows, (r) => r.findingId === finding.findingId && r.findingDigest === finding.findingDigest, "finding index membership");
+  assert(remediation.dependencyReceiptDigests[0] === finding.findingDigest, "remediation does not bind F001");
+  const checkpointRows = verifyIndexBlob(remediationCommit, args["checkpoint-index"], "checkpoint");
+  const dependency = checkpointRows.find((r) => r.receiptDigest === remediation.dependencyReceiptDigests[1]);
+  assert(dependency?.receiptPath, "remediation checkpoint dependency not indexed");
+  verifyEnvelope(readCanonicalBlob(remediationCommit, dependency.receiptPath), readCanonicalBlob(remediationCommit, args.trust), "bootstrap-v1", "C00");
+  verifyAuthorizedCandidate(remediationCommit, head, remediation.allowedPaths);
+  assert(!remediation.allowedPaths.some((p) => a01Paths().includes(p)), "remediation claim includes A01-exclusive paths");
 }
 
 function verifyPlanningCorrection() {
@@ -193,6 +225,10 @@ function verifyClaim(claim, now, allowCompleted = false) {
     const expected = c01AllowedPaths();
     assert(claim.allowedPaths.length === expected.length && expected.every((p, i) => claim.allowedPaths[i] === p), "C01 allowed paths mismatch");
     assert(claim.affectedAdrPaths.length === 0 && claim.acceptanceRecordPaths.length === 0, "C01 secondary path arrays must be empty");
+  }
+  if (claim.subjectId === "R001" && claim.attemptGeneration === 1) {
+    assert(claim.allowedPaths.length > 0 && claim.allowedPaths.every((p) => !a01Paths().includes(p)), "R001 includes A01 paths");
+    assert(claim.affectedAdrPaths.length === 0 && claim.acceptanceRecordPaths.length === 0, "R001 secondary path arrays must be empty");
   }
 }
 
@@ -313,6 +349,29 @@ function deriveClaimCommit(head, claimPath, indexPath) {
   assert(matches.length === 1, `expected exactly one K01 transition, found ${matches.length}`);
   return matches[0];
 }
+function readClaimBlob(ref, file) { const raw = readBlob(ref, file), value = JSON.parse(raw); assert(raw === jcs(value) || raw === `${jcs(value)}\n`, `noncanonical claim JSON blob: ${file}`); return value; }
+function deriveRemediationClaimCommit(head, claimPath, indexPath) {
+  const matches = [], failures = [];
+  for (const commit of git("rev-list", head).trim().split("\n").filter(Boolean)) {
+    const parents = gitParents(commit);
+    if (parents.length !== 1) continue;
+    const parent = parents[0];
+    try {
+      const claim = readClaimBlob(commit, claimPath);
+      if (claim.subjectId !== "R001" || claim.preClaimBaseSha !== parent) continue;
+      const expectedPaths = [claimPath, indexPath, "docs/findings/F001.json", "docs/findings/index.jsonl", "docs/progress/R001.md", "docs/progress/C01.md", "docs/progress.md"].sort();
+      assertExactChangedPaths(parent, commit, expectedPaths, "R001 claim");
+      assert(blobOidOptional(parent, claimPath) === null, "R001 claim must be newly introduced");
+      assertSingleIndexAppend(parent, commit, indexPath, "claim", (row) => row.claimPath === claimPath && row.claimDigest === claim.claimDigest && row.preClaimBaseSha === parent && row.subjectId === "R001");
+      verifyRemediationClaimLedgers(readBlob(commit, "docs/progress/R001.md"), readBlob(commit, "docs/progress.md"), claim);
+      matches.push(commit);
+    } catch (error) {
+      failures.push(`${commit}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  assert(matches.length === 1, `expected exactly one R001 transition, found ${matches.length}; ${failures.join(" | ")}`);
+  return matches[0];
+}
 
 function changedPaths(base, candidate) { return git("diff", "--name-only", "--diff-filter=ACDMRTUXB", `${base}..${candidate}`).trim().split("\n").filter(Boolean).sort(); }
 function assertExactChangedPaths(base, candidate, expected, label) { assert(jcs(changedPaths(base, candidate)) === jcs([...expected].sort()), `${label} changed paths mismatch`); }
@@ -337,6 +396,13 @@ function verifyClaimLedgers(subject, global, claim) {
   assert(global.includes(`- **Next eligible:** none while C01 generation ${claim.attemptGeneration} is active; integrate K01 and run its frozen live checker before any C01 source edit`), "global scheduler binding mismatch");
   assert(/^\| C01 \|.*\| in-progress \|$/m.test(global), "global claim ledger state mismatch");
   assert(!/^\| C01 \|.*\| complete \|$/m.test(global), "global ledger prematurely completes C01");
+}
+function verifyRemediationClaimLedgers(subject, global, claim) {
+  assert(subject.includes("- Status: `in-progress`") && subject.includes(`- Attempt generation: \`${claim.attemptGeneration}\``), "R001 claim ledger state mismatch");
+  assert(subject.includes(`- Claim/expiry: \`docs/claims/R001/1.json\`; claim ID \`${claim.claimId}\`; claim digest \`${claim.claimDigest}\`; issued \`${claim.issuedAt}\`; expires \`${claim.expiresAt}\`; candidate sealing and attestation pending`), "R001 claim ledger binding mismatch");
+  assert(subject.includes(`- Pre-claim base: \`${claim.preClaimBaseSha}\``), "R001 claim ledger base mismatch");
+  assert(global.includes("formal C01 remediation `R001`") && global.includes("R001 generation 1 (current remediation claim)"), "global R001 claim binding mismatch");
+  assert(/^\| R001 \|.*\| in-progress; active priority node \|$/m.test(global), "global R001 state mismatch");
 }
 function verifyCompletionLedgers(subject, global, receipt) {
   assert(subject.includes("- Status: `complete`") && subject.includes(`attested \`${receipt.core.attestedAt}\``), "C01 completion ledger state mismatch");
@@ -363,5 +429,7 @@ function parseArgs(argv) { const result = { _: [] }; for (let i = 0; i < argv.le
 function frozenC00Command() { return `node -e "$(cat docs/validation/c00-contract-gate.node-e.txt)"`; }
 function frozenC01Commands() { return C01_ACCEPTANCE_COMMANDS; }
 function commandsForCore(core) { if (core.subjectId !== "C01") return undefined; return core.acceptanceContractVersion === C01_ACCEPTANCE_VERSION ? frozenC01Commands() : undefined; }
-function usage() { console.error("Usage: progress-cas.mjs <verify-live-bootstrap|verify-live-claim|verify-live-receipt|verify-live-resume|verify-fixture-bundle|verify-planning-correction> [options] --strict"); process.exit(2); }
+function usage() { console.error("Usage: progress-cas.mjs <verify-live-bootstrap|verify-live-claim|verify-live-remediation-claim|verify-live-receipt|verify-live-resume|verify-fixture-bundle|verify-planning-correction> [options] --strict"); process.exit(2); }
 function c01AllowedPaths() { return ["package.json","pnpm-workspace.yaml","pnpm-lock.yaml","tsconfig.base.json","eslint.config.js",".npmrc",".node-version",".github/workflows/ci.yml",".changeset/config.json","scripts/acceptance.mjs","scripts/c00-contract-gate.mjs","scripts/progress-cas.mjs","scripts/boundaries-check.mjs","README.md","docs/progress/C01.md","docs/progress.md","docs/checkpoints/C01/final/1.json","docs/checkpoints/index.jsonl","docs/claims/C01/1.json","docs/claims/index.jsonl","packages/domain/package.json","packages/domain/src/index.ts","packages/protocol/package.json","packages/protocol/src/index.ts","packages/policy/package.json","packages/policy/src/index.ts","packages/store-sqlite/package.json","packages/store-sqlite/src/index.ts","packages/orchestrator/package.json","packages/orchestrator/src/index.ts","packages/sdk/package.json","packages/sdk/src/index.ts","packages/adapter-kit/package.json","packages/adapter-kit/src/index.ts","packages/installer/package.json","packages/installer/src/index.ts","apps/daemon/package.json","apps/daemon/src/index.ts","apps/cli/package.json","apps/cli/src/index.ts","adapters/pi/package.json","adapters/pi/src/index.ts","adapters/omp/package.json","adapters/omp/src/index.ts","adapters/claude/package.json","adapters/claude/src/index.ts","adapters/codex/package.json","adapters/codex/src/index.ts"]; }
+function a01Paths() { return ["docs/progress/C01.md", "docs/progress.md", "docs/checkpoints/C01/final/1.json", "docs/checkpoints/index.jsonl"]; }
+function candidateOnlyPaths(paths) { const excluded = new Set([...a01Paths(), "docs/claims/C01/1.json", "docs/claims/index.jsonl"]); return paths.filter((p) => !excluded.has(p)); }
