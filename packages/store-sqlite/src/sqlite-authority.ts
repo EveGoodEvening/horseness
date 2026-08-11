@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { canonicalJson, domainDigest, verifyEventChain, type DomainEventPayloadV1, type HashedEventEnvelopeV1, type JsonValue, type RunEventPayloadV1, type WorkspaceEventPayloadV1 } from "@horseness/domain";
+import { canonicalJson, domainDigest, parseDomainEventPayloadV1, verifyEventChain, type DomainEventPayloadV1, type HashedEventEnvelopeV1, type JsonValue, type RunEventPayloadV1, type WorkspaceEventPayloadV1 } from "@horseness/domain";
 import { ArtifactStore } from "./artifact-store.js";
 import { noCrash, type CrashInjector } from "./crash.js";
 import { migrate } from "./migrations.js";
@@ -10,7 +10,7 @@ export interface AppendRequest<T extends DomainEventPayloadV1=DomainEventPayload
 export interface AtomicAppendRequest { commandId:string; workspace?:AppendRequest<WorkspaceEventPayloadV1>; run?:AppendRequest<RunEventPayloadV1> }
 export interface AppendResult { commandId:string; workspaceHead?:{sequence:number;envelopeHash:string}; runHead?:{sequence:number;envelopeHash:string}; deduplicated:boolean }
 export interface SnapshotRecord { workspaceId:string; streamKind:EventStream; streamId:string; sequence:number; envelopeHash:string; projectionName:string; projectionVersion:string; state:JsonValue }
-export interface ArtifactPublication { data:Uint8Array|string; mediaType?:string|null; references?:readonly {ownerKind:string;ownerId:string}[]; pins?:readonly {pinId:string}[] }
+export interface ArtifactPublication { data:Uint8Array|string; mediaType?:string|null; references?:readonly {ownerKind:string;ownerId:string;allowExistingEvent?:true}[]; pins?:readonly {pinId:string}[] }
 export interface AtomicProjectionUpdate { workspaceId:string; name:string; version:string; streamKind:EventStream; streamId:string; lastSequence:number; lastEnvelopeHash:string|null }
 export interface PublishAndAppendRequest extends AtomicAppendRequest { artifacts:readonly ArtifactPublication[]; requiredArtifactDigests?:readonly string[]; projections?:readonly AtomicProjectionUpdate[] }
 export class StoreConflictError extends Error { constructor(message:string){super(message);this.name="StoreConflictError";} }
@@ -24,13 +24,25 @@ export class SQLiteAuthority {
   migrationVersions():number[]{return (this.db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as {version:number}[]).map(r=>r.version);}
   private validateAppend<T extends DomainEventPayloadV1>(request:AppendRequest<T>):void {
     if(request.events.length===0)throw new StoreIntegrityError("empty append");
-    verifyEventChain(request.events);
+    if(!Number.isSafeInteger(request.expectedSequence)||request.expectedSequence<0)throw new StoreIntegrityError("invalid expected sequence");
+    if(request.expectedSequence===0){
+      if(request.expectedEnvelopeHash!==null)throw new StoreIntegrityError("genesis append has an existing head");
+      try{verifyEventChain(request.events);}catch(error){throw new StoreIntegrityError(`event slice authentication failed: ${error instanceof Error?error.message:String(error)}`);}
+    }else if(typeof request.expectedEnvelopeHash!=="string"||request.expectedEnvelopeHash.length===0)throw new StoreIntegrityError("post-genesis append requires an authenticated head");
+    let prior=request.expectedEnvelopeHash;
     for(const [index,event] of request.events.entries()){
       const envelope=event.envelope;
+      if(envelope.schemaVersion!=="1")throw new StoreIntegrityError("unsupported event schema");
       if(envelope.streamKind!==request.streamKind||envelope.workspaceId!==request.workspaceId||envelope.streamId!==request.streamId||envelope.sequence!==request.expectedSequence+index+1)throw new StoreIntegrityError("event does not match append stream");
-      const previous=request.events[index-1];
-      const expectedPrior=index===0?request.expectedEnvelopeHash:previous?.envelopeHash;
-      if(envelope.priorEnvelopeHash!==expectedPrior)throw new StoreIntegrityError("event prior hash mismatch");
+      if(request.streamKind==="workspace"&&request.streamId!==request.workspaceId)throw new StoreIntegrityError("workspace stream identity mismatch");
+      if(envelope.priorEnvelopeHash!==prior)throw new StoreIntegrityError("event prior hash mismatch");
+      try{
+        const payload=parseDomainEventPayloadV1(envelope.payload);
+        if(payload.eventType!==envelope.eventType||payload.workspaceId!==request.workspaceId||request.streamKind==="run"&&("runId" in payload&&payload.runId!==request.streamId||!("runId" in payload))||request.streamKind==="workspace"&&"runId" in payload)throw new StoreIntegrityError("event payload identity mismatch");
+        if(domainDigest("horseness.event-payload.v1",envelope.payload)!==envelope.payloadHash)throw new StoreIntegrityError("event payload hash mismatch");
+        if(domainDigest("horseness.event-envelope.v1",envelope as unknown as JsonValue)!==event.envelopeHash)throw new StoreIntegrityError("event envelope hash mismatch");
+      }catch(error){if(error instanceof StoreIntegrityError)throw error;throw new StoreIntegrityError(`event slice authentication failed: ${error instanceof Error?error.message:String(error)}`);}
+      prior=event.envelopeHash;
     }
   }
   private head<T extends DomainEventPayloadV1>(request:AppendRequest<T>):{head_sequence:number;head_hash:string|null}|undefined{return this.db.prepare("SELECT head_sequence,head_hash FROM streams WHERE workspace_id=? AND stream_kind=? AND stream_id=?").get(request.workspaceId,request.streamKind,request.streamId) as {head_sequence:number;head_hash:string|null}|undefined;}
@@ -39,7 +51,7 @@ export class SQLiteAuthority {
     if(!head)this.db.prepare("INSERT INTO streams(stream_kind,workspace_id,stream_id,head_sequence,head_hash,context_epoch) VALUES(?,?,?,?,NULL,0)").run(request.streamKind,request.workspaceId,request.streamId,0);
     const insert=this.db.prepare("INSERT INTO events(stream_kind,workspace_id,stream_id,sequence,envelope_hash,prior_envelope_hash,event_id,idempotency_key,command_id,envelope_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)");
     for(const event of request.events){const envelope=event.envelope;insert.run(request.streamKind,request.workspaceId,request.streamId,envelope.sequence,event.envelopeHash,envelope.priorEnvelopeHash,envelope.eventId,envelope.idempotencyKey,envelope.causationId,canonicalJson(event as unknown as JsonValue),now());}
-    const last=request.events.at(-1);if(!last)throw new StoreIntegrityError("empty append");this.db.prepare("UPDATE streams SET head_sequence=?,head_hash=? WHERE workspace_id=? AND stream_kind=? AND stream_id=?").run(last.envelope.sequence,last.envelopeHash,request.workspaceId,request.streamKind,request.streamId);return{sequence:last.envelope.sequence,envelopeHash:last.envelopeHash};
+    const last=request.events.at(-1);if(!last)throw new StoreIntegrityError("empty append");this.db.prepare("UPDATE streams SET head_sequence=?,head_hash=? WHERE workspace_id=? AND stream_kind=? AND stream_id=?").run(last.envelope.sequence,last.envelopeHash,request.workspaceId,request.streamKind,request.streamId);const authenticated=this.authenticatedRows(request.workspaceId,request.streamKind,request.streamId);const authenticatedLast=authenticated.at(-1)?.event;if(authenticatedLast===undefined||authenticatedLast.envelope.sequence!==last.envelope.sequence||authenticatedLast.envelopeHash!==last.envelopeHash)throw new StoreIntegrityError("appended stream head authentication failed");return{sequence:last.envelope.sequence,envelopeHash:last.envelopeHash};
   }
   private requestWorkspace(request:AtomicAppendRequest):string{const workspaceId=request.workspace?.workspaceId??request.run?.workspaceId;if(workspaceId===undefined||request.workspace!==undefined&&request.workspace.workspaceId!==workspaceId||request.run!==undefined&&request.run.workspaceId!==workspaceId)throw new StoreIntegrityError("atomic append workspace mismatch");return workspaceId;}
   appendAtomic(request:AtomicAppendRequest):AppendResult {
@@ -58,28 +70,43 @@ export class SQLiteAuthority {
     const records=request.artifacts.map(publication=>({publication,record:this.artifacts.publish(publication.data,publication.mediaType??null)}));
     const available=new Set(records.map(item=>item.record.digest));
     if(!request.requiredArtifactDigests||request.requiredArtifactDigests.length===0)throw new StoreIntegrityError("authoritative artifact append requires artifact digests");
-    for(const digest of request.requiredArtifactDigests??[])if(!available.has(digest))throw new StoreIntegrityError(`required artifact was not published: ${digest}`);
+    for(const digest of request.requiredArtifactDigests)if(!available.has(digest))throw new StoreIntegrityError(`required artifact was not published: ${digest}`);
     if(!request.workspace&&!request.run)throw new StoreIntegrityError("atomic append has no streams");
     if(request.workspace?.streamKind!==undefined&&request.workspace.streamKind!=="workspace")throw new StoreIntegrityError("workspace append kind mismatch");
     if(request.run?.streamKind!==undefined&&request.run.streamKind!=="run")throw new StoreIntegrityError("run append kind mismatch");
     const workspaceId=this.requestWorkspace(request);
     for(const projection of request.projections??[])if(projection.workspaceId!==workspaceId)throw new StoreIntegrityError("projection workspace mismatch");
-    const digestInput={commandId:request.commandId,workspace:request.workspace??null,run:request.run??null,artifacts:records.map(({publication,record})=>({record,references:publication.references??[],pins:publication.pins??[]})),requiredArtifactDigests:request.requiredArtifactDigests??[],projections:request.projections??[]};
+    const digestInput={commandId:request.commandId,workspace:request.workspace??null,run:request.run??null,artifacts:records.map(({publication,record})=>({record,references:publication.references??[],pins:publication.pins??[]})),requiredArtifactDigests:request.requiredArtifactDigests,projections:request.projections??[]};
     const requestDigest=domainDigest("horseness.store-artifact-append.v1",JSON.parse(canonicalJson(digestInput as unknown as JsonValue)) as JsonValue);
+    const insertedEventIds=new Set([...(request.workspace?.events??[]),...(request.run?.events??[])].map(event=>event.envelope.eventId));
     this.crash("transaction.begin.before");this.db.exec("BEGIN IMMEDIATE");this.crash("transaction.begin.after");
     try {
       const prior=this.db.prepare("SELECT request_digest,result_json FROM command_dedup WHERE workspace_id=? AND command_id=?").get(workspaceId,request.commandId) as {request_digest:string;result_json:string}|undefined;
       if(prior){if(prior.request_digest!==requestDigest)throw new StoreConflictError("command id reused with different request");this.db.exec("COMMIT");return{...(JSON.parse(prior.result_json) as AppendResult),deduplicated:true};}
+      const verifiedExistingEventIds=new Set<string>();
+      for(const {publication} of records)for(const reference of publication.references??[]){
+        if(reference.ownerKind!=="event")throw new StoreIntegrityError(`unsupported artifact reference owner kind: ${reference.ownerKind}`);
+        if(insertedEventIds.has(reference.ownerId))continue;
+        if(reference.allowExistingEvent!==true)throw new StoreIntegrityError(`artifact reference owner is unrelated to this append: ${reference.ownerId}`);
+        const owner=this.db.prepare("SELECT stream_kind,stream_id FROM events WHERE workspace_id=? AND event_id=?").get(workspaceId,reference.ownerId) as {stream_kind:EventStream;stream_id:string}|undefined;
+        if(!owner)throw new StoreIntegrityError(`permitted existing artifact reference owner does not exist in workspace: ${reference.ownerId}`);
+        if(!this.authenticatedRows(workspaceId,owner.stream_kind,owner.stream_id).some(row=>row.event.envelope.eventId===reference.ownerId))throw new StoreIntegrityError(`existing artifact reference owner is not authenticated: ${reference.ownerId}`);
+        verifiedExistingEventIds.add(reference.ownerId);
+      }
+      for(const required of request.requiredArtifactDigests){
+        const bound=records.some(({publication,record})=>record.digest===required&&(publication.references??[]).some(reference=>insertedEventIds.has(reference.ownerId)||verifiedExistingEventIds.has(reference.ownerId)));
+        if(!bound)throw new StoreIntegrityError(`required artifact has no workspace event reference: ${required}`);
+      }
       this.crash("transaction.write.before");
       const result:AppendResult={commandId:request.commandId,deduplicated:false};
-      for(const {publication,record} of records){
-        this.artifacts.verifyRecord(record);this.artifacts.register(record);
-        for(const reference of publication.references??[])this.db.prepare("INSERT OR IGNORE INTO artifact_refs(owner_kind,owner_id,digest,created_at) VALUES(?,?,?,?)").run(reference.ownerKind,reference.ownerId,record.digest,now());
-        for(const pin of publication.pins??[])this.db.prepare("INSERT OR IGNORE INTO artifact_pins(pin_id,digest,created_at) VALUES(?,?,?)").run(pin.pinId,record.digest,now());
-      }
-      for(const required of request.requiredArtifactDigests??[]){const record=records.find(item=>item.record.digest===required)?.record;if(!record)throw new StoreIntegrityError(`required artifact was not published: ${required}`);this.artifacts.verifyRecord(record);}
+      for(const {record} of records){this.artifacts.verifyRecord(record);this.artifacts.register(record);}
       if(request.workspace)result.workspaceHead=this.writeAppend(request.workspace);
       if(request.run)result.runHead=this.writeAppend(request.run);
+      for(const {publication,record} of records){
+        for(const reference of publication.references??[])this.artifacts.addReference(workspaceId,reference.ownerKind,reference.ownerId,record.digest);
+        for(const pin of publication.pins??[])this.db.prepare("INSERT OR IGNORE INTO artifact_pins(pin_id,digest,created_at) VALUES(?,?,?)").run(pin.pinId,record.digest,now());
+      }
+      for(const required of request.requiredArtifactDigests){const record=records.find(item=>item.record.digest===required)?.record;if(!record)throw new StoreIntegrityError(`required artifact was not published: ${required}`);this.artifacts.verifyRecord(record);}
       for(const projection of request.projections??[]){const anchor=projection.lastSequence===0&&projection.lastEnvelopeHash===null?true:this.db.prepare("SELECT 1 FROM events WHERE workspace_id=? AND stream_kind=? AND stream_id=? AND sequence=? AND envelope_hash=?").get(projection.workspaceId,projection.streamKind,projection.streamId,projection.lastSequence,projection.lastEnvelopeHash)!==undefined;if(!anchor)throw new StoreIntegrityError(`projection is not anchored to an event: ${projection.name}`);this.db.prepare("INSERT INTO projection_metadata(projection_name,projection_version,workspace_id,stream_kind,stream_id,last_sequence,last_envelope_hash,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(projection_name,projection_version,workspace_id,stream_kind,stream_id) DO UPDATE SET last_sequence=excluded.last_sequence,last_envelope_hash=excluded.last_envelope_hash,updated_at=excluded.updated_at").run(projection.name,projection.version,projection.workspaceId,projection.streamKind,projection.streamId,projection.lastSequence,projection.lastEnvelopeHash,now());}
       this.db.prepare("INSERT INTO command_dedup(workspace_id,command_id,request_digest,result_json,created_at) VALUES(?,?,?,?,?)").run(workspaceId,request.commandId,requestDigest,canonicalJson(result as unknown as JsonValue),now());
       this.crash("transaction.write.after");this.crash("transaction.commit.before");this.db.exec("COMMIT");this.crash("transaction.commit.after");return result;
