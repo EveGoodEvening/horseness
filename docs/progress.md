@@ -5,8 +5,8 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 ## Global status
 
 - **Planning state:** C00 bootstrap candidate `9182cba4d2e43d2bab1e044febfab8a1ce2c3db8` / tree `949bbcc2dda270a85cd0fbab3cdb861ab7199076` is signed, indexed, and complete on integration branch `main`
-- **Active claims:** none
-- **Next eligible:** C01; first perform the sole tool-free K01 claim transaction at `docs/claims/C01/1.json`, then run the frozen live checker with explicit trusted `--now`; do not edit C01 source before it passes
+- **Active claims:** C01 generation 1, `in-progress`; claim `docs/claims/C01/1.json`, digest `6a7a8dc27c9f8da914f6a52c89b6f5c05198f3985572adb6ff6597db2979b4c1`, expires `2026-08-11T22:55:29Z`
+- **Next eligible:** none while C01 generation 1 is active; integrate K01 and run its frozen live checker before any C01 source edit
 - **Active blockers:** none
 - **Last integrated receipt:** C00 `docs/checkpoints/C00/bootstrap/0.json`, envelope digest `ef53151d3b520d1175a8ca0a1a3fece3526de18e9c3cd9cf30299bb6b3b28c87`
 - **Release readiness:** not started
@@ -26,7 +26,7 @@ Durable findings use one atomic emergency transaction for `FindingV1`, index app
 | IDs | Purpose | Dependency | Status |
 |---|---|---|---|
 | C00 | Tool-free contract freeze | — | complete |
-| C01 | Bootstrap/CI | C00 | not-started |
+| C01 | Bootstrap/CI | C00 | in-progress |
 | C02 | Domain and transition contracts | C01 | not-started |
 | C03 | Protocol | C02 | not-started |
 | C04 | Policy/admission evaluator | C03 | not-started |
@@ -60,8 +60,8 @@ Worked recovery: C21 detects a C07 defect and atomically emits F001 plus blocked
 
 ## Resume instructions
 
-Read `AGENTS.md`, architecture, plan, compatibility, trust root, this summary, `docs/claims/index.jsonl`, checkpoint/finding/publication indexes, and active P/R/V/C ledgers. Verify canonical claim files, both claim/checkpoint index chains, signed receipt core/envelope digests, Ed25519 trust lookup/revocation/scope, dependency digests, expiry at candidate sealing and attestation, supersession chain, exact allowed/ADR/acceptance paths, candidate tree, and the complete side-effect head; never infer status from a worktree. Integration is exactly `main`. Before C01 edits, consume only `docs/claims/C01/1.json` with the frozen live checker and an explicit trusted `--now`; it obtains K01 from integrated `HEAD`, derives A00 as its sole parent, matches the claim/index/ledger pre-claim base to A00, and proves tree paths, dependency digest, and integrated ancestry. Fixture algorithms run only through the isolated bundle command. Select only the eligible unowned node under `P -> R -> V -> C` priority. Dependency completion means a valid indexed signed checkpoint receipt and, for acceptance-dependent task edges, the exact durable `DeltaAcceptedV1` completion predicate. C22–C25 resume lookup-first from integrated intents/results.
+Read `AGENTS.md`, architecture, plan, compatibility, trust root, this summary, `docs/claims/index.jsonl`, checkpoint/finding/publication indexes, and active P/R/V/C ledgers. C01 generation 1 is claimed at `docs/claims/C01/1.json` from pre-claim base `ca318521e4dd9132111f13f2af399ed942015138` and expires `2026-08-11T22:55:29Z`; after K01 integration and before any C01 source edit, run exactly `node -e "$(cat docs/validation/c01-claim-check.node-e.txt)" -- --claim docs/claims/C01/1.json --now 2026-08-11T14:55:29Z --integrated-head HEAD`. Then verify canonical claim files, both claim/checkpoint index chains, signed receipt core/envelope digests, Ed25519 trust lookup/revocation/scope, dependency digests, expiry at candidate sealing and attestation, supersession chain, exact allowed/ADR/acceptance paths, candidate tree, and the complete side-effect head; never infer status from a worktree. Integration is exactly `main`. Fixture algorithms run only through the isolated bundle command. Select only the eligible unowned node under `P -> R -> V -> C` priority. Dependency completion means a valid indexed signed checkpoint receipt and, for acceptance-dependent task edges, the exact durable `DeltaAcceptedV1` completion predicate. C22–C25 resume lookup-first from integrated intents/results.
 
 ## Planning review status
 
-The definitive correction resolves every blocker/high in `local://plan-definitive-findings.json`. C00 is complete under signed indexed bootstrap receipt `docs/checkpoints/C00/bootstrap/0.json` with envelope digest `ef53151d3b520d1175a8ca0a1a3fece3526de18e9c3cd9cf30299bb6b3b28c87`; C01 is the next eligible node and must begin only with its frozen K01 tool-free claim transaction.
+The definitive correction resolves every blocker/high in `local://plan-definitive-findings.json`. C00 is complete under signed indexed bootstrap receipt `docs/checkpoints/C00/bootstrap/0.json` with envelope digest `ef53151d3b520d1175a8ca0a1a3fece3526de18e9c3cd9cf30299bb6b3b28c87`; C01 generation 1 is claimed and in progress under claim digest `6a7a8dc27c9f8da914f6a52c89b6f5c05198f3985572adb6ff6597db2979b4c1`.
