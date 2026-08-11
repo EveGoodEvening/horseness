@@ -96,7 +96,7 @@ function verifyLiveReceipt() {
   const remediation = readClaimBlob(remediationCommit, args["remediation-claim"]);
   assert(remediation.subjectId === "R001", "unexpected remediation subject");
   assert(isAncestor(claimCommit, remediation.preClaimBaseSha), "receipt does not preserve K01 provenance");
-  verifyAuthorizedCandidate(remediationCommit, receipt.core.candidateIntegrationSha, remediation.allowedPaths);
+  verifyAuthorizedCandidate(remediationCommit, receipt.core.candidateIntegrationSha, candidateOnlyPaths(remediation.allowedPaths));
 }
 
 function verifyLiveResume() {
@@ -165,7 +165,7 @@ function verifyLiveRemediationClaim() {
   const dependency = checkpointRows.find((r) => r.receiptDigest === remediation.dependencyReceiptDigests[1]);
   assert(dependency?.receiptPath, "remediation checkpoint dependency not indexed");
   verifyEnvelope(readCanonicalBlob(remediationCommit, dependency.receiptPath), readCanonicalBlob(remediationCommit, args.trust), "bootstrap-v1", "C00");
-  verifyAuthorizedCandidate(remediationCommit, head, remediation.allowedPaths);
+  verifyAuthorizedCandidate(remediationCommit, head, candidateOnlyPaths(remediation.allowedPaths));
   assert(!remediation.allowedPaths.some((p) => a01Paths().includes(p)), "remediation claim includes A01-exclusive paths");
 }
 
