@@ -4,9 +4,9 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 
 ## Global status
 
-- **Planning state:** C00, C01, C02, and C03 are complete; F001/F002 are closed; R001/R002 are complete
-- **Active claims:** none
-- **Next eligible:** C04 only
+- **Planning state:** C00, C01, C02, and C03 are complete; F001/F002 are closed; R001/R002 are complete; C04 is in progress
+- **Active claims:** C04, claimed from integrated base `33550d0`
+- **Next eligible:** none while C04 is in progress
 - **Active blockers:** none
 - **Last integrated receipt:** immutable C01 `docs/checkpoints/C01/final/1.json`, envelope digest `17ddd75b49e35d3bf6f432c8c6acca30b4a66512229453aca4fc63e7f427ea7d`, indexed at A01 commit `223023330cb000b759d8a8b2419514638c1aa179`; receipt/index bytes must not be overwritten
 - **Release readiness:** not started
@@ -27,8 +27,8 @@ For C02 onward: commit the two tracker files to claim a dependency-ready chunk; 
 | R002 | Historical C01 verifier remediation | F002 + immutable C01 receipt | complete; F002 closed |
 | C02 | Domain and transition contracts | C01 | complete; final candidate `fd100bf`; 40 tests and 61 vectors green |
 | C03 | Protocol | C02 | complete; final candidate `2998e4f`; 23 package tests and 1,377 conformance checks green |
-| C04 | Policy/admission evaluator | C03 | next eligible |
-| C05 | SQLite 0001/artifacts | C04 | not-started |
+| C04 | Policy/admission evaluator | C03 | in-progress; claimed from `33550d0` |
+| C05 | SQLite 0001/artifacts | C04 | ineligible until C04 completes |
 | C06 | Recovery/import/retention | C05 | not-started |
 | C07 | Admission service | C06 | not-started |
 | C08 | Task/fork projections | C07 | not-started |
@@ -56,8 +56,10 @@ F001/R001 established the accepted `v4:C01-remediation` candidate and immutable 
 
 ## Resume instructions
 
-C03 completed from tracker-only claim base `bca4c85` through claim commit `da6fa1a`. Implementation commit `2e8113e` and review-fix commits `c316ed8`, `b1f4734`, and `2998e4f` are integrated; final candidate is `2998e4f`. All four literal C03 gates ran under Node 22 with exact environment `CI=1 TZ=UTC LANG=C NODE_OPTIONS=--unhandled-rejections=strict`: typecheck exit 0; 23 package tests exit 0; protocol conformance 1,377 checks across 66 methods, 12 mappings, and 42 substitutions exit 0; generated check exit 0. The final blocker-only review was clean, all implemented C03 items are checked, and no blockers remain. C04 is the sole next eligible chunk.
+C03 completed from tracker-only claim base `bca4c85` through claim commit `da6fa1a`. Implementation commit `2e8113e` and review-fix commits `c316ed8`, `b1f4734`, and `2998e4f` are integrated; final candidate is `2998e4f`. All four literal C03 gates ran under Node 22 with exact environment `CI=1 TZ=UTC LANG=C NODE_OPTIONS=--unhandled-rejections=strict`: typecheck exit 0; 23 package tests exit 0; protocol conformance 1,377 checks across 66 methods, 12 mappings, and 42 substitutions exit 0; generated check exit 0. The final blocker-only review was clean, all implemented C03 items are checked, and no blockers remain.
+
+C04 is claimed from current integrated base `33550d0` and is the only active chunk. Its exact ownership and two ordered acceptance gates are recorded in `docs/progress/C04.md`. C05 remains ineligible until C04 completes with green evidence and a clean review disposition.
 
 ## Planning review status
 
-The bootstrap workflow blocker remains closed. C02 and C03 are complete with all review findings resolved and exact acceptance evidence recorded. No chunk is active; C04 is the sole next eligible chunk under the simplified post-C01 tracker workflow, and no recursive development-attestation work is required.
+The bootstrap workflow blocker remains closed. C02 and C03 are complete with all review findings resolved and exact acceptance evidence recorded. C04 is in progress under the simplified post-C01 tracker workflow; C05 and all later chunks remain ineligible, and no recursive development-attestation work is required.
