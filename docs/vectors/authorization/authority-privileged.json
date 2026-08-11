@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "1",
+  "family": "authorization",
+  "case": "authority-privileged",
+  "domain": "horseness.authorization-matrix.v1",
+  "value": {
+    "schemaVersion": "1",
+    "role": "authority",
+    "command": "resolve-unknown",
+    "userPresence": true
+  },
+  "canonicalJson": "{\"command\":\"resolve-unknown\",\"role\":\"authority\",\"schemaVersion\":\"1\",\"userPresence\":true}",
+  "digest": "731e1538bbc5845c215eff25d80fc4136815828b7d0fbe9774387f6a3eba6ea2"
+}

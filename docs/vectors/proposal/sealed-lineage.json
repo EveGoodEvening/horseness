@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "1",
+  "family": "proposal",
+  "case": "sealed-lineage",
+  "domain": "horseness.proposal.v1",
+  "value": {
+    "schemaVersion": "1",
+    "workspaceId": "ws_demo",
+    "runId": "run_demo",
+    "nonce": "golden-2",
+    "predecessorProposalDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "predecessorReason": "rebase"
+  },
+  "canonicalJson": "{\"nonce\":\"golden-2\",\"predecessorProposalDigest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"predecessorReason\":\"rebase\",\"runId\":\"run_demo\",\"schemaVersion\":\"1\",\"workspaceId\":\"ws_demo\"}",
+  "digest": "99969df6bf96e00ce6056439f77b4d220ec4d6b63e6aa4d4e07dd63a2c4d5095"
+}

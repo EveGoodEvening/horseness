@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "1",
+  "family": "cursors",
+  "case": "minimal-v1",
+  "domain": "horseness.vector.cursor.v1",
+  "value": {
+    "schemaVersion": "1",
+    "kind": "composite",
+    "workspaceId": "ws_demo",
+    "workspaceSequence": 1,
+    "workspaceEnvelopeHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "workspaceContextEpoch": 0,
+    "runId": "run_demo",
+    "runSequence": 1,
+    "runEnvelopeHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "runContextEpoch": 0
+  },
+  "canonicalJson": "{\"kind\":\"composite\",\"runContextEpoch\":0,\"runEnvelopeHash\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"runId\":\"run_demo\",\"runSequence\":1,\"schemaVersion\":\"1\",\"workspaceContextEpoch\":0,\"workspaceEnvelopeHash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"workspaceId\":\"ws_demo\",\"workspaceSequence\":1}",
+  "digest": "1b3672828511324ff9fd53f5087f59e6156b2706aa6814078666bb00d44ceb73"
+}

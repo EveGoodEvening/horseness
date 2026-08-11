@@ -19,3 +19,11 @@ All packages, applications, native bundles, bootstrap binaries, offline archives
 ## Frozen v1 boundary rules
 
 Unknown cursor kinds, fork-pin/snapshot/scope/completion-policy versions, proposal-sealing observation fields, authorization matrices, worker-return methods, receipt core/signature/envelope/trust versions, or index-record versions fail before mutation. Readers never infer a full composite cursor from a workspace-only or run-only value, never substitute current context for a ForkPin source view, never release an acceptance-dependent edge from a receipt alone, and never accept an unnamed persisted `cursor`. The N-1/N train includes canonical golden vectors for all cursor genesis transitions, ForkPin refresh ancestry, dependency snapshots, delta scopes, signed checkpoint/index hashes and trust rotation/revocation, and four-host proposal/decision round trips.
+
+## Domain v1 implementation train
+
+`@horseness/domain` now writes the frozen v1 forms for canonical JSON (`jcs-v1`), SHA-256 domain-separated identities (`sha256-v1`), workspace/run envelopes, every observation/result cursor variant, canonical and operational reducers, proposals/deltas, policy and approval decisions, task completion and dependency release, fork pins, dependency snapshots, delta authority scopes, context manifests/bindings, attempt dispatch and resolution, authorization decisions, attempt receipts, signed checkpoint receipt envelopes, and deterministic replay.
+
+Readers reject unknown schema, cursor, canonicalizer, hash, operation, policy, dispatch, receipt, and authorization variants before mutation. The public compatibility train is the eleven-family vector set under `docs/vectors/{events,cursors,proposal,delta,fork-pin,dependency-join,delta-authority,context-binding,receipt,task-dispatch,authorization}`. Each vector freezes canonical JSON bytes and its domain-separated digest; downstream protocol, policy, storage, orchestration, SDK, and adapter packages consume these identities rather than redefining them.
+
+The domain package exposes `horseness-vectors-verify` and the package-local `vectors:verify` script. The repository-level frozen command remains unavailable until the root manifest owns a `vectors:verify` forwarding script; C02 does not own `package.json` and therefore does not add that forwarding entry.

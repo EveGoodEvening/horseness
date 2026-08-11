@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1",
+  "family": "authorization",
+  "case": "minimal-v1",
+  "domain": "horseness.authorization-matrix.v1",
+  "value": {
+    "schemaVersion": "1",
+    "role": "worker",
+    "allowed": [
+      "read-bound-context",
+      "submit-proposal",
+      "submit-receipt",
+      "cancel-own-attempt"
+    ]
+  },
+  "canonicalJson": "{\"allowed\":[\"read-bound-context\",\"submit-proposal\",\"submit-receipt\",\"cancel-own-attempt\"],\"role\":\"worker\",\"schemaVersion\":\"1\"}",
+  "digest": "fe9d415d096a57e68d92eaec2dc12a3970d3c5cabb00f3a3dd0ae9c46b496699"
+}

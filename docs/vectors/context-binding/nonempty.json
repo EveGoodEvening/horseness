@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "1",
+  "family": "context-binding",
+  "case": "nonempty",
+  "domain": "horseness.context-manifest-core.v1",
+  "value": {
+    "schemaVersion": "1",
+    "attemptId": "attempt_demo",
+    "generation": 2,
+    "forkPinDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "contextManifestCoreDigest": "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm",
+    "providerIdempotencyKey": "key-2"
+  },
+  "canonicalJson": "{\"attemptId\":\"attempt_demo\",\"contextManifestCoreDigest\":\"mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm\",\"forkPinDigest\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"generation\":2,\"providerIdempotencyKey\":\"key-2\",\"schemaVersion\":\"1\"}",
+  "digest": "1f4a4627e698446f240a89c217b09eb57aa9faade93bc5dc2d646bb6e876e145"
+}

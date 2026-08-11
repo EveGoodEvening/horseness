@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "1",
+  "family": "task-dispatch",
+  "case": "receipt-only",
+  "domain": "horseness.task-completion-predicate.v1",
+  "value": {
+    "schemaVersion": "1",
+    "kind": "predicate",
+    "predicate": {
+      "kind": "receipt-only"
+    }
+  },
+  "canonicalJson": "{\"kind\":\"predicate\",\"predicate\":{\"kind\":\"receipt-only\"},\"schemaVersion\":\"1\"}",
+  "digest": "0bb16c56bd377f736206cb3f2a15ac2964bcbb78ea8b537a84e5fb31729e2c26"
+}

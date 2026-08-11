@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "1",
+  "family": "receipt",
+  "case": "minimal-v1",
+  "domain": "horseness.attempt-receipt.v1",
+  "value": {
+    "schemaVersion": "1",
+    "attemptId": "attempt_demo",
+    "generation": 1,
+    "outcome": "succeeded",
+    "evidence": []
+  },
+  "canonicalJson": "{\"attemptId\":\"attempt_demo\",\"evidence\":[],\"generation\":1,\"outcome\":\"succeeded\",\"schemaVersion\":\"1\"}",
+  "digest": "a6bb21b928dccf586393776e537a0bac25049fefa9104986bf1b9220385b031f"
+}

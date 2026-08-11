@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "1",
+  "family": "delta",
+  "case": "minimal-v1",
+  "domain": "horseness.json-value.v1",
+  "value": {
+    "items": [
+      "alpha"
+    ],
+    "meta": {
+      "ready": true
+    }
+  },
+  "canonicalJson": "{\"items\":[\"alpha\"],\"meta\":{\"ready\":true}}",
+  "digest": "0bbdcc87e953664397ead4aaccc8b97aacbcd5df628a16a146cfd03ab6df8a92"
+}

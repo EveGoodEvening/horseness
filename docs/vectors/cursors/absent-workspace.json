@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "1",
+  "family": "cursors",
+  "case": "absent-workspace",
+  "domain": "horseness.vector.cursor.v1",
+  "value": {
+    "schemaVersion": "1",
+    "kind": "absent-workspace-genesis",
+    "workspaceId": "ws_demo",
+    "expectedWorkspaceHead": "absent"
+  },
+  "canonicalJson": "{\"expectedWorkspaceHead\":\"absent\",\"kind\":\"absent-workspace-genesis\",\"schemaVersion\":\"1\",\"workspaceId\":\"ws_demo\"}",
+  "digest": "76b6f5cb5a6c352e4f44863bccfe6dbcc20c04b81519a714443c4db809d877b2"
+}

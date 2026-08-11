@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1",
+  "family": "delta",
+  "case": "array-insert",
+  "domain": "horseness.json-value.v1",
+  "value": {
+    "base": [
+      "a"
+    ],
+    "operation": {
+      "op": "add",
+      "path": "/1",
+      "value": "b"
+    }
+  },
+  "canonicalJson": "{\"base\":[\"a\"],\"operation\":{\"op\":\"add\",\"path\":\"/1\",\"value\":\"b\"}}",
+  "digest": "f21e819d7a63fc16c51427c795ba1a004a01ea23569fdba64f3217663f3b451e"
+}

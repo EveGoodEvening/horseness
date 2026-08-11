@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "1",
+  "family": "delta",
+  "case": "root-replace",
+  "domain": "horseness.json-value.v1",
+  "value": {
+    "base": {
+      "old": true
+    },
+    "operation": {
+      "op": "replace",
+      "path": "",
+      "value": {
+        "new": true
+      }
+    }
+  },
+  "canonicalJson": "{\"base\":{\"old\":true},\"operation\":{\"op\":\"replace\",\"path\":\"\",\"value\":{\"new\":true}}}",
+  "digest": "bb4f36af8f8ea8dfe8258c282f570fb2f4c241f271342a0a3eb088177f06837f"
+}

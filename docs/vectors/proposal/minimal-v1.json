@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "1",
+  "family": "proposal",
+  "case": "minimal-v1",
+  "domain": "horseness.proposal.v1",
+  "value": {
+    "schemaVersion": "1",
+    "workspaceId": "ws_demo",
+    "runId": "run_demo",
+    "nonce": "golden-1",
+    "operations": []
+  },
+  "canonicalJson": "{\"nonce\":\"golden-1\",\"operations\":[],\"runId\":\"run_demo\",\"schemaVersion\":\"1\",\"workspaceId\":\"ws_demo\"}",
+  "digest": "b4c9bb72c03ea6fea8b35deab17531e98378bcfd15a784785d9eb20c06e944b7"
+}

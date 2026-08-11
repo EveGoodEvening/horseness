@@ -30,7 +30,7 @@ Durable product defects found during a chunk are recorded in that chunk ledger w
 **Accept:** frozen install; docs lint; typecheck; lint; test; boundary check. **Checkpoint:** `chore(repo): bootstrap reproducible workspace`.
 
 ### C02 — Canonical domain and transition contracts
-**Depends:** C01. **Owns:** `packages/domain/**`, manifest/lock, `.changeset/C02-domain.md`, `docs/compatibility.md`, ledger/integration artifacts.
+**Depends:** C01. **Owns:** `packages/domain/**`, root `package.json` `vectors:verify` forwarding integration, manifest/lock, `.changeset/C02-domain.md`, `docs/compatibility.md`, ledger/integration artifacts.
 **Deliver:** workspace/run streams, composite cursor and atomic command types; RunCreated genesis; sealed ProposalEnvelopeV1, digest vectors and delta operations; all reducers/state machines; immutable ForkPin/AttemptContextBinding; evaluation clock boundaries.
 **Accept:** domain typecheck/tests plus golden vectors for digest/canonical operations, genesis, stream atomicity, cycles/joins/readiness, policy precedence, approval expiry/replacement, dispatch transitions, retry/refresh/adoption, and replay. **Checkpoint:** `feat(domain): freeze canonical orchestration contracts`.
 
@@ -154,7 +154,7 @@ Only these bounded path sets replace all earlier shorthand:
 | Chunk | Exact additional owned paths (plus its explicitly named ledger/checkpoint/changeset files) |
 |---|---|
 | C01 | `package.json`, `pnpm-workspace.yaml`, `pnpm-lock.yaml`, `tsconfig.base.json`, `eslint.config.js`, `.npmrc`, `.node-version`, `.github/workflows/ci.yml`, `.changeset/config.json`, `scripts/{acceptance,c00-contract-gate,progress-cas,boundaries-check}.mjs`, `config/acceptance/*.json`, `packages/{domain,protocol,policy,store-sqlite,orchestrator,sdk,adapter-kit,installer}/package.json`, `apps/{daemon,cli}/package.json`, `adapters/{pi,omp,claude,codex}/package.json`, and each corresponding `src/index.ts` |
-| C02 | `packages/domain/**`, `docs/vectors/{events,proposal,delta,context-binding,receipt,task-dispatch}/**`, `docs/compatibility.md` |
+| C02 | `packages/domain/**`, root `package.json` (only the `vectors:verify` forwarding script), `pnpm-lock.yaml` only if manifest serialization requires it, `docs/vectors/{events,proposal,delta,context-binding,receipt,task-dispatch}/**`, `docs/compatibility.md` |
 | C03 | `packages/protocol/**`, `docs/protocol.md`, `docs/vectors/protocol/**`, `docs/compatibility.md` |
 | C04 | `packages/policy/**`, `docs/policy.md`, `docs/compatibility.md` |
 | C05 | `packages/store-sqlite/**`, `docs/migrations.md` |
@@ -344,6 +344,8 @@ The C00 gate is the literal Node 22 program and command frozen in `docs/validati
 ### Exact vector and compatibility ownership
 
 C02 additionally owns `docs/vectors/{cursors,fork-pin,dependency-join,delta-authority,authorization}/**`. Its literal vector command is replaced by `corepack pnpm run vectors:verify -- events cursors proposal delta fork-pin dependency-join delta-authority context-binding receipt task-dispatch authorization`. It runs before C08/C09 or adapters consume these boundaries. C03 protocol conformance must round-trip all cursor variants, `ForkPinCoreV1`, `DependencyJoinSnapshotCoreV1`, `DeltaAuthorityScopeV1`, proposal-sealing observations, and authorization denials without an unnamed persisted `cursor` field.
+
+The C02 implementation exposed the verifier from `@horseness/domain`, but the frozen repository-root command also requires shared-root integration. C02 therefore owns the single root `package.json` script `"vectors:verify": "pnpm --filter @horseness/domain run vectors:verify"`; this is an ownership correction only and does not broaden C02's root-manifest authority.
 
 ### Exact C20 and C24 workspace-bound invocations
 

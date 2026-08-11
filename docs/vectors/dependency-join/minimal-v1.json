@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "1",
+  "family": "dependency-join",
+  "case": "minimal-v1",
+  "domain": "horseness.dependency-join-snapshot-core.v1",
+  "value": {
+    "schemaVersion": "1",
+    "runId": "run_demo",
+    "taskId": "task_demo",
+    "dependencies": [],
+    "schedulability": "ready",
+    "reasonCodes": []
+  },
+  "canonicalJson": "{\"dependencies\":[],\"reasonCodes\":[],\"runId\":\"run_demo\",\"schedulability\":\"ready\",\"schemaVersion\":\"1\",\"taskId\":\"task_demo\"}",
+  "digest": "35c5a3b44b3c0605fad4b2118840d38493a0b18b5a2dba10cde2efcae30058b5"
+}

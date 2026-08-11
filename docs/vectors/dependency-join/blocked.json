@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "1",
+  "family": "dependency-join",
+  "case": "blocked",
+  "domain": "horseness.dependency-join-snapshot-core.v1",
+  "value": {
+    "schemaVersion": "1",
+    "runId": "run_demo",
+    "taskId": "task_demo",
+    "dependencies": [
+      {
+        "sourceTaskId": "source",
+        "edgeId": "edge",
+        "outcome": "failed"
+      }
+    ],
+    "schedulability": "blocked",
+    "reasonCodes": [
+      "DEPENDENCY_UNSATISFIED"
+    ]
+  },
+  "canonicalJson": "{\"dependencies\":[{\"edgeId\":\"edge\",\"outcome\":\"failed\",\"sourceTaskId\":\"source\"}],\"reasonCodes\":[\"DEPENDENCY_UNSATISFIED\"],\"runId\":\"run_demo\",\"schedulability\":\"blocked\",\"schemaVersion\":\"1\",\"taskId\":\"task_demo\"}",
+  "digest": "caa67319fcb183feca9a22d55a6e257cd68366b177fb605d4b66fedf38911ab3"
+}

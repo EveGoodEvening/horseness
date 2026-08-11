@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "1",
+  "family": "task-dispatch",
+  "case": "duplicate-risk",
+  "domain": "horseness.task-completion-predicate.v1",
+  "value": {
+    "from": "unknown_outcome",
+    "input": "authorize-duplicate-risk",
+    "oldGeneration": 1,
+    "newGeneration": 2
+  },
+  "canonicalJson": "{\"from\":\"unknown_outcome\",\"input\":\"authorize-duplicate-risk\",\"newGeneration\":2,\"oldGeneration\":1}",
+  "digest": "f04b51f94557d2c4918d3bd4f507dea7527531db8d5199ffb7667c690acb0e9b"
+}

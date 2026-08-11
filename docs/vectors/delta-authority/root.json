@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "1",
+  "family": "delta-authority",
+  "case": "root",
+  "domain": "horseness.delta-authority-scope.v1",
+  "value": {
+    "schemaVersion": "1",
+    "workspaceId": "ws_demo",
+    "runId": "run_demo",
+    "taskId": "task_demo",
+    "roots": [
+      ""
+    ]
+  },
+  "canonicalJson": "{\"roots\":[\"\"],\"runId\":\"run_demo\",\"schemaVersion\":\"1\",\"taskId\":\"task_demo\",\"workspaceId\":\"ws_demo\"}",
+  "digest": "01ce890ee0ed78ad20ad57fed37f5472646777bdf073cfa8dc2c63575a3fcb0d"
+}
