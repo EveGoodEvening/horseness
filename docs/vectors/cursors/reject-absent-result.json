@@ -1,0 +1,5 @@
+{
+  "schemaVersion": "2", "familyVersion": "1", "family": "cursors", "case": "reject-absent-result-cursor", "action": "parseResultCursorV1",
+  "input": { "schemaVersion": "1", "kind": "absent-workspace-genesis", "workspaceId": "ws", "expectedWorkspaceHead": "absent" },
+  "expectedError": "RESULT_CURSOR_INCOMPATIBLE"
+}

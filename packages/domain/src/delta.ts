@@ -1,5 +1,5 @@
-import { assertJsonValue, deepClone, digestId, domainDigest, DomainError, jsonValueDigest, type JsonValue } from "./canonical.js";
-import type { CompositeCursorV1, ContextVersionV1 } from "./events.js";
+import { assertJsonValue, canonicalJson, deepClone, digestId, domainDigest, DomainError, jsonValueDigest, type JsonValue } from "./canonical.js";
+import { assertContextVersionV1, assertObservationCursorV1, type CompositeCursorV1, type ContextVersionV1 } from "./events.js";
 
 export type DeltaOperationV1 =
   | { op: "test"; path: string; expectedValueDigest: string }
@@ -129,12 +129,59 @@ export function applyDelta(base: JsonValue, operations: readonly DeltaOperationV
 
 export interface ProposalEnvelopeCoreV1 { schemaVersion: "1"; workspaceId: string; runId: string; authorPrincipalId: string; authorGrantDigest: string; attemptId: string; receiptDigests: string[]; forkPinDigest: string; deltaAuthorityScopeDigest: string; baseRevision: number; baseStateHash: string; canonicalizerVersion: "jcs-v1"; hashVersion: "sha256-v1"; proposalSealingObservationCursor: CompositeCursorV1; proposalSealingContextVersion: ContextVersionV1; operations: DeltaOperationV1[]; evidenceClaims: { digest: string; claim: string }[]; pinnedPolicyDigest: string; currentPolicyDigest: string; nonce: string; predecessorProposalDigest: string | null; predecessorReason: string | null; }
 export interface ProposalEnvelopeV1 { core: ProposalEnvelopeCoreV1; proposalDigest: string; proposalId: string }
+
+const PROPOSAL_KEYS = ["schemaVersion", "workspaceId", "runId", "authorPrincipalId", "authorGrantDigest", "attemptId", "receiptDigests", "forkPinDigest", "deltaAuthorityScopeDigest", "baseRevision", "baseStateHash", "canonicalizerVersion", "hashVersion", "proposalSealingObservationCursor", "proposalSealingContextVersion", "operations", "evidenceClaims", "pinnedPolicyDigest", "currentPolicyDigest", "nonce", "predecessorProposalDigest", "predecessorReason"] as const;
+function exactRecord(value: unknown, keys: readonly string[], code = "INVALID_ENVELOPE"): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw new DomainError(code);
+  const actual = Object.keys(value).sort(); const expected = [...keys].sort();
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new DomainError(code);
+  return value as Record<string, unknown>;
+}
+function nonEmpty(value: unknown): asserts value is string { if (typeof value !== "string" || value.length === 0) throw new DomainError("INVALID_ENVELOPE"); }
+function natural(value: unknown): asserts value is number { if (!Number.isSafeInteger(value) || (value as number) < 0) throw new DomainError("INVALID_ENVELOPE"); }
+function validateCompositeCursor(value: unknown): asserts value is CompositeCursorV1 {
+  const cursor = exactRecord(value, ["schemaVersion", "kind", "workspaceId", "workspaceSequence", "workspaceEnvelopeHash", "workspaceContextEpoch", "runId", "runSequence", "runEnvelopeHash", "runContextEpoch"]);
+  if (cursor.schemaVersion !== "1" || cursor.kind !== "composite") throw new DomainError("UNSUPPORTED_SCHEMA_VERSION");
+  for (const key of ["workspaceId", "workspaceEnvelopeHash", "runId", "runEnvelopeHash"] as const) nonEmpty(cursor[key]);
+  try { assertObservationCursorV1(value); } catch { throw new DomainError("INVALID_ENVELOPE"); }
+  for (const key of ["workspaceSequence", "workspaceContextEpoch", "runSequence", "runContextEpoch"] as const) natural(cursor[key]);
+}
+function validateProposalCore(value: unknown): asserts value is ProposalEnvelopeCoreV1 {
+  const core = exactRecord(value, PROPOSAL_KEYS);
+  if (core.schemaVersion !== "1") throw new DomainError("UNSUPPORTED_SCHEMA_VERSION");
+  if (core.canonicalizerVersion !== "jcs-v1") throw new DomainError("UNSUPPORTED_CANONICALIZER");
+  if (core.hashVersion !== "sha256-v1") throw new DomainError("UNSUPPORTED_HASH");
+  for (const key of ["workspaceId", "runId", "authorPrincipalId", "authorGrantDigest", "attemptId", "forkPinDigest", "deltaAuthorityScopeDigest", "baseStateHash", "pinnedPolicyDigest", "currentPolicyDigest", "nonce"] as const) nonEmpty(core[key]);
+  natural(core.baseRevision);
+  if (!Array.isArray(core.receiptDigests) || core.receiptDigests.some((item) => typeof item !== "string" || item.length === 0) || new Set(core.receiptDigests).size !== core.receiptDigests.length) throw new DomainError("INVALID_ENVELOPE");
+  try { assertContextVersionV1(core.proposalSealingContextVersion); } catch { throw new DomainError("INVALID_ENVELOPE"); }
+  const context = exactRecord(core.proposalSealingContextVersion, ["schemaVersion", "kind", "workspaceContextEpoch", "runContextEpoch", "observationCursor"]);
+  if (context.schemaVersion !== "1" || context.kind !== "composite") throw new DomainError("UNSUPPORTED_SCHEMA_VERSION");
+  natural(context.workspaceContextEpoch); natural(context.runContextEpoch); validateCompositeCursor(context.observationCursor);
+  const cursor = core.proposalSealingObservationCursor;
+  validateCompositeCursor(cursor);
+  if (cursor.workspaceId !== core.workspaceId || cursor.runId !== core.runId || canonicalJson(context.observationCursor) !== canonicalJson(cursor) || context.workspaceContextEpoch !== cursor.workspaceContextEpoch || context.runContextEpoch !== cursor.runContextEpoch) throw new DomainError("INVALID_ENVELOPE");
+  if (!Array.isArray(core.operations)) throw new DomainError("INVALID_ENVELOPE");
+  for (const operationValue of core.operations) {
+    const operation = operationValue as unknown as Record<string, unknown>; const tag = operation?.op;
+    const keys = tag === "test" || tag === "remove" ? ["op", "path", "expectedValueDigest"] : tag === "replace" ? ["op", "path", "expectedValueDigest", "value"] : tag === "add" ? ["op", "path", "expectedParentDigest", "value"] : null;
+    if (keys === null) throw new DomainError("INVALID_ENVELOPE"); exactRecord(operationValue, keys); nonEmpty(operation.path); validatePointer(operation.path); nonEmpty(tag === "add" ? operation.expectedParentDigest : operation.expectedValueDigest); if (tag === "add" || tag === "replace") assertJsonValue(operation.value);
+  }
+  if (!Array.isArray(core.evidenceClaims)) throw new DomainError("INVALID_ENVELOPE");
+  const claimDigests = new Set<string>(); const claims = new Set<string>(); for (const itemValue of core.evidenceClaims) { const item = exactRecord(itemValue, ["digest", "claim"]); nonEmpty(item.digest); nonEmpty(item.claim); if (claimDigests.has(item.digest) || claims.has(item.claim)) throw new DomainError("INVALID_ENVELOPE"); claimDigests.add(item.digest); claims.add(item.claim); }
+  if (core.predecessorProposalDigest !== null) nonEmpty(core.predecessorProposalDigest);
+  if (core.predecessorReason !== null) nonEmpty(core.predecessorReason);
+  if ((core.predecessorProposalDigest === null) !== (core.predecessorReason === null)) throw new DomainError("INVALID_ENVELOPE");
+}
 export function sealProposal(core: ProposalEnvelopeCoreV1): ProposalEnvelopeV1 {
-  const normalized: ProposalEnvelopeCoreV1 = { ...core, receiptDigests: [...new Set(core.receiptDigests)].sort(), evidenceClaims: [...core.evidenceClaims].sort((a, b) => a.digest.localeCompare(b.digest) || a.claim.localeCompare(b.claim)) };
+  validateProposalCore(core);
+  const normalized: ProposalEnvelopeCoreV1 = { ...core, receiptDigests: [...core.receiptDigests].sort(), evidenceClaims: [...core.evidenceClaims].sort((a, b) => a.digest.localeCompare(b.digest) || a.claim.localeCompare(b.claim)) };
   const proposalDigest = domainDigest("horseness.proposal.v1", normalized);
   return { core: normalized, proposalDigest, proposalId: digestId("prp_", proposalDigest) };
 }
 export function verifyProposal(envelope: ProposalEnvelopeV1): void {
-  const expected = sealProposal(envelope.core);
+  const value = exactRecord(envelope, ["core", "proposalDigest", "proposalId"]); nonEmpty(value.proposalDigest); nonEmpty(value.proposalId);
+  validateProposalCore(value.core);
+  const expected = sealProposal(value.core);
   if (expected.proposalDigest !== envelope.proposalDigest || expected.proposalId !== envelope.proposalId) throw new DomainError("PROPOSAL_ID_MISMATCH");
 }

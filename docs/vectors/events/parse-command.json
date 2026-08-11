@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "2",
+  "familyVersion": "1",
+  "family": "events",
+  "case": "parse-domain-command-exact-schema",
+  "action": "parseDomainCommandV1",
+  "input": {
+    "schemaVersion": "1",
+    "commandType": "SubmitProposalV1",
+    "commandId": "command-1",
+    "observationCursor": { "schemaVersion": "1", "kind": "composite", "workspaceId": "ws", "workspaceSequence": 2, "workspaceEnvelopeHash": "wh", "workspaceContextEpoch": 1, "runId": "run", "runSequence": 3, "runEnvelopeHash": "rh", "runContextEpoch": 4 },
+    "principalId": "principal",
+    "proposalId": "proposal",
+    "proposalDigest": "digest"
+  },
+  "expected": {
+    "schemaVersion": "1",
+    "commandType": "SubmitProposalV1",
+    "commandId": "command-1",
+    "observationCursor": { "schemaVersion": "1", "kind": "composite", "workspaceId": "ws", "workspaceSequence": 2, "workspaceEnvelopeHash": "wh", "workspaceContextEpoch": 1, "runId": "run", "runSequence": 3, "runEnvelopeHash": "rh", "runContextEpoch": 4 },
+    "principalId": "principal",
+    "proposalId": "proposal",
+    "proposalDigest": "digest"
+  }
+}

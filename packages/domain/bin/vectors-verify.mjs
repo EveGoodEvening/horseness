@@ -17,6 +17,13 @@ export const executeVector = (vector) => {
   switch (vector.action) {
     case "canonicalJson": return domain.canonicalJson(vector.input);
     case "jsonValueDigest": return domain.jsonValueDigest(vector.input);
+    case "parseObservationCursorV1": return domain.parseObservationCursorV1(vector.input);
+    case "parseResultCursorV1": return domain.parseResultCursorV1(vector.input);
+    case "parseDomainCommandV1": return domain.parseDomainCommandV1(vector.input);
+    case "parseDomainEventPayloadV1": return domain.parseDomainEventPayloadV1(vector.input);
+    case "parseDomainCommandResultV1": return domain.parseDomainCommandResultV1(vector.input);
+    case "parseDomainQueryV1": return domain.parseDomainQueryV1(vector.input);
+    case "parseQueryResultV1": return domain.parseQueryResultV1(vector.input);
     case "validatePointer": return domain.validatePointer(vector.input);
     case "canonicalScope": return domain.canonicalScope(vector.input);
     case "deltaAuthorityScopeDigest": return domain.deltaAuthorityScopeDigest(vector.input);
@@ -81,7 +88,8 @@ export const executeVector = (vector) => {
       return domain.bindContext(core, binding);
     }
     case "receiptScenario": {
-      const core = { schemaVersion: "1", workspaceId: "ws", runId: "run", taskId: "task", attemptId: "attempt", generation: 1, attemptContextBindingDigest: "binding", contextManifestCoreDigest: "manifest", forkPinDigest: "pin", providerId: "provider", providerOperationId: "operation", providerIdempotencyKeyDigest: "key", producerPrincipalId: "adapter", producerGrantDigest: "grant", adapterId: "adapter", adapterVersion: "1", hostId: "host", hostVersion: "1", outcome: vector.input === "failed" ? "failed" : "succeeded", startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:00:01Z", evidence: vector.input === "failed" ? [{ digest: "evidence", mediaType: "text/plain", size: 1 }] : [] };
+      const failed = vector.input === "failed";
+      const core = { schemaVersion: "1", workspaceId: "ws", runId: "run", taskId: "task", attemptId: "attempt", generation: 1, attemptContextBindingDigest: "binding", contextManifestCoreDigest: "manifest", forkPinDigest: "pin", providerId: "provider", providerOperationId: "operation", providerIdempotencyKeyDigest: "key", producerPrincipalId: "adapter", producerGrantDigest: "grant", adapterId: "adapter", adapterVersion: "1", hostId: "host", hostVersion: "1", outcome: failed ? "failed" : "succeeded", startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:00:01Z", outputDigest: failed ? null : "output", evidence: failed ? [{ digest: "evidence", mediaType: "text/plain", size: 1 }] : [], provenance: {}, nonce: "nonce" };
       const receipt = domain.sealAttemptReceipt(core);
       if (vector.input === "mutated") return domain.verifyAttemptReceipt({ ...receipt, producerGrantDigest: "substituted" });
       domain.verifyAttemptReceipt(receipt);

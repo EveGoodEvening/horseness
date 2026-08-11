@@ -1,1 +1,1 @@
-{"schemaVersion":"2","familyVersion":"1","family":"receipt","case":"evidence-affects-receipt-digest","action":"receiptScenario","input":"failed","select":["receiptDigest"],"expected":"13fc2c4409ceab4668072f55c1a606a8ab7fdedbfac40522457b1a1f2bcbc438"}
+{"schemaVersion":"2","familyVersion":"1","family":"receipt","case":"evidence-affects-receipt-digest","action":"receiptScenario","input":"failed","select":["receiptDigest"],"expected":"2a53b0a5d6743391df8d9ec764a529585820901bc516a9f376a66abbede88f5d"}

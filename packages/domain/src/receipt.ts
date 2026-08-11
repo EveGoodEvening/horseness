@@ -1,17 +1,35 @@
-import { deepClone, digestId, domainDigest, DomainError, type JsonValue } from "./canonical.js";
+import { assertJsonValue, deepClone, digestId, domainDigest, DomainError, type JsonValue } from "./canonical.js";
 import { verifyEventChain, type EventEnvelopeV1, type HashedEventEnvelopeV1 } from "./events.js";
 
 export interface ReceiptEvidenceV1 { digest: string; mediaType: string; size: number }
-export interface AttemptReceiptCoreV1 { schemaVersion: "1"; workspaceId: string; runId: string; taskId: string; attemptId: string; generation: number; attemptContextBindingDigest: string; contextManifestCoreDigest: string; forkPinDigest: string; providerId: string; providerOperationId: string; providerIdempotencyKeyDigest: string; producerPrincipalId: string; producerGrantDigest: string; adapterId: string; adapterVersion: string; hostId: string; hostVersion: string; outcome: "succeeded" | "failed" | "cancelled"; startedAt: string; finishedAt: string; outputDigest: string | null; evidence: ReceiptEvidenceV1[]; provenance: JsonValue; nonce: string }
+export interface AttemptReceiptCoreV1 { schemaVersion: "1"; workspaceId: string; runId: string; taskId: string; attemptId: string; generation: number; attemptContextBindingDigest: string; contextManifestCoreDigest: string; forkPinDigest: string; providerId: string; providerOperationId: string; providerIdempotencyKeyDigest: string; producerPrincipalId: string; producerGrantDigest: string; adapterId: string; adapterVersion: string; hostId: string; hostVersion: string; outcome: "succeeded" | "failed" | "cancelled"; startedAt: string; finishedAt: string; outputDigest: string | null; evidence: readonly ReceiptEvidenceV1[]; provenance: JsonValue; nonce: string }
 export interface AttemptReceiptEnvelopeV1 extends AttemptReceiptCoreV1 { receiptId: string; receiptDigest: string }
+const RECEIPT_KEYS = ["schemaVersion", "workspaceId", "runId", "taskId", "attemptId", "generation", "attemptContextBindingDigest", "contextManifestCoreDigest", "forkPinDigest", "providerId", "providerOperationId", "providerIdempotencyKeyDigest", "producerPrincipalId", "producerGrantDigest", "adapterId", "adapterVersion", "hostId", "hostVersion", "outcome", "startedAt", "finishedAt", "outputDigest", "evidence", "provenance", "nonce"] as const;
+function exactReceiptRecord(value: unknown, keys: readonly string[]): Record<string, unknown> { if (typeof value !== "object" || value === null || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw new DomainError("INVALID_ENVELOPE"); const actual = Object.keys(value).sort(); const expected = [...keys].sort(); if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new DomainError("INVALID_ENVELOPE"); return value as Record<string, unknown>; }
+function receiptText(value: unknown): asserts value is string { if (typeof value !== "string" || value.length === 0) throw new DomainError("INVALID_ENVELOPE"); }
+function canonicalTimestamp(value: unknown): asserts value is string { receiptText(value); if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) throw new DomainError("INVALID_ENVELOPE"); const time = Date.parse(value); if (!Number.isFinite(time)) throw new DomainError("INVALID_ENVELOPE"); const iso = new Date(time).toISOString(); if (value !== iso && value !== iso.replace(".000Z", "Z")) throw new DomainError("INVALID_ENVELOPE"); }
+function validateAttemptReceiptCore(value: unknown): asserts value is AttemptReceiptCoreV1 {
+  const core = exactReceiptRecord(value, RECEIPT_KEYS);
+  if (core.schemaVersion !== "1") throw new DomainError("UNSUPPORTED_SCHEMA_VERSION");
+  for (const key of ["workspaceId", "runId", "taskId", "attemptId", "attemptContextBindingDigest", "contextManifestCoreDigest", "forkPinDigest", "providerId", "providerOperationId", "providerIdempotencyKeyDigest", "producerPrincipalId", "producerGrantDigest", "adapterId", "adapterVersion", "hostId", "hostVersion", "nonce"] as const) receiptText(core[key]);
+  if (!Number.isSafeInteger(core.generation) || (core.generation as number) < 1) throw new DomainError("INVALID_ENVELOPE");
+  if (core.outcome !== "succeeded" && core.outcome !== "failed" && core.outcome !== "cancelled") throw new DomainError("INVALID_ENVELOPE");
+  canonicalTimestamp(core.startedAt); canonicalTimestamp(core.finishedAt); if (core.finishedAt < core.startedAt) throw new DomainError("INVALID_ENVELOPE");
+  if (core.outcome === "succeeded") receiptText(core.outputDigest); else if (core.outputDigest !== null) throw new DomainError("INVALID_ENVELOPE");
+  if (!Array.isArray(core.evidence)) throw new DomainError("INVALID_ENVELOPE"); const seen = new Set<string>();
+  for (const evidenceValue of core.evidence) { const evidence = exactReceiptRecord(evidenceValue, ["digest", "mediaType", "size"]); receiptText(evidence.digest); receiptText(evidence.mediaType); if (!Number.isSafeInteger(evidence.size) || (evidence.size as number) < 0 || seen.has(evidence.digest)) throw new DomainError("INVALID_ENVELOPE"); seen.add(evidence.digest); }
+  assertJsonValue(core.provenance); if (typeof core.provenance !== "object" || core.provenance === null || Array.isArray(core.provenance)) throw new DomainError("INVALID_ENVELOPE");
+}
 export function sealAttemptReceipt(core: AttemptReceiptCoreV1): AttemptReceiptEnvelopeV1 {
+  validateAttemptReceiptCore(core);
   const normalized: AttemptReceiptCoreV1 = { ...core, evidence: [...core.evidence].sort((a, b) => a.digest.localeCompare(b.digest)) };
-  if (new Set(normalized.evidence.map((item) => item.digest)).size !== normalized.evidence.length || normalized.finishedAt < normalized.startedAt) throw new DomainError("INVALID_ENVELOPE");
   const receiptDigest = domainDigest("horseness.attempt-receipt.v1", normalized);
   return { ...normalized, receiptId: digestId("rcp_", receiptDigest), receiptDigest };
 }
 export function verifyAttemptReceipt(receipt: AttemptReceiptEnvelopeV1): void {
+  const envelope = exactReceiptRecord(receipt, [...RECEIPT_KEYS, "receiptId", "receiptDigest"]); receiptText(envelope.receiptId); receiptText(envelope.receiptDigest);
   const { receiptId: _receiptId, receiptDigest: _receiptDigest, ...core } = receipt;
+  validateAttemptReceiptCore(core);
   const expected = sealAttemptReceipt(core);
   if (expected.receiptDigest !== receipt.receiptDigest || expected.receiptId !== receipt.receiptId) throw new DomainError("RECEIPT_MISMATCH");
 }
@@ -51,7 +69,7 @@ export function reduceWorkspaceState(state: WorkspaceState | null, event: Worksp
     case "PolicyReferenceChangedV1":
       if (state === null) throw new DomainError("INVALID_GENESIS");
       if (event.workspaceId !== state.workspaceId) throw new DomainError("AGGREGATE_IDENTITY_MISMATCH");
-      if (event.sequence <= state.lastEventSequence) throw new DomainError("EVENT_SEQUENCE_INVALID");
+      if (event.sequence !== state.lastEventSequence + 1) throw new DomainError("EVENT_SEQUENCE_INVALID");
       return { ...state, activePolicyDigest: event.activePolicyDigest, contextEpoch: state.contextEpoch + 1, lastEventSequence: event.sequence };
     default: throw new DomainError("UNSUPPORTED_EVENT_TYPE");
   }
@@ -72,7 +90,7 @@ export function reduceOperationalState(state: RunOperationalState | null, event:
   }
   if (state === null) throw new DomainError("INVALID_GENESIS");
   if (event.workspaceId !== state.workspaceId || event.runId !== state.runId) throw new DomainError("AGGREGATE_IDENTITY_MISMATCH");
-  if (event.sequence <= state.lastEventSequence) throw new DomainError("EVENT_SEQUENCE_INVALID");
+  if (event.sequence !== state.lastEventSequence + 1) throw new DomainError("EVENT_SEQUENCE_INVALID");
   const next: RunOperationalState = { ...state, eventCount: state.eventCount + 1, proposals: { ...state.proposals }, receipts: { ...state.receipts }, taskStates: { ...state.taskStates }, contextEpoch: state.contextEpoch + 1, lastEventSequence: event.sequence };
   switch (event.eventType) {
     case "ProposalSubmittedV1": {

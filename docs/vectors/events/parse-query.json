@@ -1,0 +1,5 @@
+{
+  "schemaVersion": "2", "familyVersion": "1", "family": "events", "case": "parse-query-exact-schema", "action": "parseDomainQueryV1",
+  "input": { "schemaVersion": "1", "queryType": "ListRunEventsV1", "afterObservationCursor": { "schemaVersion": "1", "kind": "run-only", "workspaceId": "ws", "runId": "run", "runSequence": 3, "runEnvelopeHash": "rh", "runContextEpoch": 4 }, "limit": 25 },
+  "expected": { "schemaVersion": "1", "queryType": "ListRunEventsV1", "afterObservationCursor": { "schemaVersion": "1", "kind": "run-only", "workspaceId": "ws", "runId": "run", "runSequence": 3, "runEnvelopeHash": "rh", "runContextEpoch": 4 }, "limit": 25 }
+}

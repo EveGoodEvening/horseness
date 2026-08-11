@@ -1,4 +1,4 @@
-import { canonicalJson, domainDigest, DomainError, type JsonValue } from "./canonical.js";
+import { assertJsonValue, canonicalJson, domainDigest, DomainError, type JsonValue } from "./canonical.js";
 
 export type Hash = string;
 export interface AbsentWorkspaceGenesisCursorV1 { schemaVersion: "1"; kind: "absent-workspace-genesis"; workspaceId: string; expectedWorkspaceHead: "absent" }
@@ -49,6 +49,101 @@ export interface ContextManifestPublishedEventV1 { eventType: "ContextManifestPu
 export type WorkspaceEventPayloadV1 = WorkspaceCreatedV1 | PolicyReferenceChangedV1;
 export type RunEventPayloadV1 = RunCreatedV1 | ProposalSubmittedV1 | AttemptReceiptRecordedV1 | DeltaAcceptedV1 | TaskResolvedEventV1 | ForkCreatedEventV1 | ContextManifestPublishedEventV1;
 export type DomainEventPayloadV1 = WorkspaceEventPayloadV1 | RunEventPayloadV1;
+type ProtocolRecord = Record<string, unknown>;
+
+function protocolError(code: string): never { throw new DomainError(code); }
+function exactRecord(value: unknown, keys: readonly string[], code: string): ProtocolRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) protocolError(code);
+  const record = value as ProtocolRecord;
+  const actual = Object.keys(record).sort();
+  const expected = [...keys].sort();
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) protocolError(code);
+  return record;
+}
+function protocolRecord(value: unknown, code: string): ProtocolRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) protocolError(code);
+  return value as ProtocolRecord;
+}
+function literal(value: unknown, expected: string, code: string): void { if (value !== expected) protocolError(code); }
+function nonEmpty(value: unknown, code: string): void { if (typeof value !== "string" || value.length === 0) protocolError(code); }
+function natural(value: unknown, code: string): void { if (!Number.isSafeInteger(value) || (value as number) < 0) protocolError(code); }
+function positive(value: unknown, code: string): void { if (!Number.isSafeInteger(value) || (value as number) < 1) protocolError(code); }
+function oneOf(value: unknown, choices: readonly string[], code: string): void { if (typeof value !== "string" || !choices.includes(value)) protocolError(code); }
+function json(value: unknown, code: string): void { try { assertJsonValue(value); } catch { protocolError(code); } }
+
+const workspaceCursorKeys = ["schemaVersion", "kind", "workspaceId", "workspaceSequence", "workspaceEnvelopeHash", "workspaceContextEpoch"] as const;
+const runCursorKeys = ["schemaVersion", "kind", "workspaceId", "runId", "runSequence", "runEnvelopeHash", "runContextEpoch"] as const;
+const compositeCursorKeys = [...workspaceCursorKeys, "runId", "runSequence", "runEnvelopeHash", "runContextEpoch"] as const;
+
+export function parseObservationCursorV1(value: unknown): ObservationCursorV1 {
+  const header = protocolRecord(value, "CURSOR_INVALID");
+  literal(header.schemaVersion, "1", "CURSOR_VERSION_UNSUPPORTED");
+  switch (header.kind) {
+    case "absent-workspace-genesis": { const r = exactRecord(value, ["schemaVersion", "kind", "workspaceId", "expectedWorkspaceHead"], "CURSOR_INVALID"); nonEmpty(r.workspaceId, "CURSOR_INVALID"); literal(r.expectedWorkspaceHead, "absent", "CURSOR_INVALID"); break; }
+    case "workspace-only": { const r = exactRecord(value, workspaceCursorKeys, "CURSOR_INVALID"); nonEmpty(r.workspaceId, "CURSOR_INVALID"); positive(r.workspaceSequence, "CURSOR_INVALID"); nonEmpty(r.workspaceEnvelopeHash, "CURSOR_INVALID"); natural(r.workspaceContextEpoch, "CURSOR_INVALID"); break; }
+    case "absent-run-genesis": { const r = exactRecord(value, [...workspaceCursorKeys.filter((key) => key !== "kind"), "kind", "runId", "expectedRunHead"], "CURSOR_INVALID"); nonEmpty(r.workspaceId, "CURSOR_INVALID"); positive(r.workspaceSequence, "CURSOR_INVALID"); nonEmpty(r.workspaceEnvelopeHash, "CURSOR_INVALID"); natural(r.workspaceContextEpoch, "CURSOR_INVALID"); nonEmpty(r.runId, "CURSOR_INVALID"); literal(r.expectedRunHead, "absent", "CURSOR_INVALID"); break; }
+    case "run-only": { const r = exactRecord(value, runCursorKeys, "CURSOR_INVALID"); nonEmpty(r.workspaceId, "CURSOR_INVALID"); nonEmpty(r.runId, "CURSOR_INVALID"); positive(r.runSequence, "CURSOR_INVALID"); nonEmpty(r.runEnvelopeHash, "CURSOR_INVALID"); natural(r.runContextEpoch, "CURSOR_INVALID"); break; }
+    case "composite": { const r = exactRecord(value, compositeCursorKeys, "CURSOR_INVALID"); nonEmpty(r.workspaceId, "CURSOR_INVALID"); positive(r.workspaceSequence, "CURSOR_INVALID"); nonEmpty(r.workspaceEnvelopeHash, "CURSOR_INVALID"); natural(r.workspaceContextEpoch, "CURSOR_INVALID"); nonEmpty(r.runId, "CURSOR_INVALID"); positive(r.runSequence, "CURSOR_INVALID"); nonEmpty(r.runEnvelopeHash, "CURSOR_INVALID"); natural(r.runContextEpoch, "CURSOR_INVALID"); break; }
+    default: protocolError("CURSOR_KIND_UNSUPPORTED");
+  }
+  return value as ObservationCursorV1;
+}
+export function assertObservationCursorV1(value: unknown): asserts value is ObservationCursorV1 { parseObservationCursorV1(value); }
+export function parseResultCursorV1(value: unknown): ResultCursorV1 { const cursor = parseObservationCursorV1(value); if (cursor.kind === "absent-workspace-genesis" || cursor.kind === "absent-run-genesis") protocolError("RESULT_CURSOR_INCOMPATIBLE"); return cursor; }
+export function assertResultCursorV1(value: unknown): asserts value is ResultCursorV1 { parseResultCursorV1(value); }
+
+export function parseContextVersionV1(value: unknown): ContextVersionV1 {
+  const header = protocolRecord(value, "CONTEXT_VERSION_INVALID"); literal(header.schemaVersion, "1", "CONTEXT_VERSION_UNSUPPORTED");
+  const cursor = parseResultCursorV1(header.observationCursor);
+  switch (header.kind) {
+    case "workspace-only": { const r = exactRecord(value, ["schemaVersion", "kind", "workspaceContextEpoch", "observationCursor"], "CONTEXT_VERSION_INVALID"); natural(r.workspaceContextEpoch, "CONTEXT_VERSION_INVALID"); if (cursor.kind !== "workspace-only" || r.workspaceContextEpoch !== cursor.workspaceContextEpoch) protocolError("CONTEXT_CURSOR_INCOMPATIBLE"); break; }
+    case "run-only": { const r = exactRecord(value, ["schemaVersion", "kind", "runContextEpoch", "observationCursor"], "CONTEXT_VERSION_INVALID"); natural(r.runContextEpoch, "CONTEXT_VERSION_INVALID"); if (cursor.kind !== "run-only" || r.runContextEpoch !== cursor.runContextEpoch) protocolError("CONTEXT_CURSOR_INCOMPATIBLE"); break; }
+    case "composite": { const r = exactRecord(value, ["schemaVersion", "kind", "workspaceContextEpoch", "runContextEpoch", "observationCursor"], "CONTEXT_VERSION_INVALID"); natural(r.workspaceContextEpoch, "CONTEXT_VERSION_INVALID"); natural(r.runContextEpoch, "CONTEXT_VERSION_INVALID"); if (cursor.kind !== "composite" || r.workspaceContextEpoch !== cursor.workspaceContextEpoch || r.runContextEpoch !== cursor.runContextEpoch) protocolError("CONTEXT_CURSOR_INCOMPATIBLE"); break; }
+    default: protocolError("CONTEXT_VERSION_KIND_UNSUPPORTED");
+  }
+  return value as ContextVersionV1;
+}
+export function assertContextVersionV1(value: unknown): asserts value is ContextVersionV1 { parseContextVersionV1(value); }
+
+function commandBase(value: unknown, keys: readonly string[], cursorKind: ObservationCursorV1["kind"]): ProtocolRecord {
+  const r = exactRecord(value, keys, "COMMAND_INVALID"); literal(r.schemaVersion, "1", "COMMAND_VERSION_UNSUPPORTED"); nonEmpty(r.commandId, "COMMAND_INVALID"); const cursor = parseObservationCursorV1(r.observationCursor); if (cursor.kind !== cursorKind) protocolError("COMMAND_CURSOR_INCOMPATIBLE"); return r;
+}
+export function parseDomainCommandV1(value: unknown): DomainCommandV1 {
+  const h = protocolRecord(value, "COMMAND_INVALID"); if (h.schemaVersion !== "1") protocolError("COMMAND_VERSION_UNSUPPORTED");
+  switch (h.commandType) {
+    case "CreateWorkspaceV1": { const r = commandBase(value, ["schemaVersion","commandType","commandId","observationCursor","authorityPrincipalId","initialGrantDigest","authorityConsumptionMarker","activePolicyDigest"], "absent-workspace-genesis"); [r.authorityPrincipalId,r.initialGrantDigest,r.authorityConsumptionMarker,r.activePolicyDigest].forEach((x) => nonEmpty(x,"COMMAND_INVALID")); break; }
+    case "ChangePolicyReferenceV1": { const r = commandBase(value, ["schemaVersion","commandType","commandId","observationCursor","principalId","activePolicyDigest"], "workspace-only"); nonEmpty(r.principalId,"COMMAND_INVALID"); nonEmpty(r.activePolicyDigest,"COMMAND_INVALID"); break; }
+    case "CreateRunV1": { const r = commandBase(value, ["schemaVersion","commandType","commandId","observationCursor","principalId","initialDocument"], "absent-run-genesis"); nonEmpty(r.principalId,"COMMAND_INVALID"); json(r.initialDocument,"COMMAND_INVALID"); break; }
+    case "SubmitProposalV1": { const r = commandBase(value, ["schemaVersion","commandType","commandId","observationCursor","principalId","proposalId","proposalDigest"], "composite"); [r.principalId,r.proposalId,r.proposalDigest].forEach((x) => nonEmpty(x,"COMMAND_INVALID")); break; }
+    case "RecordAttemptReceiptV1": { const r = commandBase(value, ["schemaVersion","commandType","commandId","observationCursor","principalId","receiptId","receiptDigest","outcome"], "composite"); [r.principalId,r.receiptId,r.receiptDigest].forEach((x) => nonEmpty(x,"COMMAND_INVALID")); oneOf(r.outcome,["succeeded","failed","cancelled"],"COMMAND_INVALID"); break; }
+    case "AcceptDeltaV1": { const r = commandBase(value, ["schemaVersion","commandType","commandId","observationCursor","principalId","proposalId","proposalDigest","priorStateHash","resultingStateHash","resultingDocument"], "composite"); [r.principalId,r.proposalId,r.proposalDigest,r.priorStateHash,r.resultingStateHash].forEach((x) => nonEmpty(x,"COMMAND_INVALID")); json(r.resultingDocument,"COMMAND_INVALID"); break; }
+    case "ResolveTaskV1": { const r = commandBase(value, ["schemaVersion","commandType","commandId","observationCursor","principalId","taskId","resolution","evaluationClock"], "composite"); nonEmpty(r.principalId,"COMMAND_INVALID"); nonEmpty(r.taskId,"COMMAND_INVALID"); oneOf(r.resolution,["succeeded","failed","cancelled"],"COMMAND_INVALID"); const c = exactRecord(r.evaluationClock,["schemaVersion","authorityTime","observationCursor"],"COMMAND_INVALID"); literal(c.schemaVersion,"1","COMMAND_VERSION_UNSUPPORTED"); nonEmpty(c.authorityTime,"COMMAND_INVALID"); parseObservationCursorV1(c.observationCursor); break; }
+    default: protocolError("COMMAND_TYPE_UNSUPPORTED");
+  }
+  return value as DomainCommandV1;
+}
+export function assertDomainCommandV1(value: unknown): asserts value is DomainCommandV1 { parseDomainCommandV1(value); }
+
+export function parseDomainEventPayloadV1(value: unknown): DomainEventPayloadV1 {
+  const h = protocolRecord(value, "EVENT_PAYLOAD_INVALID");
+  const specs: Record<string, readonly string[]> = { WorkspaceCreatedV1:["eventType","workspaceId","authorityPrincipalId","initialGrantDigest","authorityConsumptionMarker","activePolicyDigest"], PolicyReferenceChangedV1:["eventType","workspaceId","activePolicyDigest"], RunCreatedV1:["eventType","workspaceId","runId","initialDocument","canonicalizerVersion","hashVersion"], ProposalSubmittedV1:["eventType","workspaceId","runId","proposalId","proposalDigest"], AttemptReceiptRecordedV1:["eventType","workspaceId","runId","receiptId","receiptDigest","outcome"], DeltaAcceptedV1:["eventType","workspaceId","runId","proposalId","proposalDigest","priorStateHash","resultingStateHash","resultingDocument"], TaskResolvedV1:["eventType","workspaceId","runId","taskId","resolution","evaluationClock"], ForkCreatedV1:["eventType","workspaceId","runId","forkPinDigest"], ContextManifestPublishedV1:["eventType","workspaceId","runId","contextManifestCoreDigest"] };
+  if (typeof h.eventType !== "string" || !(h.eventType in specs)) protocolError("UNSUPPORTED_EVENT_TYPE"); const r = exactRecord(value, specs[h.eventType]!, "EVENT_PAYLOAD_INVALID"); for (const key of specs[h.eventType]!) if (!["initialDocument","resultingDocument","evaluationClock","outcome","resolution","canonicalizerVersion","hashVersion","eventType"].includes(key)) nonEmpty(r[key],"EVENT_PAYLOAD_INVALID");
+  if (h.eventType === "RunCreatedV1") { json(r.initialDocument,"EVENT_PAYLOAD_INVALID"); literal(r.canonicalizerVersion,"jcs-v1","EVENT_PAYLOAD_INVALID"); literal(r.hashVersion,"sha256-v1","EVENT_PAYLOAD_INVALID"); }
+  if (h.eventType === "DeltaAcceptedV1") json(r.resultingDocument,"EVENT_PAYLOAD_INVALID");
+  if (h.eventType === "AttemptReceiptRecordedV1") oneOf(r.outcome,["succeeded","failed","cancelled"],"EVENT_PAYLOAD_INVALID");
+  if (h.eventType === "TaskResolvedV1") { oneOf(r.resolution,["succeeded","failed","cancelled"],"EVENT_PAYLOAD_INVALID"); const c=exactRecord(r.evaluationClock,["schemaVersion","authorityTime","observationCursor"],"EVENT_PAYLOAD_INVALID"); literal(c.schemaVersion,"1","EVENT_VERSION_UNSUPPORTED"); nonEmpty(c.authorityTime,"EVENT_PAYLOAD_INVALID"); parseObservationCursorV1(c.observationCursor); }
+  return value as DomainEventPayloadV1;
+}
+export function assertDomainEventPayloadV1(value: unknown): asserts value is DomainEventPayloadV1 { parseDomainEventPayloadV1(value); }
+
+export function parseDomainQueryV1(value: unknown): DomainQueryV1 { const h=protocolRecord(value,"QUERY_INVALID"); literal(h.schemaVersion,"1","QUERY_VERSION_UNSUPPORTED"); switch(h.queryType){ case "GetWorkspaceV1": {const r=exactRecord(value,["schemaVersion","queryType","observationCursor"],"QUERY_INVALID"); if(parseObservationCursorV1(r.observationCursor).kind!=="workspace-only") protocolError("QUERY_CURSOR_INCOMPATIBLE"); break;} case "GetRunV1": {const r=exactRecord(value,["schemaVersion","queryType","observationCursor"],"QUERY_INVALID"); if(parseObservationCursorV1(r.observationCursor).kind!=="composite") protocolError("QUERY_CURSOR_INCOMPATIBLE"); break;} case "ListRunEventsV1": {const r=exactRecord(value,["schemaVersion","queryType","afterObservationCursor","limit"],"QUERY_INVALID"); const c=parseObservationCursorV1(r.afterObservationCursor); if(c.kind!=="run-only"&&c.kind!=="composite") protocolError("QUERY_CURSOR_INCOMPATIBLE"); positive(r.limit,"QUERY_INVALID"); break;} default: protocolError("QUERY_TYPE_UNSUPPORTED"); } return value as DomainQueryV1; }
+export function assertDomainQueryV1(value: unknown): asserts value is DomainQueryV1 { parseDomainQueryV1(value); }
+
+export function parseDomainCommandResultV1(value: unknown): DomainCommandResultV1 { const h=protocolRecord(value,"COMMAND_RESULT_INVALID"); literal(h.schemaVersion,"1","COMMAND_RESULT_VERSION_UNSUPPORTED"); const r=exactRecord(value,["schemaVersion","resultType","commandId","resultCursor","resultContextVersion"],"COMMAND_RESULT_INVALID"); nonEmpty(r.commandId,"COMMAND_RESULT_INVALID"); const cursor=parseResultCursorV1(r.resultCursor); const context=parseContextVersionV1(r.resultContextVersion); switch(h.resultType){case "WorkspaceCommandResultV1": if(cursor.kind!=="workspace-only"||context.kind!=="workspace-only") protocolError("COMMAND_RESULT_CURSOR_INCOMPATIBLE"); break; case "RunCommandResultV1": if((cursor.kind!=="run-only"&&cursor.kind!=="composite")||context.kind!==cursor.kind) protocolError("COMMAND_RESULT_CURSOR_INCOMPATIBLE"); break; case "DualStreamCommandResultV1": if(cursor.kind!=="composite"||context.kind!=="composite") protocolError("COMMAND_RESULT_CURSOR_INCOMPATIBLE"); break; default: protocolError("COMMAND_RESULT_TYPE_UNSUPPORTED");} return value as DomainCommandResultV1; }
+export function assertDomainCommandResultV1(value: unknown): asserts value is DomainCommandResultV1 { parseDomainCommandResultV1(value); }
+
+export function parseQueryResultV1(value: unknown): QueryResultV1 { const h=protocolRecord(value,"QUERY_RESULT_INVALID"); literal(h.schemaVersion,"1","QUERY_RESULT_VERSION_UNSUPPORTED"); const r=exactRecord(value,["schemaVersion","resultType","observationCursor","state"],"QUERY_RESULT_INVALID"); const cursor=parseResultCursorV1(r.observationCursor); json(r.state,"QUERY_RESULT_INVALID"); switch(h.resultType){case "WorkspaceQueryResultV1": if(cursor.kind!=="workspace-only") protocolError("QUERY_RESULT_CURSOR_INCOMPATIBLE"); break; case "RunQueryResultV1": if(cursor.kind!=="run-only"&&cursor.kind!=="composite") protocolError("QUERY_RESULT_CURSOR_INCOMPATIBLE"); break; default: protocolError("QUERY_RESULT_TYPE_UNSUPPORTED");} return value as QueryResultV1; }
+export function assertQueryResultV1(value: unknown): asserts value is QueryResultV1 { parseQueryResultV1(value); }
 export interface StreamAppendV1<T extends DomainEventPayloadV1 = DomainEventPayloadV1> { streamKind: "workspace" | "run"; expectedSequence: number; expectedEnvelopeHash: Hash | null; events: readonly HashedEventEnvelopeV1<T>[] }
 export type AtomicAppendContractV1 = { schemaVersion: "1"; appendKind: "single-stream"; observationCursor: ObservationCursorV1; append: StreamAppendV1 } | { schemaVersion: "1"; appendKind: "dual-stream"; observationCursor: CompositeCursorV1; workspaceAppend: StreamAppendV1<WorkspaceEventPayloadV1>; runAppend: StreamAppendV1<RunEventPayloadV1> };
 export function assertAtomicAppendContract(contract: AtomicAppendContractV1): void {
@@ -126,8 +221,9 @@ export function verifyEventChain(events: readonly HashedEventEnvelopeV1<unknown>
     assertNonEmpty(envelope.idempotencyKey, "EVENT_ENVELOPE_INVALID");
     if (domainDigest("horseness.event-payload.v1", envelope.payload) !== envelope.payloadHash) eventError("EVENT_PAYLOAD_HASH_INVALID");
     if (domainDigest("horseness.event-envelope.v1", envelope as unknown as JsonValue) !== item.envelopeHash) eventError("EVENT_ENVELOPE_HASH_INVALID");
-    const payload = envelope.payload;
-    if (typeof payload !== "object" || payload === null || Array.isArray(payload) || !("eventType" in payload) || payload.eventType !== envelope.eventType) eventError("EVENT_PAYLOAD_INVALID");
+    let payload: DomainEventPayloadV1;
+    try { payload = parseDomainEventPayloadV1(envelope.payload); } catch (error) { if (error instanceof DomainError && error.code === "UNSUPPORTED_EVENT_TYPE") throw error; eventError("MALFORMED_EVENT"); }
+    if (payload.eventType !== envelope.eventType) eventError("EVENT_PAYLOAD_INVALID");
     prior = item.envelopeHash;
   }
   const genesisType = streamKind === "workspace" ? "WorkspaceCreatedV1" : "RunCreatedV1";

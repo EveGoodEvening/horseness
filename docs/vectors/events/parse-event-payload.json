@@ -1,0 +1,5 @@
+{
+  "schemaVersion": "2", "familyVersion": "1", "family": "events", "case": "parse-event-payload-exact-schema", "action": "parseDomainEventPayloadV1",
+  "input": { "eventType": "DeltaAcceptedV1", "workspaceId": "ws", "runId": "run", "proposalId": "proposal", "proposalDigest": "pd", "priorStateHash": "before", "resultingStateHash": "after", "resultingDocument": { "ok": true } },
+  "expected": { "eventType": "DeltaAcceptedV1", "workspaceId": "ws", "runId": "run", "proposalId": "proposal", "proposalDigest": "pd", "priorStateHash": "before", "resultingStateHash": "after", "resultingDocument": { "ok": true } }
+}

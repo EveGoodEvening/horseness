@@ -1,1 +1,1 @@
-{"schemaVersion":"2","familyVersion":"1","family":"receipt","case":"seal-and-verify-receipt-exact-id","action":"receiptScenario","input":"ok","select":["receiptId"],"expected":"rcp_hq7n4rs7p3kxf7qm5ctsonol7ws6kf564cmx6jibgeo3qf2vp27q"}
+{"schemaVersion":"2","familyVersion":"1","family":"receipt","case":"seal-and-verify-receipt-exact-id","action":"receiptScenario","input":"ok","select":["receiptId"],"expected":"rcp_p2gqnysv4eawzmsk5i3mbdc6n5hfeycjr647ulgipmmspmktp7xq"}

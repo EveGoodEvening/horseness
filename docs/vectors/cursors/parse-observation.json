@@ -1,0 +1,5 @@
+{
+  "schemaVersion": "2", "familyVersion": "1", "family": "cursors", "case": "parse-composite-observation-cursor", "action": "parseObservationCursorV1",
+  "input": { "schemaVersion": "1", "kind": "composite", "workspaceId": "ws", "workspaceSequence": 2, "workspaceEnvelopeHash": "wh", "workspaceContextEpoch": 1, "runId": "run", "runSequence": 3, "runEnvelopeHash": "rh", "runContextEpoch": 4 },
+  "expected": { "schemaVersion": "1", "kind": "composite", "workspaceId": "ws", "workspaceSequence": 2, "workspaceEnvelopeHash": "wh", "workspaceContextEpoch": 1, "runId": "run", "runSequence": 3, "runEnvelopeHash": "rh", "runContextEpoch": 4 }
+}
