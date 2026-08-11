@@ -24,17 +24,17 @@ try {
 function verifyLiveBootstrap() {
   requireOptions("receipt", "checkpoint-index", "trust", "integrated-head");
   rejectFixturePaths(args.receipt, args["checkpoint-index"], args.trust);
-  const receipt = readCanonical(args.receipt);
-  const trust = readCanonical(args.trust);
+  const head = gitRev(args["integrated-head"]);
+  const receipt = readCanonicalBlob(head, args.receipt);
+  const trust = readCanonicalBlob(head, args.trust);
   verifyEnvelope(receipt, trust, "bootstrap-v1", "C00");
-  const rows = verifyIndex(args["checkpoint-index"], "checkpoint");
+  const rows = verifyIndexBlob(head, args["checkpoint-index"], "checkpoint");
   requireUnique(rows, (r) => r.receiptPath === args.receipt && r.receiptDigest === receipt.envelopeDigest, "bootstrap index membership");
   const core = receipt.core;
   assert(core.rootParent === null && core.workerBaseSha === null && core.claimAttemptDigest === null, "invalid bootstrap roots");
   assert(core.commandResults.length === 1, "bootstrap must contain one command");
   assert(core.commandResults[0].command === frozenC00Command(), "bootstrap command mismatch");
-  verifyCommandChronology(core, null);
-  const head = gitRev(args["integrated-head"]);
+  verifyCommandResults(core, [frozenC00Command()]);
   assert(isAncestor(core.candidateIntegrationSha, head), "bootstrap candidate is not an ancestor of integrated head");
   assert(gitTree(core.candidateIntegrationSha) === core.candidateTree, "bootstrap candidate tree mismatch");
 }
@@ -42,41 +42,48 @@ function verifyLiveBootstrap() {
 function verifyLiveClaim() {
   requireOptions("claim", "claim-index", "checkpoint-index", "trust", "now", "integrated-head");
   rejectFixturePaths(args.claim, args["claim-index"], args["checkpoint-index"], args.trust);
-  const claim = readCanonical(args.claim);
+  const head = gitRev(args["integrated-head"]);
+  const claimCommit = deriveClaimCommit(head, args.claim, args["claim-index"]);
+  const claim = readCanonicalBlob(claimCommit, args.claim);
   verifyClaim(claim, args.now);
-  const claimRows = verifyIndex(args["claim-index"], "claim");
+  const claimRows = verifyIndexBlob(claimCommit, args["claim-index"], "claim");
   requireUnique(claimRows, (r) => r.claimPath === args.claim && r.claimDigest === claim.claimDigest && r.preClaimBaseSha === claim.preClaimBaseSha, "claim index membership");
-  const checkpointRows = verifyIndex(args["checkpoint-index"], "checkpoint");
+  const checkpointRows = verifyIndexBlob(claimCommit, args["checkpoint-index"], "checkpoint");
   const dependency = checkpointRows.find((r) => r.receiptDigest === claim.dependencyReceiptDigests[0]);
   assert(dependency?.receiptPath, "claim dependency not indexed");
-  const dependencyEnvelope = readCanonical(dependency.receiptPath);
-  verifyEnvelope(dependencyEnvelope, readCanonical(args.trust), "bootstrap-v1", "C00");
-  const head = gitRev(args["integrated-head"]);
-  assert(gitParents(head).length === 1, "claim integration commit must have one parent");
-  assert(gitParents(head)[0] === claim.preClaimBaseSha, "claim pre-base is not integrated head parent");
+  const dependencyEnvelope = readCanonicalBlob(claimCommit, dependency.receiptPath);
+  verifyEnvelope(dependencyEnvelope, readCanonicalBlob(claimCommit, args.trust), "bootstrap-v1", "C00");
+  assert(gitParents(claimCommit).length === 1 && gitParents(claimCommit)[0] === claim.preClaimBaseSha, "claim integration parent mismatch");
+  assert(isAncestor(claimCommit, head), "claim commit is not an ancestor of integrated head");
   assert(isAncestor(dependencyEnvelope.core.candidateIntegrationSha, claim.preClaimBaseSha), "dependency is not integrated before claim");
-  assert(gitPath(head, args.claim) === safeRead(args.claim), "claim bytes differ from integrated head");
-  assert(gitPath(head, args["claim-index"]) === safeRead(args["claim-index"]), "claim index bytes differ from integrated head");
-  assert(currentBranch() === "main", "live integration branch must be main");
 }
 
 function verifyLiveReceipt() {
   requireOptions("receipt", "claim", "checkpoint-index", "trust", "integrated-head");
   rejectFixturePaths(args.receipt, args.claim, args["checkpoint-index"], args.trust);
-  const receipt = readCanonical(args.receipt);
-  const claim = readCanonical(args.claim);
+  const head = gitRev(args["integrated-head"]);
+  const receipt = readCanonicalBlob(head, args.receipt);
+  const claimCommit = deriveClaimCommit(head, args.claim, "docs/claims/index.jsonl");
+  const claim = readCanonicalBlob(claimCommit, args.claim);
   verifyClaim(claim, receipt.core.attestedAt, true);
-  verifyEnvelope(receipt, readCanonical(args.trust), undefined, claim.subjectId);
+  verifyEnvelope(receipt, readCanonicalBlob(head, args.trust), undefined, claim.subjectId);
   verifyOrdinary(receipt.core, claim, gitAdapter());
-  const rows = verifyIndex(args["checkpoint-index"], "checkpoint");
-  requireUnique(rows, (r) => r.receiptPath === args.receipt && r.receiptDigest === receipt.envelopeDigest, "receipt index membership");
-  assert(isAncestor(receipt.core.candidateIntegrationSha, gitRev(args["integrated-head"])), "receipt candidate is not integrated");
+  verifyFrozenSubject(receipt.core, claim);
+  const rows = verifyIndexBlob(head, args["checkpoint-index"], "checkpoint");
+  requireUnique(rows, (r) => r.receiptPath === args.receipt && r.receiptDigest === receipt.envelopeDigest && r.candidateIntegrationSha === receipt.core.candidateIntegrationSha, "receipt index membership");
+  assert(isAncestor(receipt.core.candidateIntegrationSha, head), "receipt candidate is not integrated");
+  verifyAuthorizedCandidate(claimCommit, receipt.core.candidateIntegrationSha, claim.allowedPaths);
 }
 
 function verifyLiveResume() {
   verifyLiveReceipt();
-  const receipt = readCanonical(args.receipt);
-  assert(isAncestor(receipt.core.candidateIntegrationSha, gitRev(args["integrated-head"])), "attested candidate missing from resume head");
+  requireOptions("progress", "subject-progress");
+  const head = gitRev(args["integrated-head"]);
+  const receipt = readCanonicalBlob(head, args.receipt);
+  for (const file of [args.receipt, args["checkpoint-index"], args.progress, args["subject-progress"]]) assertBlobAt(head, file);
+  const parent = gitParents(head);
+  assert(parent.length === 1 && isAncestor(receipt.core.candidateIntegrationSha, parent[0]), "resume head must be the atomic attestation commit");
+  for (const file of [args.receipt, args["checkpoint-index"], args.progress, args["subject-progress"]]) assert(blobOid(head, file) !== blobOidOptional(parent[0], file), `attestation did not atomically integrate ${file}`);
 }
 
 function verifyFixtureBundle() {
@@ -139,6 +146,7 @@ function verifyEnvelope(env, trust, variant, subject) {
   const key = trust.keys.find((k) => k.keyId === env.signature.keyId);
   assert(key, "TRUST_KEY_UNKNOWN");
   assert(key.principalId === env.signature.principalId, "TRUST_PRINCIPAL_MISMATCH");
+  verifyCommandResults(env.core, commandsForCore(env.core));
   const at = timestamp(env.core.attestedAt, "attestedAt");
   assert(at >= timestamp(key.notBefore, "notBefore") && at < timestamp(key.notAfter, "notAfter"), "TRUST_KEY_TIME");
   assert(key.revokedAt === null || at < timestamp(key.revokedAt, "revokedAt"), "TRUST_KEY_REVOKED");
@@ -146,7 +154,6 @@ function verifyEnvelope(env, trust, variant, subject) {
   const der = Buffer.from(key.publicKeySpkiBase64, "base64");
   assert(key.spkiFingerprint === `sha256:${sha(der)}`, "SPKI_FINGERPRINT_MISMATCH");
   assert(crypto.verify(null, Buffer.from(`horseness.checkpoint-receipt-signature.v1\0${coreDigest}`), crypto.createPublicKey({ key: der, format: "der", type: "spki" }), Buffer.from(env.signature.signatureBase64, "base64")), "SIGNATURE_INVALID");
-  verifyCommandChronology(env.core, null);
 }
 
 function verifyClaim(claim, now, allowCompleted = false) {
@@ -170,13 +177,27 @@ function verifyOrdinary(core, claim, adapter) {
   assert(adapter.parents(core.claimIntegrationSha).length === 1 && adapter.parents(core.claimIntegrationSha)[0] === claim.preClaimBaseSha, "claim integration parent mismatch");
   assert(adapter.isAncestor(core.workerBaseSha, core.workerCandidateSha) && adapter.isAncestor(core.workerBaseSha, core.candidateIntegrationSha), "candidate ancestry mismatch");
   assert(adapter.tree(core.workerCandidateSha) === core.candidateTree && adapter.tree(core.candidateIntegrationSha) === core.candidateTree, "candidate tree mismatch");
-  verifyCommandChronology(core, claim.expiresAt);
+  verifyCommandResults(core, commandsForCore(core), claim.expiresAt);
 }
 
-function verifyCommandChronology(core, expiresAt) {
+function verifyCommandResults(core, expectedCommands, expiresAt = null) {
+  assert(Array.isArray(core.commandResults), "commandResults must be an array");
+  if (expectedCommands) assert(core.commandResults.length === expectedCommands.length, "command result count mismatch");
   let cursor = timestamp(core.candidateSealedAt, "candidateSealedAt");
+  const keys = ["artifacts","command","environmentDigest","exitCode","finishedAt","ordinal","resultDigest","startedAt","stderrDigest","stdoutDigest"];
   core.commandResults.forEach((result, ordinal) => {
+    assert(result && typeof result === "object" && !Array.isArray(result), `command ${ordinal} must be CommandResultV1`);
+    assert(Object.keys(result).sort().join("\0") === keys.join("\0"), `command ${ordinal} has invalid fields`);
     assert(result.ordinal === ordinal, `command ordinal mismatch: ${ordinal}`);
+    if (expectedCommands) assert(result.command === expectedCommands[ordinal], `command mismatch: ${ordinal}`);
+    assert(typeof result.command === "string" && result.command.length > 0 && result.exitCode === 0, `command ${ordinal} failed or is invalid`);
+    for (const field of ["environmentDigest","stdoutDigest","stderrDigest","resultDigest"]) assertDigest(result[field], `command ${ordinal} ${field}`);
+    assert(Array.isArray(result.artifacts), `command ${ordinal} artifacts invalid`);
+    if (core.subjectId === "C01") assert(result.artifacts.length === 0, `C01 command ${ordinal} artifacts must be empty`);
+    for (const artifact of result.artifacts) {
+      assert(artifact && typeof artifact === "object" && !Array.isArray(artifact) && Object.keys(artifact).sort().join("\0") === "digest\0path", `command ${ordinal} artifact shape invalid`);
+      normalizeRelative(artifact.path); assertDigest(artifact.digest, `command ${ordinal} artifact digest`);
+    }
     const start = timestamp(result.startedAt, `command ${ordinal} start`), finish = timestamp(result.finishedAt, `command ${ordinal} finish`);
     assert(start >= cursor && finish >= start, `command chronology mismatch: ${ordinal}`); cursor = finish;
   });
@@ -185,9 +206,27 @@ function verifyCommandChronology(core, expiresAt) {
   if (expiresAt) assert(timestamp(core.candidateSealedAt) < timestamp(expiresAt) && attested < timestamp(expiresAt), "receipt exceeds claim expiry");
 }
 
+function verifyFrozenSubject(core, claim) {
+  assert(core.subjectId === claim.subjectId && core.attemptGeneration === claim.attemptGeneration, "subject attempt mismatch");
+  assert(core.acceptanceContractVersion === `v4:${claim.subjectId}`, "acceptance contract mismatch");
+  for (const field of ["dependencyReceiptDigests","priorAttemptDigests"]) assert(jcs(core[field]) === jcs(claim[field]), `${field} mismatch`);
+  assert(core.supersedesReceiptDigest === null && claim.supersedesAttemptDigest === null, "unexpected supersession");
+  assert(core.sideEffectHead === null && core.ciIdentity === null, "C01 frozen side-effect contract mismatch");
+}
+
+function verifyAuthorizedCandidate(base, candidate, allowedPaths) {
+  const changed = git("diff", "--name-only", "--diff-filter=ACDMRTUXB", `${base}..${candidate}`).trim().split("\n").filter(Boolean);
+  const allowed = new Set(allowedPaths);
+  for (const file of changed) assert(allowed.has(file), `candidate contains unauthorized path: ${file}`);
+}
+
 function verifyIndex(file, kind, fixtureRoot = null) {
   if (!fixtureRoot) rejectFixturePaths(file);
-  const raw = safeRead(file); assert(raw.endsWith("\n"), `${kind} index lacks final newline`);
+  return verifyIndexRaw(safeRead(file), kind);
+}
+
+function verifyIndexRaw(raw, kind) {
+  assert(raw.endsWith("\n"), `${kind} index lacks final newline`);
   let prior = null;
   return raw.trimEnd().split("\n").map((line, ordinal) => {
     const row = JSON.parse(line); assert(line === jcs(row), `${kind} index line is noncanonical`);
@@ -220,9 +259,28 @@ function gitRev(ref) { return git("rev-parse", "--verify", `${ref}^{commit}`).tr
 function gitTree(ref) { return git("rev-parse", `${ref}^{tree}`).trim(); }
 function gitParents(ref) { return git("show", "-s", "--format=%P", ref).trim().split(/\s+/).filter(Boolean); }
 function isAncestor(a, b) { try { execFileSync("git", ["merge-base", "--is-ancestor", a, b], { stdio: "ignore" }); return true; } catch { return false; } }
-function currentBranch() { return git("symbolic-ref", "--short", "HEAD").trim(); }
 function gitPath(ref, file) { return git("show", `${ref}:${normalizeRelative(file)}`); }
 function git(...argv) { return execFileSync("git", argv, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
+function readCanonicalBlob(ref, file) { const raw = readBlob(ref, file), value = JSON.parse(raw); assert(raw === jcs(value), `noncanonical JSON blob: ${file}`); return value; }
+function verifyIndexBlob(ref, file, kind) { const raw = readBlob(ref, file); return verifyIndexRaw(raw, kind); }
+function readBlob(ref, file) { assertBlobAt(ref, file); return gitPath(ref, file); }
+function assertBlobAt(ref, file) { const entry = git("ls-tree", ref, "--", normalizeRelative(file)).trim().split(/\s+/); assert(entry.length >= 3 && entry[0] === "100644" && entry[1] === "blob", `authoritative input is not a regular 100644 Git blob: ${file}`); }
+function blobOid(ref, file) { assertBlobAt(ref, file); return git("rev-parse", `${ref}:${normalizeRelative(file)}`).trim(); }
+function blobOidOptional(ref, file) { try { return git("rev-parse", `${ref}:${normalizeRelative(file)}`).trim(); } catch { return null; } }
+function deriveClaimCommit(head, claimPath, indexPath) {
+  const commits = git("rev-list", head).trim().split("\n").filter(Boolean);
+  for (const commit of commits) {
+    try {
+      const claim = readCanonicalBlob(commit, claimPath);
+      const rows = verifyIndexBlob(commit, indexPath, "claim");
+      if (gitParents(commit).length === 1 && gitParents(commit)[0] === claim.preClaimBaseSha && rows.some((r) => r.claimPath === claimPath && r.claimDigest === claim.claimDigest && r.preClaimBaseSha === claim.preClaimBaseSha)) return commit;
+    } catch {
+      // A malformed or unverifiable candidate is ineligible; keep searching and fail closed below if none qualify.
+      continue;
+    }
+  }
+  throw new Error("unable to derive claim integration commit from claim/index ancestry");
+}
 function readCanonical(file) { const raw = safeRead(file), value = JSON.parse(raw); assert(raw === jcs(value), `noncanonical JSON: ${file}`); return value; }
 function safeRead(file) { const relative = normalizeRelative(file), absolute = path.join(root, relative); let cursor = root; for (const part of relative.split("/")) { cursor = path.join(cursor, part); assert(!fs.lstatSync(cursor).isSymbolicLink(), `symlink rejected: ${file}`); } assert(fs.realpathSync(absolute) === absolute && fs.statSync(absolute).isFile(), `unsafe file: ${file}`); return fs.readFileSync(absolute, "utf8"); }
 function safeDirectory(dir) { const relative = normalizeRelative(dir), absolute = path.join(root, relative); assert(fs.realpathSync(absolute) === absolute && fs.statSync(absolute).isDirectory(), `unsafe directory: ${dir}`); return absolute; }
@@ -233,10 +291,40 @@ function jcs(value) { if (value === null) return "null"; if (Array.isArray(value
 function sha(value) { return crypto.createHash("sha256").update(value).digest("hex"); }
 function domain(name, value) { return sha(Buffer.concat([Buffer.from(`${name}\0`), Buffer.from(jcs(value))])); }
 function without(object, key) { return Object.fromEntries(Object.entries(object).filter(([name]) => name !== key)); }
+function assertDigest(value, label) { assert(typeof value === "string" && /^[0-9a-f]{64}$/.test(value), `invalid ${label}`); }
 function requireUnique(rows, predicate, label) { assert(rows.filter(predicate).length === 1, `expected exactly one ${label}`); }
 function requireOptions(...names) { for (const name of names) assert(typeof args[name] === "string", `missing --${name}`); }
 function assert(condition, message) { if (!condition) throw new Error(message); }
 function parseArgs(argv) { const result = { _: [] }; for (let i = 0; i < argv.length; i++) { const value = argv[i]; if (!value.startsWith("--")) { result._.push(value); continue; } const name = value.slice(2); if (name === "strict") result.strict = true; else { assert(i + 1 < argv.length && !argv[i + 1].startsWith("--"), `missing value for --${name}`); result[name] = argv[++i]; } } return result; }
 function frozenC00Command() { return `node -e "$(cat docs/validation/c00-contract-gate.node-e.txt)"`; }
+function c00ManifestCheckCommand() { return `node -e "const fs=require('fs'),crypto=require('crypto');const p=fs.readFileSync('docs/validation/c00-contract-gate.node-e.txt'),d=JSON.parse(fs.readFileSync('docs/checkpoints/fixtures/digests.json')),s=fs.readFileSync('scripts/c00-contract-gate.mjs','utf8');if(d.c00ProgramSha256!==crypto.createHash('sha256').update(p).digest('hex')||!s.includes('c00-contract-gate-v4'))process.exit(1)"`; }
+function frozenC01Commands() { return [
+  c00ManifestCheckCommand(),
+  frozenC00Command(),
+  "node scripts/c00-contract-gate.mjs",
+  "node scripts/progress-cas.mjs verify-live-bootstrap --receipt docs/checkpoints/C00/bootstrap/0.json --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --integrated-head HEAD --strict",
+  "node scripts/progress-cas.mjs verify-live-claim --claim docs/claims/C01/1.json --claim-index docs/claims/index.jsonl --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --now 2026-01-01T00:30:00Z --integrated-head HEAD --strict",
+  "node scripts/progress-cas.mjs verify-fixture-bundle --bundle docs/checkpoints/fixtures/c01-bundle-v1 --strict",
+  "corepack pnpm install --frozen-lockfile",
+  "corepack pnpm run docs:lint",
+  "corepack pnpm run typecheck",
+  "corepack pnpm run lint",
+  "corepack pnpm run test",
+  "corepack pnpm run boundaries:check"
+]; }
+function frozenC01V3Commands() { return [
+  `node -e "const fs=require('fs'),crypto=require('crypto');const a=fs.readFileSync('docs/validation/c00-contract-gate.node-e.txt'),b=fs.readFileSync('scripts/c00-contract-gate.mjs');if(!a.equals(b))process.exit(1);console.log(crypto.createHash('sha256').update(a).digest('hex'))"`,
+  "node scripts/c00-contract-gate.mjs",
+  "node scripts/progress-cas.mjs verify-live-bootstrap --receipt docs/checkpoints/C00/bootstrap/0.json --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --integrated-head HEAD --strict",
+  "node scripts/progress-cas.mjs verify-live-claim --claim docs/claims/C01/1.json --claim-index docs/claims/index.jsonl --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --now 2026-01-01T00:30:00Z --integrated-head HEAD --strict",
+  "node scripts/progress-cas.mjs verify-fixture-bundle --bundle docs/checkpoints/fixtures/c01-bundle-v1 --strict",
+  "corepack pnpm install --frozen-lockfile",
+  "corepack pnpm run docs:lint",
+  "corepack pnpm run typecheck",
+  "corepack pnpm run lint",
+  "corepack pnpm run test",
+  "corepack pnpm run boundaries:check"
+]; }
+function commandsForCore(core) { if (core.subjectId !== "C01") return undefined; return core.acceptanceContractVersion === "v3:C01" ? frozenC01V3Commands() : frozenC01Commands(); }
 function usage() { console.error("Usage: progress-cas.mjs <verify-live-bootstrap|verify-live-claim|verify-live-receipt|verify-live-resume|verify-fixture-bundle|verify-planning-correction> [options] --strict"); process.exit(2); }
 function c01AllowedPaths() { return ["package.json","pnpm-workspace.yaml","pnpm-lock.yaml","tsconfig.base.json","eslint.config.js",".npmrc",".node-version",".github/workflows/ci.yml",".changeset/config.json","scripts/acceptance.mjs","scripts/c00-contract-gate.mjs","scripts/progress-cas.mjs","scripts/boundaries-check.mjs","README.md","docs/progress/C01.md","docs/progress.md","docs/checkpoints/C01/final/1.json","docs/checkpoints/index.jsonl","docs/claims/C01/1.json","docs/claims/index.jsonl","packages/domain/package.json","packages/domain/src/index.ts","packages/protocol/package.json","packages/protocol/src/index.ts","packages/policy/package.json","packages/policy/src/index.ts","packages/store-sqlite/package.json","packages/store-sqlite/src/index.ts","packages/orchestrator/package.json","packages/orchestrator/src/index.ts","packages/sdk/package.json","packages/sdk/src/index.ts","packages/adapter-kit/package.json","packages/adapter-kit/src/index.ts","packages/installer/package.json","packages/installer/src/index.ts","apps/daemon/package.json","apps/daemon/src/index.ts","apps/cli/package.json","apps/cli/src/index.ts","adapters/pi/package.json","adapters/pi/src/index.ts","adapters/omp/package.json","adapters/omp/src/index.ts","adapters/claude/package.json","adapters/claude/src/index.ts","adapters/codex/package.json","adapters/codex/src/index.ts"]; }

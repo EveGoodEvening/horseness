@@ -10,6 +10,7 @@
   },
   "scripts": {
     "docs:lint": "markdownlint-cli2 README.md docs/**/*.md",
+    "c00:contract": "node scripts/c00-contract-gate.mjs",
     "typecheck": "pnpm -r --if-present run typecheck",
     "lint": "pnpm -r --if-present run lint && eslint scripts/*.mjs eslint.config.js --max-warnings=0",
     "test": "pnpm -r --if-present run test",

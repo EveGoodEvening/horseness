@@ -4,20 +4,20 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 
 ## Global status
 
-- **Planning state:** C00 bootstrap candidate `9182cba4d2e43d2bab1e044febfab8a1ce2c3db8` / tree `949bbcc2dda270a85cd0fbab3cdb861ab7199076` is signed, indexed, and complete on integration branch `main`
-- **Active claims:** C01 generation 1, `in-progress`; claim `docs/claims/C01/1.json`, digest `6a7a8dc27c9f8da914f6a52c89b6f5c05198f3985572adb6ff6597db2979b4c1`, expires `2026-08-11T22:55:29Z`
-- **Next eligible:** none while C01 generation 1 is active; integrate K01 and run its frozen live checker before any C01 source edit
-- **Active blockers:** none
+- **Planning state:** C01 live-graph correction v4 is active; candidate `2d4e4f62fb779c988bc7a774cd402ae47736b105` has no valid integrated A01
+- **Active claims:** C01 generation 1 only
+- **Next eligible:** none; C02 remains ineligible until corrected C01 evidence and A01 integrate
+- **Active blockers:** candidate path cleanup, K01-from-graph verifier correction, universal gate evidence, and integrated re-attestation
 - **Last integrated receipt:** C00 `docs/checkpoints/C00/bootstrap/0.json`, envelope digest `ef53151d3b520d1175a8ca0a1a3fece3526de18e9c3cd9cf30299bb6b3b28c87`
 - **Release readiness:** not started
 - **Base chunk count:** 26 (`C00`–`C25`)
-- **Dynamic planning/remediation/revalidation count:** 0
+- **Dynamic planning/remediation/revalidation count:** 1 versioned C01 contract correction; no P/R/V node completed
 
 ## Atomic claim and attestation protocol
 
 Valid base/remediation statuses are `not-started`, `claimed`, `in-progress`, `blocked`, `verification`, `complete`, and `stale`; planning-correction nodes additionally use those same statuses. Only `not-started`, or `stale` with remediation dependencies complete, is claimable. Every execution has a numbered claim-attempt generation; renewal, detector blocking, and post-remediation resume supersede the old generation and require a fresh integrated base and matching W/I candidate.
 
-The non-self-referential graph in `docs/plan.md` is authoritative. C00 uses the root `bootstrap-v1` receipt at `docs/checkpoints/C00/bootstrap/0.json`; C01 uses the single tool-free claim exception at `docs/claims/C01/1.json` and begins the ordinary candidate graph. Thereafter every claim generation is an immutable JSON record under `docs/claims/<ID>/<generation>.json`, authenticated by the append-only claim index and referenced—not embedded—by its Markdown ledger. Each claim/index/ledger binds only the pre-claim parent; the verifier obtains the claim commit K/B1 from integrated HEAD and proves its tree, paths, parent, and ancestry. Claim commit integrates as worker base `B1`; worker candidate `W` integrates as `I`; acceptance runs against `I`; attestation `A` contains a receipt naming the attempt/base/W/I but never A.
+The non-self-referential graph in `docs/plan.md` is authoritative. C00 uses the root `bootstrap-v1` receipt at `docs/checkpoints/C00/bootstrap/0.json`; C01 uses the single tool-free claim exception at `docs/claims/C01/1.json` and begins the ordinary candidate graph. Each claim/index/ledger binds only the pre-claim parent. When invoked at candidate or attestation `HEAD`, the live verifier derives the unique K/B1 ancestor from immutable Git claim/index/ledger blobs, proves its sole parent and ancestry, and never assumes current `HEAD` is K/B1. Claim commit integrates as worker base B1; worker candidate W integrates as I; acceptance runs against I; attestation A follows I.
 
 Durable findings use one atomic emergency transaction for `FindingV1`, index append, detector ledger, and blocked summary status. A serialized `PNNN` using `P-acceptance-v1` must attest before any new R/V node becomes eligible. Status/count/dependency changes are atomic with that P receipt. During divergence, this integrated summary is authoritative.
 
@@ -27,7 +27,7 @@ Durable findings use one atomic emergency transaction for `FindingV1`, index app
 |---|---|---|---|
 | C00 | Tool-free contract freeze | — | complete |
 | C01 | Bootstrap/CI | C00 | in-progress |
-| C02 | Domain and transition contracts | C01 | not-started |
+| C02 | Domain and transition contracts | C01 | not-started; ineligible |
 | C03 | Protocol | C02 | not-started |
 | C04 | Policy/admission evaluator | C03 | not-started |
 | C05 | SQLite 0001/artifacts | C04 | not-started |
@@ -54,14 +54,12 @@ Durable findings use one atomic emergency transaction for `FindingV1`, index app
 
 ## Planning correction, remediation, and revalidation accounting
 
-Findings use immutable `FNNN` receipts in `docs/findings/`. A `PNNN` correction owns all five planning artifacts plus the exact finding-bound normative-document list defined in `docs/plan.md`, validates finding/index digests, freezes R commands/ownership, appends R/V nodes without renumbering history, increments counts, and marks affected evidence stale. R depends on the finding plus last-good source receipts, never the blocked detector. V depends on R and reruns the stale chunk's frozen acceptance contract version. Blocked and unremediated stale nodes are ineligible. Resume priority is exactly `P -> R -> V -> C`; a ready P preempts new lower-class claims and selection of a lower class is invalid.
-
-Worked recovery: C21 detects a C07 defect and atomically emits F001 plus blocked status. P001 attests the correction, adds R001 depending on F001+C06, marks C07–C20 stale, and adds chained V001–V014. R001 becomes eligible only after P001. Final V closes the finding and changes C21 to `not-started`; C21 then claims a new attempt from the remediated head and reruns its complete acceptance. Publication findings also bind the release version to `partial`, `abandoned`, or `revoked`; promotion cannot proceed until exact reconciliation or a planned version rollover completes.
+The C01 v4 correction is a narrowly authorized bootstrap-contract remediation, not a retroactive expansion of candidate ownership and not a completed P/R/V checkpoint. It changes only the impossible live K01 selection rule, permits the named `.mjs` gate to be a versioned universal executable rather than a byte-identical copy, and makes prior C01 acceptance/receipt evidence stale. K01 claim writes, W01/I01 source writes, and A01 attestation writes are accounted separately. Install outputs such as `node_modules/**` remain unauthorized and must be removed rather than added to the claim. C02 remains ineligible until corrected evidence and a new signed A01 integrate.
 
 ## Resume instructions
 
-Read `AGENTS.md`, architecture, plan, compatibility, trust root, this summary, `docs/claims/index.jsonl`, checkpoint/finding/publication indexes, and active P/R/V/C ledgers. C01 generation 1 is claimed at `docs/claims/C01/1.json` from pre-claim base `ca318521e4dd9132111f13f2af399ed942015138` and expires `2026-08-11T22:55:29Z`; after K01 integration and before any C01 source edit, run exactly `node -e "$(cat docs/validation/c01-claim-check.node-e.txt)" -- --claim docs/claims/C01/1.json --now 2026-08-11T14:55:29Z --integrated-head HEAD`. Then verify canonical claim files, both claim/checkpoint index chains, signed receipt core/envelope digests, Ed25519 trust lookup/revocation/scope, dependency digests, expiry at candidate sealing and attestation, supersession chain, exact allowed/ADR/acceptance paths, candidate tree, and the complete side-effect head; never infer status from a worktree. Integration is exactly `main`. Fixture algorithms run only through the isolated bundle command. Select only the eligible unowned node under `P -> R -> V -> C` priority. Dependency completion means a valid indexed signed checkpoint receipt and, for acceptance-dependent task edges, the exact durable `DeltaAcceptedV1` completion predicate. C22–C25 resume lookup-first from integrated intents/results.
+Read `AGENTS.md`, architecture, plan, compatibility, trust root, this summary, the claim/checkpoint indexes, and `docs/progress/C01.md`. Resume C01 generation 1 from candidate `2d4e4f62fb779c988bc7a774cd402ae47736b105`: remove paths outside the sealed C01 source/config set, make live verification derive K01 `2e6b9e40a2cdacf4ebff154cbd2a6edc163fe1f1` from immutable Git blobs while invoked at candidate/attestation HEAD, regenerate corrected gate/acceptance evidence, and integrate a new signed A01. Do not claim or start C02.
 
 ## Planning review status
 
-The definitive correction resolves every blocker/high in `local://plan-definitive-findings.json`. C00 is complete under signed indexed bootstrap receipt `docs/checkpoints/C00/bootstrap/0.json` with envelope digest `ef53151d3b520d1175a8ca0a1a3fece3526de18e9c3cd9cf30299bb6b3b28c87`; C01 generation 1 is claimed and in progress under claim digest `6a7a8dc27c9f8da914f6a52c89b6f5c05198f3985572adb6ff6597db2979b4c1`.
+The definitive review is reopened only for C01 live-graph correction v4. C00 remains historically complete under its signed bootstrap receipt. C01 is `in-progress`; its prior receipt/evidence is stale because live verification equated current HEAD with K01 and the byte-equality gate is superseded. C02 remains `not-started` and ineligible.

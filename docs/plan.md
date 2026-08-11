@@ -462,3 +462,25 @@ C11 feasibility records, and C15–C18 enforce, host-native credential storage, 
 ### Definitive review log
 
 All blocker/high findings in `local://plan-definitive-findings.json` are resolved: live A00/K01 authentication and ancestry, canonical time/symlink/index/trusted-time checks, isolated fixture verification, corrected receipt provenance/chronology, non-cyclic Ed25519 receipt envelopes and trust vectors, acceptance-gated task completion across races/restarts/hosts, native worker-return loops, exhaustive main-agent control surfaces, aligned `main` branch release identity, and remaining adapter/security closure.
+
+## C01 live-graph correction v4
+
+This versioned correction supersedes only conflicting C01 bootstrap-copy, live-claim, candidate-path, and completion statements above. It does not alter the historical C00 receipt or assert that corrected bytes were present in W00/A00. C01 remains `in-progress` until a new integrated, signed A01 proves this contract.
+
+### Candidate and attestation graph
+
+All C01 acceptance commands execute with the candidate integration or later attestation commit checked out; `HEAD` is therefore an upper graph bound, not an assertion that `HEAD = K01`. A live verifier MUST identify K01 from immutable Git objects by locating the unique ancestor transition whose parent is the claim's `preClaimBaseSha`, whose commit introduces the exact canonical `docs/claims/C01/1.json` blob and matching appended `docs/claims/index.jsonl` blob, and whose tree contains the exact claim/index/ledger bytes. It MUST then prove `A00 -> K01 -> W01 -> I01 -> HEAD`, K01 has sole parent A00, `claimIntegrationSha = workerBaseSha = K01`, W/I tree equality, and the candidate/attestation ancestry required by the signed receipt. Zero or multiple matching K01 commits fails closed. The claim command continues to receive `--integrated-head HEAD`; it derives and verifies K01 and MUST NOT treat that argument as K01.
+
+Live verification binds every asserted file to immutable Git tree entries and blob bytes at the derived commits, not mutable working-tree bytes. Working-tree reads are permitted only to load the verifier executable and arguments; claim, index, ledger, trust, receipt, and candidate evidence is compared to the selected Git blobs.
+
+### Universal C00 gate executable
+
+`docs/validation/c00-contract-gate.node-e.txt` is the versioned planning validation source. `scripts/c00-contract-gate.mjs` is a C01-owned universal executable implementation of that contract; it need not be byte-for-byte identical to the historical Node `-e` text. C01 acceptance verifies the executable's declared contract version and the corrected digest manifest, then runs both the Node `-e` source and the named `.mjs` executable. This correction updates the planning program digest prospectively and does not rewrite, replace, or reinterpret C00's signed A00 evidence.
+
+### Exact C01 write accounting
+
+K01 owns only `docs/claims/C01/1.json`, its single append to `docs/claims/index.jsonl`, and the claim-state updates to `docs/progress/C01.md` and `docs/progress.md`. W01/I01 candidate authorization remains the exact C01 source/config path set already sealed by the claim. Attestation A01 owns only `docs/progress/C01.md`, `docs/progress.md`, `docs/checkpoints/C01/final/1.json`, and the single append to `docs/checkpoints/index.jsonl`. Claim and attestation records are not candidate source changes. Install-created or ignored outputs, including `node_modules/**`, caches, logs, and unsealed evidence transcripts, are never retroactively authorized; they must be removed from the candidate tree and are not C01 deliverables.
+
+### Corrected effective C01 acceptance prefix
+
+The former byte-equality command is void. The complete effective ordered `v4:C01` list is exactly twelve commands: (1) `node scripts/acceptance.mjs verify-manifest --subject C01 --version v4:C01`; (2) `node -e "$(cat docs/validation/c00-contract-gate.node-e.txt)"`; (3) `node scripts/c00-contract-gate.mjs`; (4) `node scripts/progress-cas.mjs verify-live-bootstrap --receipt docs/checkpoints/C00/bootstrap/0.json --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --integrated-head HEAD --strict`; (5) `node scripts/progress-cas.mjs verify-live-claim --claim docs/claims/C01/1.json --claim-index docs/claims/index.jsonl --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --now 2026-08-11T16:11:30Z --integrated-head HEAD --strict`; (6) `node scripts/progress-cas.mjs verify-fixture-bundle --bundle docs/checkpoints/fixtures/c01-bundle-v1 --strict`; (7) `corepack pnpm install --frozen-lockfile`; (8) `corepack pnpm run docs:lint`; (9) `corepack pnpm run typecheck`; (10) `corepack pnpm run lint`; (11) `corepack pnpm run test`; (12) `corepack pnpm run boundaries:check`. Command 1 validates the frozen in-code subject, version, ordered manifest, uniqueness, and self-identifying first entry without reading or requiring the not-yet-created final receipt. Exact command-result records and signatures must be regenerated; prior C01 acceptance and A01 records do not satisfy this corrected version.
