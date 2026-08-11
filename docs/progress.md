@@ -7,7 +7,7 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 - **Planning state:** C01 live-graph correction v4 is active; candidate `2d4e4f62fb779c988bc7a774cd402ae47736b105` has no valid integrated A01
 - **Active claims:** C01 generation 1 only
 - **Next eligible:** none; C02 remains ineligible until corrected C01 evidence and A01 integrate
-- **Active blockers:** candidate path cleanup, K01-from-graph verifier correction, universal gate evidence, and integrated re-attestation
+- **Active blockers:** candidate reseal, K01-from-graph verifier correction, universal gate evidence, and integrated re-attestation; install-output cleanup is complete
 - **Last integrated receipt:** C00 `docs/checkpoints/C00/bootstrap/0.json`, envelope digest `ef53151d3b520d1175a8ca0a1a3fece3526de18e9c3cd9cf30299bb6b3b28c87`
 - **Release readiness:** not started
 - **Base chunk count:** 26 (`C00`–`C25`)
@@ -54,11 +54,11 @@ Durable findings use one atomic emergency transaction for `FindingV1`, index app
 
 ## Planning correction, remediation, and revalidation accounting
 
-The C01 v4 correction is a narrowly authorized bootstrap-contract remediation, not a retroactive expansion of candidate ownership and not a completed P/R/V checkpoint. It changes only the impossible live K01 selection rule, permits the named `.mjs` gate to be a versioned universal executable rather than a byte-identical copy, and makes prior C01 acceptance/receipt evidence stale. K01 claim writes, W01/I01 source writes, and A01 attestation writes are accounted separately. Install outputs such as `node_modules/**` remain unauthorized and must be removed rather than added to the claim. C02 remains ineligible until corrected evidence and a new signed A01 integrate.
+The C01 v4 correction is a narrowly authorized bootstrap-contract remediation, not a retroactive expansion of candidate ownership and not a completed P/R/V checkpoint. It changes only the impossible live K01 selection rule, permits the named `.mjs` gate to be a versioned universal executable rather than a byte-identical copy, and makes prior C01 acceptance/receipt evidence stale. K01 claim writes, W01/I01 source writes, and A01 attestation writes are accounted separately. Unauthorized install outputs and workspace `node_modules` symlinks have been removed rather than added to the claim. C01 remains in progress pending reseal, corrected acceptance, and A01; C02 remains ineligible until corrected evidence and a new signed A01 integrate.
 
 ## Resume instructions
 
-Read `AGENTS.md`, architecture, plan, compatibility, trust root, this summary, the claim/checkpoint indexes, and `docs/progress/C01.md`. Resume C01 generation 1 from candidate `2d4e4f62fb779c988bc7a774cd402ae47736b105`: remove paths outside the sealed C01 source/config set, make live verification derive K01 `2e6b9e40a2cdacf4ebff154cbd2a6edc163fe1f1` from immutable Git blobs while invoked at candidate/attestation HEAD, regenerate corrected gate/acceptance evidence, and integrate a new signed A01. Do not claim or start C02.
+Read `AGENTS.md`, architecture, plan, compatibility, trust root, this summary, the claim/checkpoint indexes, and `docs/progress/C01.md`. Resume C01 generation 1 after completed install-output cleanup: reseal the candidate from derived K01 `2e6b9e40a2cdacf4ebff154cbd2a6edc163fe1f1`, make live verification derive K01 from immutable Git blobs while invoked at candidate/attestation HEAD, regenerate corrected gate/acceptance evidence, and integrate a new signed A01. Do not claim or start C02.
 
 ## Planning review status
 

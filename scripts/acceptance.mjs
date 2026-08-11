@@ -1,23 +1,8 @@
 import { readFile } from "node:fs/promises";
 import process from "node:process";
+import { C01_ACCEPTANCE_COMMANDS, C01_ACCEPTANCE_VERSION } from "./progress-cas.mjs";
 
-const C01_VERSION = "v4:C01";
-const C01_MANIFEST_COMMAND = `node scripts/acceptance.mjs verify-manifest --subject C01 --version ${C01_VERSION}`;
-const C01 = [
-  C01_MANIFEST_COMMAND,
-  `node -e "$(cat docs/validation/c00-contract-gate.node-e.txt)"`,
-  "node scripts/c00-contract-gate.mjs",
-  "node scripts/progress-cas.mjs verify-live-bootstrap --receipt docs/checkpoints/C00/bootstrap/0.json --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --integrated-head HEAD --strict",
-  "node scripts/progress-cas.mjs verify-live-claim --claim docs/claims/C01/1.json --claim-index docs/claims/index.jsonl --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --now 2026-08-11T16:11:30Z --integrated-head HEAD --strict",
-  "node scripts/progress-cas.mjs verify-fixture-bundle --bundle docs/checkpoints/fixtures/c01-bundle-v1 --strict",
-  "corepack pnpm install --frozen-lockfile",
-  "corepack pnpm run docs:lint",
-  "corepack pnpm run typecheck",
-  "corepack pnpm run lint",
-  "corepack pnpm run test",
-  "corepack pnpm run boundaries:check"
-];
-const contracts = new Map([["C01", { commands: C01, version: C01_VERSION }]]);
+const contracts = new Map([["C01", { commands: C01_ACCEPTANCE_COMMANDS, version: C01_ACCEPTANCE_VERSION }]]);
 const [mode, ...args] = process.argv.slice(2);
 if (mode === "verify-manifest") verifyManifest(args);
 const [id, file] = args;

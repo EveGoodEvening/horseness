@@ -42,9 +42,24 @@ jobs:
       - run: corepack pnpm run lint
       - run: corepack pnpm run test
       - run: corepack pnpm run boundaries:check
-      - run: node scripts/progress-cas.mjs verify-live-receipt --receipt docs/checkpoints/C01/final/1.json --claim docs/claims/C01/1.json --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --integrated-head HEAD --strict
-      - run: node scripts/acceptance.mjs verify C01 docs/checkpoints/C01/final/1.json
-      - name: Verify atomic live attestation
+      - name: Detect final attestation
+        id: attestation
+        shell: bash
         run: |
-          attestation_head="$(git log -1 --format=%H -- docs/checkpoints/C01/final/1.json)"
-          node scripts/progress-cas.mjs verify-live-resume --receipt docs/checkpoints/C01/final/1.json --claim docs/claims/C01/1.json --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --progress docs/progress.md --subject-progress docs/progress/C01.md --integrated-head "$attestation_head" --strict
+          if [[ -f docs/checkpoints/C01/final/1.json ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "head=$(git log -1 --format=%H -- docs/checkpoints/C01/final/1.json)" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            if grep -Eq '^\| C01 \|.*\| complete \|$' docs/progress.md; then
+              echo "C01 is complete but its final receipt is absent" >&2
+              exit 1
+            fi
+          fi
+      - if: steps.attestation.outputs.exists == 'true'
+        run: node scripts/progress-cas.mjs verify-live-receipt --receipt docs/checkpoints/C01/final/1.json --claim docs/claims/C01/1.json --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --integrated-head HEAD --strict
+      - if: steps.attestation.outputs.exists == 'true'
+        run: node scripts/acceptance.mjs verify C01 docs/checkpoints/C01/final/1.json
+      - name: Verify atomic live attestation
+        if: steps.attestation.outputs.exists == 'true'
+        run: node scripts/progress-cas.mjs verify-live-resume --receipt docs/checkpoints/C01/final/1.json --claim docs/claims/C01/1.json --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --progress docs/progress.md --subject-progress docs/progress/C01.md --integrated-head "${{ steps.attestation.outputs.head }}" --strict

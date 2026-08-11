@@ -3,11 +3,30 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
+
+export const C01_ACCEPTANCE_VERSION = "v4:C01";
+export const C01_CLAIM_NOW = "2026-08-11T16:11:30Z";
+export const C01_ACCEPTANCE_COMMANDS = Object.freeze([
+  `node scripts/acceptance.mjs verify-manifest --subject C01 --version ${C01_ACCEPTANCE_VERSION}`,
+  `node -e "$(cat docs/validation/c00-contract-gate.node-e.txt)"`,
+  "node scripts/c00-contract-gate.mjs",
+  "node scripts/progress-cas.mjs verify-live-bootstrap --receipt docs/checkpoints/C00/bootstrap/0.json --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --integrated-head HEAD --strict",
+  `node scripts/progress-cas.mjs verify-live-claim --claim docs/claims/C01/1.json --claim-index docs/claims/index.jsonl --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --now ${C01_CLAIM_NOW} --integrated-head HEAD --strict`,
+  "node scripts/progress-cas.mjs verify-fixture-bundle --bundle docs/checkpoints/fixtures/c01-bundle-v1 --strict",
+  "corepack pnpm install --frozen-lockfile",
+  "corepack pnpm run docs:lint",
+  "corepack pnpm run typecheck",
+  "corepack pnpm run lint",
+  "corepack pnpm run test",
+  "corepack pnpm run boundaries:check"
+]);
 
 const root = fs.realpathSync(".");
-const args = parseArgs(process.argv.slice(2));
+const isMain = process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+const args = isMain ? parseArgs(process.argv.slice(2)) : { _: [] };
 const mode = args._[0];
-try {
+if (isMain) try {
   if (mode === "verify-live-bootstrap") verifyLiveBootstrap();
   else if (mode === "verify-live-claim") verifyLiveClaim();
   else if (mode === "verify-live-receipt") verifyLiveReceipt();
@@ -80,10 +99,16 @@ function verifyLiveResume() {
   requireOptions("progress", "subject-progress");
   const head = gitRev(args["integrated-head"]);
   const receipt = readCanonicalBlob(head, args.receipt);
-  for (const file of [args.receipt, args["checkpoint-index"], args.progress, args["subject-progress"]]) assertBlobAt(head, file);
-  const parent = gitParents(head);
-  assert(parent.length === 1 && isAncestor(receipt.core.candidateIntegrationSha, parent[0]), "resume head must be the atomic attestation commit");
-  for (const file of [args.receipt, args["checkpoint-index"], args.progress, args["subject-progress"]]) assert(blobOid(head, file) !== blobOidOptional(parent[0], file), `attestation did not atomically integrate ${file}`);
+  const parents = gitParents(head);
+  assert(parents.length === 1 && isAncestor(receipt.core.candidateIntegrationSha, parents[0]), "resume head must be the atomic attestation commit");
+  const parent = parents[0];
+  const expectedPaths = [args.receipt, args["checkpoint-index"], args.progress, args["subject-progress"]].sort();
+  assertExactChangedPaths(parent, head, expectedPaths, "A01");
+  assert(blobOidOptional(parent, args.receipt) === null, "A01 receipt must be newly introduced");
+  assertSingleIndexAppend(parent, head, args["checkpoint-index"], "checkpoint", (row) => row.receiptPath === args.receipt && row.receiptDigest === receipt.envelopeDigest && row.subjectId === "C01");
+  const subjectLedger = readBlob(head, args["subject-progress"]);
+  const globalLedger = readBlob(head, args.progress);
+  verifyCompletionLedgers(subjectLedger, globalLedger, receipt);
 }
 
 function verifyFixtureBundle() {
@@ -268,18 +293,51 @@ function assertBlobAt(ref, file) { const entry = git("ls-tree", ref, "--", norma
 function blobOid(ref, file) { assertBlobAt(ref, file); return git("rev-parse", `${ref}:${normalizeRelative(file)}`).trim(); }
 function blobOidOptional(ref, file) { try { return git("rev-parse", `${ref}:${normalizeRelative(file)}`).trim(); } catch { return null; } }
 function deriveClaimCommit(head, claimPath, indexPath) {
-  const commits = git("rev-list", head).trim().split("\n").filter(Boolean);
-  for (const commit of commits) {
+  const matches = [];
+  for (const commit of git("rev-list", head).trim().split("\n").filter(Boolean)) {
+    const parents = gitParents(commit);
+    if (parents.length !== 1) continue;
+    const parent = parents[0];
     try {
       const claim = readCanonicalBlob(commit, claimPath);
-      const rows = verifyIndexBlob(commit, indexPath, "claim");
-      if (gitParents(commit).length === 1 && gitParents(commit)[0] === claim.preClaimBaseSha && rows.some((r) => r.claimPath === claimPath && r.claimDigest === claim.claimDigest && r.preClaimBaseSha === claim.preClaimBaseSha)) return commit;
+      if (claim.preClaimBaseSha !== parent) continue;
+      const expectedPaths = [claimPath, indexPath, "docs/progress/C01.md", "docs/progress.md"].sort();
+      assertExactChangedPaths(parent, commit, expectedPaths, "K01");
+      assert(blobOidOptional(parent, claimPath) === null, "K01 claim must be newly introduced");
+      assertSingleIndexAppend(parent, commit, indexPath, "claim", (row) => row.claimPath === claimPath && row.claimDigest === claim.claimDigest && row.preClaimBaseSha === parent);
+      verifyClaimLedgers(readBlob(commit, "docs/progress/C01.md"), readBlob(commit, "docs/progress.md"), claim);
+      matches.push(commit);
     } catch {
-      // A malformed or unverifiable candidate is ineligible; keep searching and fail closed below if none qualify.
-      continue;
+      // Every ancestor is considered; only a complete exact transition is eligible.
     }
   }
-  throw new Error("unable to derive claim integration commit from claim/index ancestry");
+  assert(matches.length === 1, `expected exactly one K01 transition, found ${matches.length}`);
+  return matches[0];
+}
+
+function changedPaths(base, candidate) { return git("diff", "--name-only", "--diff-filter=ACDMRTUXB", `${base}..${candidate}`).trim().split("\n").filter(Boolean).sort(); }
+function assertExactChangedPaths(base, candidate, expected, label) { assert(jcs(changedPaths(base, candidate)) === jcs([...expected].sort()), `${label} changed paths mismatch`); }
+function assertSingleIndexAppend(parent, commit, file, kind, predicate) {
+  const before = readBlob(parent, file), after = readBlob(commit, file);
+  assert(after.startsWith(before), `${kind} index is not append-only`);
+  const appended = after.slice(before.length);
+  assert(appended.length > 0 && appended.endsWith("\n") && appended.trimEnd().split("\n").length === 1, `${kind} index must append exactly one record`);
+  const rows = verifyIndexRaw(after, kind), priorRows = verifyIndexRaw(before, kind);
+  assert(rows.length === priorRows.length + 1 && predicate(rows.at(-1)), `${kind} index append does not bind the transition`);
+}
+function verifyClaimLedgers(subject, global, claim) {
+  assert(subject.includes("- Status: `in-progress`") && subject.includes(`- Attempt generation: \`${claim.attemptGeneration}\``), "C01 claim ledger state mismatch");
+  assert(subject.includes(`\`${claim.claimId}\``) && subject.includes(`\`${claim.claimDigest}\``) && subject.includes(`\`${claim.preClaimBaseSha}\``), "C01 claim ledger binding mismatch");
+  assert(subject.includes(`issued \`${claim.issuedAt}\`; expires \`${claim.expiresAt}\``) && subject.includes("attestation pending"), "C01 claim ledger chronology mismatch");
+  assert(global.includes("- **Active claims:** C01 generation 1 only") && /^\| C01 \|.*\| in-progress \|$/m.test(global), "global claim ledger state mismatch");
+  assert(!/^\| C01 \|.*\| complete \|$/m.test(global), "global ledger prematurely completes C01");
+}
+function verifyCompletionLedgers(subject, global, receipt) {
+  assert(subject.includes("- Status: `complete`") && subject.includes(`attested \`${receipt.core.attestedAt}\``), "C01 completion ledger state mismatch");
+  assert(subject.includes(`\`${args.receipt}\``) && subject.includes(`\`${receipt.envelopeDigest}\``), "C01 completion ledger receipt mismatch");
+  assert(/^\| C01 \|.*\| complete \|$/m.test(global), "global ledger does not complete C01");
+  assert(global.includes("- **Active claims:** none") && global.includes("- **Next eligible:** C02"), "global completion scheduler state mismatch");
+  assert(global.includes(args.receipt) && global.includes(receipt.envelopeDigest), "global completion receipt mismatch");
 }
 function readCanonical(file) { const raw = safeRead(file), value = JSON.parse(raw); assert(raw === jcs(value), `noncanonical JSON: ${file}`); return value; }
 function safeRead(file) { const relative = normalizeRelative(file), absolute = path.join(root, relative); let cursor = root; for (const part of relative.split("/")) { cursor = path.join(cursor, part); assert(!fs.lstatSync(cursor).isSymbolicLink(), `symlink rejected: ${file}`); } assert(fs.realpathSync(absolute) === absolute && fs.statSync(absolute).isFile(), `unsafe file: ${file}`); return fs.readFileSync(absolute, "utf8"); }
@@ -297,34 +355,7 @@ function requireOptions(...names) { for (const name of names) assert(typeof args
 function assert(condition, message) { if (!condition) throw new Error(message); }
 function parseArgs(argv) { const result = { _: [] }; for (let i = 0; i < argv.length; i++) { const value = argv[i]; if (!value.startsWith("--")) { result._.push(value); continue; } const name = value.slice(2); if (name === "strict") result.strict = true; else { assert(i + 1 < argv.length && !argv[i + 1].startsWith("--"), `missing value for --${name}`); result[name] = argv[++i]; } } return result; }
 function frozenC00Command() { return `node -e "$(cat docs/validation/c00-contract-gate.node-e.txt)"`; }
-function c00ManifestCheckCommand() { return `node -e "const fs=require('fs'),crypto=require('crypto');const p=fs.readFileSync('docs/validation/c00-contract-gate.node-e.txt'),d=JSON.parse(fs.readFileSync('docs/checkpoints/fixtures/digests.json')),s=fs.readFileSync('scripts/c00-contract-gate.mjs','utf8');if(d.c00ProgramSha256!==crypto.createHash('sha256').update(p).digest('hex')||!s.includes('c00-contract-gate-v4'))process.exit(1)"`; }
-function frozenC01Commands() { return [
-  c00ManifestCheckCommand(),
-  frozenC00Command(),
-  "node scripts/c00-contract-gate.mjs",
-  "node scripts/progress-cas.mjs verify-live-bootstrap --receipt docs/checkpoints/C00/bootstrap/0.json --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --integrated-head HEAD --strict",
-  "node scripts/progress-cas.mjs verify-live-claim --claim docs/claims/C01/1.json --claim-index docs/claims/index.jsonl --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --now 2026-01-01T00:30:00Z --integrated-head HEAD --strict",
-  "node scripts/progress-cas.mjs verify-fixture-bundle --bundle docs/checkpoints/fixtures/c01-bundle-v1 --strict",
-  "corepack pnpm install --frozen-lockfile",
-  "corepack pnpm run docs:lint",
-  "corepack pnpm run typecheck",
-  "corepack pnpm run lint",
-  "corepack pnpm run test",
-  "corepack pnpm run boundaries:check"
-]; }
-function frozenC01V3Commands() { return [
-  `node -e "const fs=require('fs'),crypto=require('crypto');const a=fs.readFileSync('docs/validation/c00-contract-gate.node-e.txt'),b=fs.readFileSync('scripts/c00-contract-gate.mjs');if(!a.equals(b))process.exit(1);console.log(crypto.createHash('sha256').update(a).digest('hex'))"`,
-  "node scripts/c00-contract-gate.mjs",
-  "node scripts/progress-cas.mjs verify-live-bootstrap --receipt docs/checkpoints/C00/bootstrap/0.json --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --integrated-head HEAD --strict",
-  "node scripts/progress-cas.mjs verify-live-claim --claim docs/claims/C01/1.json --claim-index docs/claims/index.jsonl --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --now 2026-01-01T00:30:00Z --integrated-head HEAD --strict",
-  "node scripts/progress-cas.mjs verify-fixture-bundle --bundle docs/checkpoints/fixtures/c01-bundle-v1 --strict",
-  "corepack pnpm install --frozen-lockfile",
-  "corepack pnpm run docs:lint",
-  "corepack pnpm run typecheck",
-  "corepack pnpm run lint",
-  "corepack pnpm run test",
-  "corepack pnpm run boundaries:check"
-]; }
-function commandsForCore(core) { if (core.subjectId !== "C01") return undefined; return core.acceptanceContractVersion === "v3:C01" ? frozenC01V3Commands() : frozenC01Commands(); }
+function frozenC01Commands() { return C01_ACCEPTANCE_COMMANDS; }
+function commandsForCore(core) { if (core.subjectId !== "C01") return undefined; return core.acceptanceContractVersion === C01_ACCEPTANCE_VERSION ? frozenC01Commands() : undefined; }
 function usage() { console.error("Usage: progress-cas.mjs <verify-live-bootstrap|verify-live-claim|verify-live-receipt|verify-live-resume|verify-fixture-bundle|verify-planning-correction> [options] --strict"); process.exit(2); }
 function c01AllowedPaths() { return ["package.json","pnpm-workspace.yaml","pnpm-lock.yaml","tsconfig.base.json","eslint.config.js",".npmrc",".node-version",".github/workflows/ci.yml",".changeset/config.json","scripts/acceptance.mjs","scripts/c00-contract-gate.mjs","scripts/progress-cas.mjs","scripts/boundaries-check.mjs","README.md","docs/progress/C01.md","docs/progress.md","docs/checkpoints/C01/final/1.json","docs/checkpoints/index.jsonl","docs/claims/C01/1.json","docs/claims/index.jsonl","packages/domain/package.json","packages/domain/src/index.ts","packages/protocol/package.json","packages/protocol/src/index.ts","packages/policy/package.json","packages/policy/src/index.ts","packages/store-sqlite/package.json","packages/store-sqlite/src/index.ts","packages/orchestrator/package.json","packages/orchestrator/src/index.ts","packages/sdk/package.json","packages/sdk/src/index.ts","packages/adapter-kit/package.json","packages/adapter-kit/src/index.ts","packages/installer/package.json","packages/installer/src/index.ts","apps/daemon/package.json","apps/daemon/src/index.ts","apps/cli/package.json","apps/cli/src/index.ts","adapters/pi/package.json","adapters/pi/src/index.ts","adapters/omp/package.json","adapters/omp/src/index.ts","adapters/claude/package.json","adapters/claude/src/index.ts","adapters/codex/package.json","adapters/codex/src/index.ts"]; }
