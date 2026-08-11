@@ -4,9 +4,9 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 
 ## Global status
 
-- **Planning state:** C00, C01, C02, C03, and C04 are complete; F001/F002 are closed; R001/R002 are complete
-- **Active claims:** none
-- **Next eligible:** C05 only
+- **Planning state:** C00, C01, C02, C03, and C04 are complete; F001/F002 are closed; R001/R002 are complete; C05 is in progress
+- **Active claims:** C05 from integrated base `4513730`
+- **Next eligible:** none while C05 is active
 - **Active blockers:** none
 - **Last integrated receipt:** immutable C01 `docs/checkpoints/C01/final/1.json`, envelope digest `17ddd75b49e35d3bf6f432c8c6acca30b4a66512229453aca4fc63e7f427ea7d`, indexed at A01 commit `223023330cb000b759d8a8b2419514638c1aa179`; receipt/index bytes must not be overwritten
 - **Release readiness:** not started
@@ -28,8 +28,8 @@ For C02 onward: commit the two tracker files to claim a dependency-ready chunk; 
 | C02 | Domain and transition contracts | C01 | complete; final candidate `fd100bf`; 40 tests and 61 vectors green |
 | C03 | Protocol | C02 | complete; final candidate `2998e4f`; 23 package tests and 1,377 conformance checks green |
 | C04 | Policy/admission evaluator | C03 | complete; claim `a5ad6fa`; implementation `385449c`; review fixes/final candidate `44f99b9`, `489345b`; typecheck and 10 tests green; clean final review |
-| C05 | SQLite 0001/artifacts | C04 | next eligible |
-| C06 | Recovery/import/retention | C05 | not-started |
+| C05 | SQLite 0001/artifacts | C04 | in-progress; conventional tracker claim from base `4513730` |
+| C06 | Recovery/import/retention | C05 | ineligible; blocked on C05 completion |
 | C07 | Admission service | C06 | not-started |
 | C08 | Task/fork projections | C07 | not-started |
 | C09 | Context reconstruction | C08 | not-started |
@@ -56,10 +56,10 @@ F001/R001 established the accepted `v4:C01-remediation` candidate and immutable 
 
 ## Resume instructions
 
-C04 completed from tracker-only claim base `33550d0` through claim commit `a5ad6fa`. Implementation commit `385449c` and review-fix commits `44f99b9` and `489345b` are integrated; final candidate is `489345b`. Both literal C04 gates ran in order under Node 22 with exact environment `CI=1 TZ=UTC LANG=C NODE_OPTIONS=--unhandled-rejections=strict`: typecheck exit 0; 10 package tests exit 0. The final blocker-only review was clean, all C04 checklist items are checked, and no blockers remain.
+C04 is complete. Its tracker-only claim began at base `33550d0` with claim commit `a5ad6fa`; implementation commit `385449c` and review-fix commits `44f99b9` and `489345b` are integrated, with final candidate `489345b`. Both literal C04 gates ran in order under Node 22 with exact environment `CI=1 TZ=UTC LANG=C NODE_OPTIONS=--unhandled-rejections=strict`: typecheck exit 0; 10 package tests exit 0. The final blocker-only review was clean and all C04 checklist items are checked.
 
-C05 is the sole next eligible chunk. It has not yet been claimed; follow the post-C01 tracker workflow and its exact contract before source edits.
+C05 is claimed and in progress from integrated base `4513730`. Its exact ownership and three ordered acceptance commands are recorded in `docs/progress/C05.md`. Implement only within that ownership, run all three gates in order under the recorded environment, resolve review findings, and then record completion. C06 and every later chunk remain ineligible.
 
 ## Planning review status
 
-The bootstrap workflow blocker remains closed. C02, C03, and C04 are complete with all review findings resolved and exact acceptance evidence recorded. C05 is the sole next eligible chunk; all later chunks remain ineligible, and no recursive development-attestation work is required.
+The bootstrap workflow blocker remains closed. C02, C03, and C04 are complete with all review findings resolved and exact acceptance evidence recorded. C05 is the sole active conventional tracker claim; C06 and all later chunks remain ineligible until C05 completes, and no recursive development-attestation work is required.
