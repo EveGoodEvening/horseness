@@ -104,16 +104,14 @@ function verifyLiveResume() {
   requireOptions("progress", "subject-progress");
   const head = gitRev(args["integrated-head"]);
   const receipt = readCanonicalBlob(head, args.receipt);
-  const parents = gitParents(head);
-  assert(parents.length === 1 && parents[0] === receipt.core.candidateIntegrationSha, "A01 must be the direct child of the sealed candidate integration commit");
-  const parent = parents[0];
-  const expectedPaths = [args.receipt, args["checkpoint-index"], args.progress, args["subject-progress"]].sort();
-  assertExactChangedPaths(parent, head, expectedPaths, "A01");
-  assert(blobOidOptional(parent, args.receipt) === null, "A01 receipt must be newly introduced");
-  assertSingleIndexAppend(parent, head, args["checkpoint-index"], "checkpoint", (row) => row.receiptPath === args.receipt && row.receiptDigest === receipt.envelopeDigest && row.subjectId === "C01");
-  const subjectLedger = readBlob(head, args["subject-progress"]);
-  const globalLedger = readBlob(head, args.progress);
-  verifyCompletionLedgers(subjectLedger, globalLedger, receipt);
+  const attestationCommit = deriveAttestationCommit(head, receipt);
+  if (head !== attestationCommit) {
+    const remediationCommit = deriveR002ClaimCommit(head, attestationCommit, receipt);
+    assert(isAncestor(attestationCommit, remediationCommit), "R002 claim does not descend from A01");
+    assert(isAncestor(remediationCommit, head), "R002 claim is not an ancestor of the remediation head");
+    const remediation = readClaimBlob(remediationCommit, "docs/claims/R002/1.json");
+    assertExactChangedPaths(remediationCommit, head, remediation.allowedPaths, "R002 candidate");
+  }
 }
 
 function verifyFixtureBundle() {
@@ -269,7 +267,8 @@ function verifyCommandResults(core, expectedCommands, expiresAt = null) {
 
 function verifyFrozenSubject(core, claim) {
   assert(core.subjectId === claim.subjectId && core.attemptGeneration === claim.attemptGeneration, "subject attempt mismatch");
-  assert(core.acceptanceContractVersion === `v4:${claim.subjectId}`, "acceptance contract mismatch");
+  assert(core.acceptanceContractVersion === C01_ACCEPTANCE_VERSION, "acceptance contract mismatch");
+  assert(jcs(core.commandResults.map((result) => result.command)) === jcs(frozenC01Commands()), "frozen C01 command sequence mismatch");
   for (const field of ["dependencyReceiptDigests","priorAttemptDigests"]) assert(jcs(core[field]) === jcs(claim[field]), `${field} mismatch`);
   assert(core.supersedesReceiptDigest === null && claim.supersedesAttemptDigest === null, "unexpected supersession");
   assert(core.sideEffectHead === null && core.ciIdentity === null, "C01 frozen side-effect contract mismatch");
@@ -370,6 +369,68 @@ function deriveRemediationClaimCommit(head, claimPath, indexPath) {
     }
   }
   assert(matches.length === 1, `expected exactly one R001 transition, found ${matches.length}; ${failures.join(" | ")}`);
+  return matches[0];
+}
+function deriveAttestationCommit(head, receipt) {
+  const matches = [];
+  for (const commit of git("rev-list", head).trim().split("\n").filter(Boolean)) {
+    const parents = gitParents(commit);
+    if (parents.length !== 1 || parents[0] !== receipt.core.candidateIntegrationSha) continue;
+    const parent = parents[0];
+    try {
+      assertExactChangedPaths(parent, commit, [args.receipt, args["checkpoint-index"], args.progress, args["subject-progress"]], "A01");
+      assert(blobOidOptional(parent, args.receipt) === null, "A01 receipt must be newly introduced");
+      const historicalReceipt = readCanonicalBlob(commit, args.receipt);
+      assert(historicalReceipt.envelopeDigest === receipt.envelopeDigest && jcs(historicalReceipt) === jcs(receipt), "A01 receipt differs from immutable live evidence");
+      verifyEnvelope(historicalReceipt, readCanonicalBlob(commit, args.trust), "ordinary-v1", "C01");
+      assertSingleIndexAppend(parent, commit, args["checkpoint-index"], "checkpoint", (row) => row.receiptPath === args.receipt && row.receiptDigest === receipt.envelopeDigest && row.candidateIntegrationSha === parent && row.subjectId === "C01");
+      verifyCompletionLedgers(readBlob(commit, args["subject-progress"]), readBlob(commit, args.progress), historicalReceipt);
+      const originalCommit = deriveClaimCommit(commit, args.claim, "docs/claims/index.jsonl");
+      const original = readCanonicalBlob(originalCommit, args.claim);
+      verifyClaim(original, historicalReceipt.core.attestedAt, true);
+      verifyOrdinary(historicalReceipt.core, original, gitAdapter());
+      verifyFrozenSubject(historicalReceipt.core, original);
+      const r001Commit = deriveRemediationClaimCommit(commit, args["remediation-claim"], "docs/claims/index.jsonl");
+      const r001 = readClaimBlob(r001Commit, args["remediation-claim"]);
+      assert(r001.subjectId === "R001" && isAncestor(originalCommit, r001.preClaimBaseSha), "A01 lacks valid R001/K01 provenance");
+      verifyAuthorizedCandidate(r001Commit, parent, candidateOnlyPaths(r001.allowedPaths));
+      matches.push(commit);
+    } catch {
+      // Only a complete, cryptographically valid historical A01 transition is eligible.
+    }
+  }
+  assert(matches.length === 1, `expected exactly one historical A01 transition, found ${matches.length}`);
+  return matches[0];
+}
+
+function deriveR002ClaimCommit(head, attestationCommit, receipt) {
+  const claimPath = "docs/claims/R002/1.json", indexPath = "docs/claims/index.jsonl", matches = [];
+  for (const commit of git("rev-list", head).trim().split("\n").filter(Boolean)) {
+    const parents = gitParents(commit);
+    if (parents.length !== 1 || parents[0] !== attestationCommit) continue;
+    try {
+      const claim = readClaimBlob(commit, claimPath);
+      assert(claim.subjectId === "R002" && claim.attemptGeneration === 1 && claim.preClaimBaseSha === attestationCommit, "invalid R002 claim identity");
+      assert(jcs(claim.allowedPaths) === jcs(["docs/plan.md", "scripts/progress-cas.mjs"]), "R002 allowed paths mismatch");
+      assert(jcs(claim.dependencyReceiptDigests) === jcs(["a83655867f97f91480a2bf42f12ce78d278b2b3f301e9408c8893c47da52db9e", receipt.envelopeDigest]), "R002 dependencies mismatch");
+      assert(domain("horseness.claim-attempt.v1", without(claim, "claimDigest")) === claim.claimDigest, "R002 claim digest mismatch");
+      assertExactChangedPaths(attestationCommit, commit, [claimPath, indexPath, "docs/findings/F002.json", "docs/findings/index.jsonl", "docs/progress/R002.md", "docs/progress/C01.md", "docs/progress.md"], "R002 claim");
+      assert(blobOidOptional(attestationCommit, claimPath) === null, "R002 claim must be newly introduced");
+      assertSingleIndexAppend(attestationCommit, commit, indexPath, "claim", (row) => row.claimPath === claimPath && row.claimDigest === claim.claimDigest && row.preClaimBaseSha === attestationCommit && row.subjectId === "R002");
+      const finding = readClaimBlob(commit, "docs/findings/F002.json");
+      assert(finding.findingId === "F002" && finding.findingDigest === claim.dependencyReceiptDigests[0], "R002 finding provenance mismatch");
+      const findingRows = verifyIndexBlob(commit, "docs/findings/index.jsonl", "finding");
+      requireUnique(findingRows, (row) => row.findingId === "F002" && row.findingDigest === finding.findingDigest, "F002 index membership");
+      const ledger = readBlob(commit, "docs/progress/R002.md"), global = readBlob(commit, "docs/progress.md"), subject = readBlob(commit, "docs/progress/C01.md");
+      assert(ledger.includes("- Status: `in-progress`") && ledger.includes(`claim digest \`${claim.claimDigest}\``), "R002 ledger mismatch");
+      assert(global.includes("`R002` generation 1 is active") && global.includes("C02 remains ineligible"), "global R002 ledger mismatch");
+      assert(subject.includes("`F002`") && subject.includes("formal remediation `R002`"), "C01 R002 ledger mismatch");
+      matches.push(commit);
+    } catch {
+      // Only the exact append-only R002 claim transition is eligible.
+    }
+  }
+  assert(matches.length === 1, `expected exactly one R002 transition, found ${matches.length}`);
   return matches[0];
 }
 
