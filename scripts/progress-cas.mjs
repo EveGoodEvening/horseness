@@ -326,10 +326,17 @@ function assertSingleIndexAppend(parent, commit, file, kind, predicate) {
   assert(rows.length === priorRows.length + 1 && predicate(rows.at(-1)), `${kind} index append does not bind the transition`);
 }
 function verifyClaimLedgers(subject, global, claim) {
+  const dependencyList = claim.dependencyReceiptDigests.join(", ");
+  const allowedPaths = claim.allowedPaths.map((file) => `\`${file}\``).join(", ");
   assert(subject.includes("- Status: `in-progress`") && subject.includes(`- Attempt generation: \`${claim.attemptGeneration}\``), "C01 claim ledger state mismatch");
-  assert(subject.includes(`\`${claim.claimId}\``) && subject.includes(`\`${claim.claimDigest}\``) && subject.includes(`\`${claim.preClaimBaseSha}\``), "C01 claim ledger binding mismatch");
-  assert(subject.includes(`issued \`${claim.issuedAt}\`; expires \`${claim.expiresAt}\``) && subject.includes("attestation pending"), "C01 claim ledger chronology mismatch");
-  assert(global.includes("- **Active claims:** C01 generation 1 only") && /^\| C01 \|.*\| in-progress \|$/m.test(global), "global claim ledger state mismatch");
+  assert(subject.includes(`- Dependencies: C00 receipt envelope digest \`${dependencyList}\``), "C01 claim ledger dependency mismatch");
+  assert(subject.includes(`- Claim/expiry: \`docs/claims/C01/1.json\`; claim ID \`${claim.claimId}\`; claim digest \`${claim.claimDigest}\`; issued \`${claim.issuedAt}\`; expires \`${claim.expiresAt}\`; candidate sealing and attestation pending`), "C01 claim ledger binding mismatch");
+  assert(subject.includes(`- Pre-claim base: \`${claim.preClaimBaseSha}\``), "C01 claim ledger base mismatch");
+  assert(subject.includes(`- Allowed paths: ${allowedPaths}`), "C01 claim ledger allowed-path binding mismatch");
+  assert(subject.includes("- Affected ADR paths: none") && subject.includes("- Acceptance record paths: none"), "C01 claim ledger auxiliary-path binding mismatch");
+  assert(global.includes(`- **Active claims:** C01 generation ${claim.attemptGeneration}, \`in-progress\`; claim \`docs/claims/C01/1.json\`, digest \`${claim.claimDigest}\`, expires \`${claim.expiresAt}\``), "global active-claim binding mismatch");
+  assert(global.includes(`- **Next eligible:** none while C01 generation ${claim.attemptGeneration} is active; integrate K01 and run its frozen live checker before any C01 source edit`), "global scheduler binding mismatch");
+  assert(/^\| C01 \|.*\| in-progress \|$/m.test(global), "global claim ledger state mismatch");
   assert(!/^\| C01 \|.*\| complete \|$/m.test(global), "global ledger prematurely completes C01");
 }
 function verifyCompletionLedgers(subject, global, receipt) {
