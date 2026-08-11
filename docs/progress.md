@@ -4,9 +4,9 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 
 ## Global status
 
-- **Planning state:** C00 and C01 are complete; F001/F002 are closed; R001/R002 are complete
-- **Active claims:** none
-- **Next eligible:** C02
+- **Planning state:** C00 and C01 are complete; F001/F002 are closed; R001/R002 are complete; C02 is in progress
+- **Active claims:** C02 (tracker-only claim base `ba7ee37`)
+- **Next eligible:** none; C03 waits on C02 completion
 - **Active blockers:** none
 - **Last integrated receipt:** immutable C01 `docs/checkpoints/C01/final/1.json`, envelope digest `17ddd75b49e35d3bf6f432c8c6acca30b4a66512229453aca4fc63e7f427ea7d`, indexed at A01 commit `223023330cb000b759d8a8b2419514638c1aa179`; receipt/index bytes must not be overwritten
 - **Release readiness:** not started
@@ -25,7 +25,7 @@ For C02 onward: commit the two tracker files to claim a dependency-ready chunk; 
 | C01 | Bootstrap/CI | C00 | complete; immutable A01 evidence retained |
 | R001 | Historical C01 planning/implementation remediation | F001 + C00 | complete; F001 closed |
 | R002 | Historical C01 verifier remediation | F002 + immutable C01 receipt | complete; F002 closed |
-| C02 | Domain and transition contracts | C01 | not-started; eligible |
+| C02 | Domain and transition contracts | C01 | in-progress; tracker-only claim at `ba7ee37` |
 | C03 | Protocol | C02 | not-started |
 | C04 | Policy/admission evaluator | C03 | not-started |
 | C05 | SQLite 0001/artifacts | C04 | not-started |
@@ -56,8 +56,8 @@ F001/R001 established the accepted `v4:C01-remediation` candidate and immutable 
 
 ## Resume instructions
 
-Claim C02 with commit message `chore(progress): claim C02`, changing only `docs/progress.md` and a new `docs/progress/C02.md`. Record the current integrated base, C01 completion, C02 exact owned paths, and the three literal C02 acceptance commands. Do not implement C02 in the claim commit. After implementation, gates, and review fixes are green, finish with `chore(progress): complete C02`.
+C02 is claimed from integrated base `ba7ee37` with C01 completion evidenced by `docs/progress/C01.md` and immutable receipt `docs/checkpoints/C01/final/1.json` (envelope digest `17ddd75b49e35d3bf6f432c8c6acca30b4a66512229453aca4fc63e7f427ea7d`). Implement only the exact paths recorded in `docs/progress/C02.md`, run its three literal acceptance commands in order, commit any review fixes within ownership, and finish with `chore(progress): complete C02`, changing only `docs/progress.md` and `docs/progress/C02.md`. C03 remains ineligible until that completion commit.
 
 ## Planning review status
 
-The bootstrap workflow blocker is closed. C02 is dependency-ready and no recursive development-attestation work remains.
+The bootstrap workflow blocker is closed. C02 is actively claimed, C03 remains dependency-blocked, and no recursive development-attestation work remains.
