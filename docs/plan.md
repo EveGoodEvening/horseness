@@ -155,7 +155,7 @@ Only these bounded path sets replace all earlier shorthand:
 |---|---|
 | C01 | `package.json`, `pnpm-workspace.yaml`, `pnpm-lock.yaml`, `tsconfig.base.json`, `eslint.config.js`, `.npmrc`, `.node-version`, `.github/workflows/ci.yml`, `.changeset/config.json`, `scripts/{acceptance,c00-contract-gate,progress-cas,boundaries-check}.mjs`, `config/acceptance/*.json`, `packages/{domain,protocol,policy,store-sqlite,orchestrator,sdk,adapter-kit,installer}/package.json`, `apps/{daemon,cli}/package.json`, `adapters/{pi,omp,claude,codex}/package.json`, and each corresponding `src/index.ts` |
 | C02 | `packages/domain/**`, root `package.json` (only the `vectors:verify` forwarding script), `pnpm-lock.yaml` only if manifest serialization requires it, `docs/vectors/{events,proposal,delta,context-binding,receipt,task-dispatch}/**`, `docs/compatibility.md` |
-| C03 | `packages/protocol/**`, `docs/protocol.md`, `docs/vectors/protocol/**`, `docs/compatibility.md` |
+| C03 | `packages/protocol/**`, root `package.json` (only the `protocol:conformance` and `generated:check` forwarding scripts), `pnpm-lock.yaml` only if manifest serialization requires it, `docs/protocol.md`, `docs/vectors/protocol/**`, `docs/compatibility.md`, `docs/plan.md` (only this serialized C03 forwarding-script ownership correction) |
 | C04 | `packages/policy/**`, `docs/policy.md`, `docs/compatibility.md` |
 | C05 | `packages/store-sqlite/**`, `docs/migrations.md` |
 | C06 | `packages/store-sqlite/src/{migrations,recovery,backup,restore,import,retention}/**`, `packages/store-sqlite/test/{migrations,recovery,backup,restore,import,retention}/**`, `tests/fixtures/{databases,imports}/**`, `docs/{migrations.md,operations/storage.md}` |
@@ -346,6 +346,8 @@ The C00 gate is the literal Node 22 program and command frozen in `docs/validati
 C02 additionally owns `docs/vectors/{cursors,fork-pin,dependency-join,delta-authority,authorization}/**`. Its literal vector command is replaced by `corepack pnpm run vectors:verify -- events cursors proposal delta fork-pin dependency-join delta-authority context-binding receipt task-dispatch authorization`. It runs before C08/C09 or adapters consume these boundaries. C03 protocol conformance must round-trip all cursor variants, `ForkPinCoreV1`, `DependencyJoinSnapshotCoreV1`, `DeltaAuthorityScopeV1`, proposal-sealing observations, and authorization denials without an unnamed persisted `cursor` field.
 
 The C02 implementation exposed the verifier from `@horseness/domain`, but the frozen repository-root command also requires shared-root integration. C02 therefore owns the single root `package.json` script `"vectors:verify": "pnpm --filter @horseness/domain run vectors:verify"`; this is an ownership correction only and does not broaden C02's root-manifest authority.
+
+C03's two frozen repository-root gates require shared-root forwarding scripts before they can execute. C03 therefore owns only the root `package.json` entries `"protocol:conformance": "pnpm --filter @horseness/protocol run protocol:conformance"` and `"generated:check": "pnpm --filter @horseness/protocol run generated:check"`; this serialized upfront ownership correction does not authorize any other root-manifest change. The C03 tracker claim records `docs/plan.md` as correction-only ownership, and implementation must preserve this exact scope.
 
 ### Exact C20 and C24 workspace-bound invocations
 
