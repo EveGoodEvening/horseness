@@ -1,23 +1,31 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {METHOD_REGISTRY_V1,isAuthorizedMethod,ProtocolError} from "../src/index.js";
+import {METHOD_LOCAL_DTO_SHAPES_V1,METHOD_REGISTRY_V1,isAuthorizedMethod,ProtocolError} from "../src/index.js";
 
 const ROLES=["authority","approver","operator","worker","adapter"] as const;
 
-test("every registered method owns exact request and result parsers",()=>{
+test("every registered method owns exact non-empty request and result parsers",()=>{
+ const sample=(contract:Readonly<Record<string,string>>):Record<string,unknown>=>Object.fromEntries(Object.entries(contract).map(([key,kind])=>[key,kind==="integer"?1:kind==="boolean"?true:kind==="object"?{digest:"value"}:kind==="array"?["value"]:kind==="status"?"completed":`${key}-value`]));
+ const substitute=(kind:string):unknown=>kind==="integer"?"1":kind==="boolean"?"true":kind==="object"?["wrong"]:kind==="array"?{wrong:true}:kind==="status"?"unknown":0;
  for(const definition of METHOD_REGISTRY_V1){
-  assert.equal(typeof definition.parseInput,"function",`${definition.method} input parser`);
-  assert.equal(typeof definition.parseResult,"function",`${definition.method} result parser`);
-  const request={schemaVersion:"1",requestType:definition.method};
-  const result={schemaVersion:"1",resultType:definition.method};
-  if(definition.inputMapping===null)assert.deepEqual(definition.parseInput(request),request);
-  else assert.throws(()=>definition.parseInput(request),ProtocolError);
-  if(definition.resultMapping===null)assert.deepEqual(definition.parseResult(result),result);
-  else assert.throws(()=>definition.parseResult(result),ProtocolError);
-  assert.throws(()=>definition.parseInput({...request,extra:true}),ProtocolError);
-  assert.throws(()=>definition.parseResult({...result,extra:true}),ProtocolError);
-  assert.throws(()=>definition.parseInput({...request,requestType:"other.v1"}),ProtocolError);
-  assert.throws(()=>definition.parseResult({...result,resultType:"other.v1"}),ProtocolError);
+  assert.notEqual(definition.inputMapping,null,`${definition.method} input mapping`);
+  assert.notEqual(definition.resultMapping,null,`${definition.method} result mapping`);
+  for(const [direction,mapping,parse,discriminator] of [["request",definition.inputMapping,definition.parseInput,"requestType"],["result",definition.resultMapping,definition.parseResult,"resultType"]] as const){
+   const shell={schemaVersion:"1",[discriminator]:definition.method};
+   assert.throws(()=>parse(shell),ProtocolError,`${definition.method} rejects empty ${direction}`);
+   if(mapping!==`method-${direction}`)continue;
+   const contract=METHOD_LOCAL_DTO_SHAPES_V1[definition.method]?.[direction];
+   assert.ok(contract,`${definition.method} ${direction} shape`);
+   assert.ok(Object.keys(contract).length>=2,`${definition.method} ${direction} is meaningful`);
+   const value=sample(contract),valid={...shell,value};
+   assert.deepEqual(parse(valid),valid,`${definition.method} valid ${direction}`);
+   for(const key of Object.keys(contract)){
+    const {[key]:_missing,...missing}=value;
+    assert.throws(()=>parse({...shell,value:missing}),ProtocolError,`${definition.method} ${direction} requires ${key}`);
+    assert.throws(()=>parse({...shell,value:{...value,[key]:substitute(contract[key]!)}}),ProtocolError,`${definition.method} ${direction} types ${key}`);
+   }
+   assert.throws(()=>parse({...shell,value:{...value,extra:true}}),ProtocolError);
+  }
  }
 });
 

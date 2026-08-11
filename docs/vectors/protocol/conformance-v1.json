@@ -25,5 +25,5 @@
     {"reasonCode":"RESUME_TOKEN_EXPIRED","code":-32008,"retryable":false}
   ],
   "subscriptionCases": ["fresh","resumed","expired"],
-  "coverage": ["all-method-request-result-mappings","all-role-method-denials","capability-action-denial","workspace-run-task-attempt-generation-proposal-adapter-substitution","idempotency-required-and-forbidden","pagination-cursor-separation","fresh-resumed-expired-subscriptions","canonical-byte-round-trip","domain-envelope-tampering","unnamed-cursor-rejection"]
+  "coverage": ["all-method-request-result-mappings","all-non-empty-method-dtos","all-role-method-denials","capability-action-denial","under-scoped-grant-denial","workspace-run-task-attempt-generation-proposal-adapter-substitution","idempotency-required-and-forbidden","pagination-cursor-separation","fresh-resumed-expired-subscriptions","canonical-byte-round-trip","domain-envelope-tampering","closed-draft-2020-12-domain-schemas","positive-and-negative-cursor-schema-vectors","positive-and-negative-domain-mapping-schema-vectors","positive-and-negative-method-request-schema-vectors","positive-and-negative-method-result-schema-vectors","transport-security-regressions","unnamed-cursor-rejection"]
 }

@@ -3,10 +3,10 @@ import test from "node:test";
 import {createAuthenticatedContextV1,inspectAndAuthenticateTransportV1,isAuthenticatedContextV1,parseJsonRpcRequestV1,ProtocolError,PROTOCOL_RPC_CODES,type AuthenticatedGrantV1,type SubscriptionResumeClaimsV1,type TransportInspectionV1} from "../src/index.js";
 
 const cursor={schemaVersion:"1",kind:"composite",workspaceId:"ws",workspaceSequence:3,workspaceEnvelopeHash:"wh",workspaceContextEpoch:1,runId:"run",runSequence:7,runEnvelopeHash:"rh",runContextEpoch:2} as const;
-const inspection={transport:"unix-socket",localOnly:true,peerVerified:true,peerIdentity:"uid:1000",ownerMatchesProcess:true,mode:0o600} as const satisfies TransportInspectionV1;
+const inspection={transport:"unix-socket",localOnly:true,peerVerified:true,peerIdentity:"uid:1000",endpointPath:"/run/user/1000/horseness.sock",realPath:"/run/user/1000/horseness.sock",endpointType:"socket",isSymbolicLink:false,ownerMatchesProcess:true,mode:0o600,parentOwnerMatchesProcess:true,parentMode:0o700} as const satisfies TransportInspectionV1;
 const grant={schemaVersion:"1",principalId:"principal",principalRole:"worker",grantDigest:"grant",peerIdentity:"uid:1000",expiresAt:"2030-01-01T00:00:00.000Z",revoked:false,workspaceId:"ws",runId:"run",taskId:null,attemptId:null,generation:null,proposalId:"proposal",adapterId:null,allowedMethods:["admission.subscribe.v1"]} as const satisfies AuthenticatedGrantV1;
 const context=createAuthenticatedContextV1(inspection,grant,"2029-01-01T00:00:00.000Z");
-const body={schemaVersion:"1",workspaceId:"ws",runId:"run",proposalId:"proposal",input:{schemaVersion:"1",requestType:"admission.subscribe.v1"}} as const;
+const body={schemaVersion:"1",workspaceId:"ws",runId:"run",proposalId:"proposal",input:{schemaVersion:"1",requestType:"admission.subscribe.v1",value:{operationId:"subscribe-op",proposalId:"proposal",afterSequence:0,resumeToken:"fresh"}}} as const;
 const request=(overrides:Record<string,unknown>={})=>({jsonrpc:"2.0",id:1,method:"admission.subscribe.v1",params:{protocolVersion:"1",observationCursor:cursor,body,...overrides}});
 const denied=(reason:string)=>(error:unknown)=>error instanceof ProtocolError&&error.reasonCode===reason;
 
@@ -41,6 +41,21 @@ test("transport and grant evidence fail closed",()=>{
  assert.throws(()=>createAuthenticatedContextV1(inspection,{...grant,revoked:true},"2029-01-01T00:00:00.000Z"),denied("GRANT_INVALID"));
  assert.throws(()=>createAuthenticatedContextV1(inspection,grant,"2031-01-01T00:00:00.000Z"),denied("GRANT_EXPIRED"));
 });
+test("under-scoped worker and adapter grants are rejected",()=>{
+ const worker={...grant,proposalId:null,allowedMethods:["task.get.v1"]} as const satisfies AuthenticatedGrantV1;
+ assert.throws(()=>createAuthenticatedContextV1(inspection,worker,"2029-01-01T00:00:00.000Z"),denied("GRANT_INVALID"));
+ const adapter={...grant,principalRole:"adapter",taskId:"task",attemptId:"attempt",generation:1,adapterId:null,allowedMethods:["adapter.launch.v1"]} as const satisfies AuthenticatedGrantV1;
+ assert.throws(()=>createAuthenticatedContextV1(inspection,adapter,"2029-01-01T00:00:00.000Z"),denied("GRANT_INVALID"));
+});
+
+test("unix socket inspection proves endpoint and private parent",()=>{
+ const make=(candidate:TransportInspectionV1)=>()=>createAuthenticatedContextV1(candidate,grant,"2029-01-01T00:00:00.000Z");
+ assert.throws(make({...inspection,isSymbolicLink:true}),denied("TRANSPORT_NOT_ALLOWED"));
+ assert.throws(make({...inspection,realPath:"/tmp/redirect.sock"}),denied("TRANSPORT_NOT_ALLOWED"));
+ assert.throws(make({...inspection,endpointType:"other"}),denied("TRANSPORT_NOT_ALLOWED"));
+ assert.throws(make({...inspection,parentOwnerMatchesProcess:false}),denied("TRANSPORT_OWNER_INVALID"));
+ assert.throws(make({...inspection,parentMode:0o777}),denied("TRANSPORT_PERMISSIONS_INVALID"));
+});
 
 test("privileged inspection precedes grant lookup and rejects unsafe pipes",async()=>{
  const inspectors={
@@ -50,7 +65,7 @@ test("privileged inspection precedes grant lookup and rejects unsafe pipes",asyn
  };
  let lookedUp=false;
  const grants={lookupActiveGrant:async(peer:string)=>{lookedUp=true;assert.equal(peer,"uid:1000");return grant}};
- assert.equal((await inspectAndAuthenticateTransportV1({transport:"stdio"},"grant-ref",inspectors,grants,"2029-01-01T00:00:00.000Z")).principalId,"principal");
+ assert.equal((await inspectAndAuthenticateTransportV1({transport:"unix-socket",endpointPath:inspection.endpointPath},"grant-ref",inspectors,grants,"2029-01-01T00:00:00.000Z")).principalId,"principal");
  assert.equal(lookedUp,true);
  await assert.rejects(()=>inspectAndAuthenticateTransportV1({transport:"windows-named-pipe",pipeName:"pipe"},"grant-ref",inspectors,grants,"2029-01-01T00:00:00.000Z"),denied("TRANSPORT_PERMISSIONS_INVALID"));
  assert.equal(PROTOCOL_RPC_CODES.AUTH_SCOPE_MISMATCH,-32011);

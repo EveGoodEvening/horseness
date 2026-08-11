@@ -17,3 +17,13 @@ test("generated Draft 2020-12 schemas are canonical and current",()=>{
  const result=run("bin/generate.ts","--check");
  assert.equal(result.status,0,String(result.stderr||result.stdout));
 });
+
+test("generated mapping schemas are closed and contain no semantic extension placeholders",()=>{
+ for(const name of ["domain-mappings-v1.schema.json","method-dtos-v1.schema.json","json-rpc-v1.schema.json","json-rpc-response-v1.schema.json","coordinator-body-v1.schema.json"]){
+  const contents=String(spawnSync(process.execPath,["-e",`process.stdout.write(require('node:fs').readFileSync(${JSON.stringify(resolve(packageRoot,"generated",name))},'utf8'))`],{encoding:"utf8"}).stdout);
+  const schema=JSON.parse(contents) as {"$schema"?:unknown;oneOf?:unknown[]};
+  assert.equal(schema.$schema,"https://json-schema.org/draft/2020-12/schema");
+  assert.ok(Array.isArray(schema.oneOf)&&schema.oneOf.length>0,`${name}: missing closed alternatives`);
+  assert.doesNotMatch(contents,/x-horseness-domain-mapping|x-semantic|placeholder/i);
+ }
+});

@@ -1,14 +1,14 @@
 import {parseMethodRequestV1,parseMethodResultV1,type MethodRequestV1,type MethodResultV1} from "./dto.js";
-import type {DomainMappingNameV1} from "./mappings.js";
+import type {MethodMappingNameV1} from "./mappings.js";
 export const PROTOCOL_VERSION="1" as const;
 export type PrincipalRole="authority"|"approver"|"operator"|"worker"|"adapter";
 export type MethodKind="command"|"query"|"subscription"|"adapter-spi";
 export type CursorRequirement="absent-workspace"|"workspace"|"absent-run"|"run"|"composite";
 export type ResourceScopeV1="workspace"|"run"|"task"|"attempt"|"proposal"|"adapter";
 export interface MethodCapabilityPolicyV1 {readonly required:true;readonly action:string;readonly scope:ResourceScopeV1}
-export interface MethodDefinitionV1 {readonly method:string;readonly kind:MethodKind;readonly roles:readonly PrincipalRole[];readonly capability:MethodCapabilityPolicyV1;readonly cursor:CursorRequirement;readonly idempotency:"required"|"forbidden";readonly scope:ResourceScopeV1;readonly inputMapping:DomainMappingNameV1|null;readonly resultMapping:DomainMappingNameV1|null;readonly parseInput:(value:unknown)=>MethodRequestV1;readonly parseResult:(value:unknown)=>MethodResultV1}
-type Options={input?:DomainMappingNameV1;result?:DomainMappingNameV1};
-const define=<M extends string>(method:M,kind:MethodKind,roles:readonly PrincipalRole[],cursor:CursorRequirement,scope:ResourceScopeV1,options:Options={}):MethodDefinitionV1&{readonly method:M}=>{const definition:MethodDefinitionV1&{readonly method:M}={method,kind,roles,capability:{required:true,action:method,scope},cursor,idempotency:kind==="command"||kind==="adapter-spi"?"required":"forbidden",scope,inputMapping:options.input??null,resultMapping:options.result??null,parseInput:(value:unknown)=>parseMethodRequestV1(method as ProtocolMethodV1,definition,value),parseResult:(value:unknown)=>parseMethodResultV1(method as ProtocolMethodV1,definition,value)};return definition};
+export interface MethodDefinitionV1 {readonly method:string;readonly kind:MethodKind;readonly roles:readonly PrincipalRole[];readonly capability:MethodCapabilityPolicyV1;readonly cursor:CursorRequirement;readonly idempotency:"required"|"forbidden";readonly scope:ResourceScopeV1;readonly inputMapping:MethodMappingNameV1;readonly resultMapping:MethodMappingNameV1;readonly parseInput:(value:unknown)=>MethodRequestV1;readonly parseResult:(value:unknown)=>MethodResultV1}
+type Options={input?:MethodMappingNameV1;result?:MethodMappingNameV1};
+const define=<M extends string>(method:M,kind:MethodKind,roles:readonly PrincipalRole[],cursor:CursorRequirement,scope:ResourceScopeV1,options:Options={}):MethodDefinitionV1&{readonly method:M}=>{const definition:MethodDefinitionV1&{readonly method:M}={method,kind,roles,capability:{required:true,action:method,scope},cursor,idempotency:kind==="command"||kind==="adapter-spi"?"required":"forbidden",scope,inputMapping:options.input??"method-request",resultMapping:options.result??"method-result",parseInput:(value:unknown)=>parseMethodRequestV1(method as ProtocolMethodV1,definition,value),parseResult:(value:unknown)=>parseMethodResultV1(method as ProtocolMethodV1,definition,value)};return definition};
 const A=["authority"] as const,AO=["authority","operator"] as const,AA=["authority","approver"] as const,AOW=["authority","operator","worker"] as const,AOWD=["authority","operator","worker","adapter"] as const,WA=["worker","adapter"] as const,AD=["adapter"] as const;
 export const METHOD_REGISTRY_V1=[
  define("workspace.create.v1","command",A,"absent-workspace","workspace",{input:"domain-command",result:"domain-command-result"}),define("workspace.get.v1","query",AO,"workspace","workspace",{input:"domain-query",result:"domain-query-result"}),
