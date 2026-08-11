@@ -26,4 +26,10 @@ Unknown cursor kinds, fork-pin/snapshot/scope/completion-policy versions, propos
 
 Readers reject unknown schema, cursor, canonicalizer, hash, operation, policy, dispatch, receipt, and authorization variants before mutation. The public compatibility train is the eleven-family vector set under `docs/vectors/{events,cursors,proposal,delta,fork-pin,dependency-join,delta-authority,context-binding,receipt,task-dispatch,authorization}`. Each vector freezes canonical JSON bytes and its domain-separated digest; downstream protocol, policy, storage, orchestration, SDK, and adapter packages consume these identities rather than redefining them.
 
-The domain package exposes `horseness-vectors-verify` and the package-local `vectors:verify` script. The repository-level frozen command remains unavailable until the root manifest owns a `vectors:verify` forwarding script; C02 does not own `package.json` and therefore does not add that forwarding entry.
+The domain package exposes `horseness-vectors-verify`, its package-local `vectors:verify` script, and the repository root forwards the frozen vector gate.
+ 
+## Protocol v1 implementation train
+ 
+`@horseness/protocol` now freezes the exhaustive JSON-RPC 2.0 method registry and omitted-deny authorization matrix for the full coordinator and adapter SPI surface. Runtime readers require exact request fields, protocol version `1`, method-specific observation cursor scope, command idempotency keys, and role authorization before dispatch. Unknown methods, versions, cursor kinds, extra fields, or unauthorized role/method combinations fail closed.
+ 
+Pagination names `afterObservationCursor` separately from emitted result cursors. Subscription resumption binds subscription ID, after-observation cursor, and opaque resume token. Stable success/error envelopes, local-only transport metadata, domain-owned receipt/proposal mappings, capability detection, provider lifecycle SPI, and `WorkerReturnV1` are public v1 contracts. Generated canonical schemas/manifests and executable vectors are checked byte-for-byte; no v1 reader infers missing cursor scope, transport identity, idempotency, or authority.

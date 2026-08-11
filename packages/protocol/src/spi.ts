@@ -1,0 +1,13 @@
+import type {AttemptReceiptEnvelopeV1,JsonValue,ProposalEnvelopeV1} from "@horseness/domain";
+export interface AdapterCapabilitiesV1{schemaVersion:"1";adapterId:string;providerId:string;launch:boolean;cancel:boolean;reconcile:"supported"|"unsupported";reattach:"supported"|"unsupported";nativeResume:"supported"|"unsupported";contextInjection:"bytes"|"file"|"native";receiptCollection:true;maxContextBytes:number;outputMediaTypes:string[];evidenceMediaTypes:string[]}
+export interface BoundAdapterOperationV1{schemaVersion:"1";workspaceId:string;runId:string;taskId:string;attemptId:string;generation:number;forkPinDigest:string;contextManifestCoreDigest:string;attemptContextBindingDigest:string;providerIdempotencyKeyDigest:string;attemptCapability:string}
+export interface AdapterLaunchRequestV1 extends BoundAdapterOperationV1{operation:"launch";renderedContextDigest:string;providerOptions:JsonValue}
+export interface AdapterCancelRequestV1 extends BoundAdapterOperationV1{operation:"cancel";providerOperationId:string;cancelIdempotencyKey:string}
+export interface AdapterReconcileRequestV1 extends BoundAdapterOperationV1{operation:"reconcile";providerOperationId:string|null}
+export interface AdapterResumeRequestV1 extends BoundAdapterOperationV1{operation:"resume"|"reattach";providerOperationId:string;nativeSessionId:string|null}
+export type AdapterOperationResultV1={schemaVersion:"1";status:"accepted"|"found"|"not-found"|"unsupported"|"ambiguous";providerOperationId:string|null;nativeSessionId:string|null;details:JsonValue};
+export interface WorkerReturnV1{schemaVersion:"1";binding:BoundAdapterOperationV1;receipt:AttemptReceiptEnvelopeV1;proposal:ProposalEnvelopeV1;publishedObjectDigests:string[];decisionResume:{proposalId:string;proposalDigest:string;subscriptionId:string;resumeToken:string|null}}
+export interface CapabilityProviderV1{detectCapabilities():Promise<AdapterCapabilitiesV1>}
+export interface WorkerAdapterV1 extends CapabilityProviderV1{launch(request:AdapterLaunchRequestV1):Promise<AdapterOperationResultV1>;cancel(request:AdapterCancelRequestV1):Promise<AdapterOperationResultV1>;reconcile(request:AdapterReconcileRequestV1):Promise<AdapterOperationResultV1>;resume(request:AdapterResumeRequestV1):Promise<AdapterOperationResultV1>;collectReceipt(binding:BoundAdapterOperationV1):Promise<AttemptReceiptEnvelopeV1>}
+export interface NativePackageMetadataV1{schemaVersion:"1";adapterId:string;adapterVersion:string;hostId:string;hostVersionRange:string;packageDigest:string;contributions:readonly {kind:string;name:string;digest:string}[]}
+export interface DoctorProbeResultV1{schemaVersion:"1";checks:readonly {code:string;status:"ok"|"warning"|"error";evidenceDigest:string|null}[];restartRequired:boolean}

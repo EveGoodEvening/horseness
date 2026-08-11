@@ -10,12 +10,17 @@
       "import": "./src/index.ts"
     }
   },
-  "scripts": {
-    "typecheck": "tsc --noEmit -p ../../tsconfig.base.json",
-    "lint": "eslint src --max-warnings=0",
-    "test": "node --test"
-  },
   "dependencies": {
     "@horseness/domain": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "4.20.5"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node ./bin/test-runner.mjs",
+    "protocol:conformance": "node --import tsx ./bin/conformance.ts",
+    "generated:check": "node --import tsx ./bin/generate.ts --check",
+    "generate": "node --import tsx ./bin/generate.ts"
   }
 }
