@@ -17,7 +17,7 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { containedBackupPath, createBackup, resolveBackupRoot, verifyBackup, verifyBackupIdentity, type VerifiedBackupIdentityV1 } from "../backup/index.js";
+import { containedBackupPath, createBackup, resolveBackupRoot, verifyBackup, verifyBackupIdentity, type BackupCreationPoint, type VerifiedBackupIdentityV1 } from "../backup/index.js";
 import { verifyAuthority } from "../recovery/index.js";
 
 export type RestorePhase =
@@ -28,6 +28,7 @@ export type RestorePhase =
   | "committed";
 
 export type RestoreCrashPoint =
+  | BackupCreationPoint
   | `restore.journal.${"write" | "fsync"}.${"before" | "after"}`
   | `restore.rename.${"database-old" | "artifacts-old" | "database-activate" | "artifacts-activate" | "database-rollback" | "artifacts-rollback"}.${"before" | "after"}`
   | `restore.remove.${"database" | "artifacts" | "old-database" | "old-artifacts" | "stage-database" | "stage-artifacts" | "journal"}.${"before" | "after"}`;
@@ -347,7 +348,7 @@ export function restoreBackup(backupRoot: string, databasePath: string, artifact
     retainedBackupParent ??= assertRetainedBackupContainment(retainedBackupRoot, preflightJournal);
     assertStableDirectory(retainedBackupParent, "retained backup parent");
     const live = new DatabaseSync(databasePath);
-    try { createBackup(live, artifactRoot, retainedBackupRoot); } finally { live.close(); }
+    try { createBackup(live, artifactRoot, retainedBackupRoot, point => { inject(point); }); } finally { live.close(); }
     assertStableDirectory(retainedBackupParent, "retained backup parent");
     retainedBackupIdentity = verifyBackupIdentity(retainedBackupRoot);
   }

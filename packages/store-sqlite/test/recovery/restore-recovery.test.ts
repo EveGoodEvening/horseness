@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -85,6 +85,33 @@ test("pre-restore backup failure leaves live authority untouched", () => {
     assert.equal(existsSync(journal(state.database)), false);
   } finally { rmSync(state.root, { recursive: true, force: true }); }
 });
+test("retained backup destination substitution cannot receive authority bytes", () => {
+  const state = prepareCase("horseness-restore-retained-substitution-");
+  const attacker = join(state.root, "attacker-target");
+  try {
+    const before = pairGeneration(state.database, state.artifacts);
+    writeFileSync(join(state.root, "attacker-marker"), "marker");
+    // A directory target makes any accidental traversal or recursive population observable.
+    const marker = join(state.root, "attacker-marker");
+    assert.equal(readFileSync(marker, "utf8"), "marker");
+    mkdirSync(attacker, { mode: 0o700 });
+    let substituted = false;
+    assert.throws(
+      () => restoreBackup(state.backup, state.database, state.artifacts, confirmed(state), point => {
+        if (!substituted && point === "backup.final.before-rename") {
+          symlinkSync(attacker, state.retained, "dir");
+          substituted = true;
+        }
+      }),
+      /destination already exists/,
+    );
+    assert.equal(substituted, true);
+    assert.deepEqual(readdirSync(attacker), []);
+    assert.deepEqual(pairGeneration(state.database, state.artifacts), before);
+    assert.equal(existsSync(journal(state.database)), false);
+  } finally { rmSync(state.root, { recursive: true, force: true }); }
+});
+
 
 test("retained backup inside artifact authority is rejected before mutation", () => {
   const state = prepareCase("horseness-restore-retained-inside-artifacts-");
@@ -140,7 +167,6 @@ test("restore retains verified pre-restore backup and supports rollback", () => 
     assert.equal(existsSync(state.retained), true);
   } finally { rmSync(state.root, { recursive: true, force: true }); }
 });
-
 test("restore records committed authority generation and removes its journal", () => {
   const state = prepareCase("horseness-restore-");
   try {
@@ -167,7 +193,7 @@ test("restore crash matrix never reopens a mixed database/artifact generation", 
           if (visit === crashIndex) throw new Error(`crash:${point}:${crashIndex}`);
           visit += 1;
         }),
-        /crash:restore\./,
+        /crash:(?:restore\.|backup\.)/,
       );
       const durablePhase = durableJournalPhase(state.database);
       recoverInterruptedRestore(state.database, state.artifacts);
