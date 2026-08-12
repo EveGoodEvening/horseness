@@ -17,7 +17,9 @@
     "test:admission": "node src/admission/test-runner.mjs",
     "test:context-golden": "tsx --test test/context/**/*.test.ts",
     "test:tasks-forks-receipts": "tsx --test test/forks/**/*.test.ts test/projections/**/*.test.ts test/receipts/**/*.test.ts",
-    "test:model": "tsx --test test/projections/**/*.test.ts"
+    "test:model": "tsx --test test/projections/**/*.test.ts",
+    "test:dispatch-property": "tsx --test test/scheduler/**/*.test.ts test/attempts/**/*.test.ts test/leases/**/*.test.ts",
+    "test:dispatch-restart-races": "tsx --test test/dispatch/**/*.test.ts test/recovery/**/*.test.ts"
   },
   "dependencies": {
     "@horseness/domain": "workspace:*",
