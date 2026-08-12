@@ -85,30 +85,78 @@ test("pre-restore backup failure leaves live authority untouched", () => {
     assert.equal(existsSync(journal(state.database)), false);
   } finally { rmSync(state.root, { recursive: true, force: true }); }
 });
-test("retained backup destination substitution cannot receive authority bytes", () => {
-  const state = prepareCase("horseness-restore-retained-substitution-");
+test("empty-directory race loses to atomic backup reservation without mutation", () => {
+  const state = prepareCase("horseness-restore-retained-empty-race-");
+  try {
+    let raced = false;
+    assert.throws(() => restoreBackup(state.backup, state.database, state.artifacts, confirmed(state), point => {
+      if (!raced && point === "backup.final.before-reserve") { mkdirSync(state.retained, { mode: 0o700 }); raced = true; }
+    }), /destination already exists/);
+    assert.equal(raced, true);
+    assert.deepEqual(readdirSync(state.retained), []);
+    assert.deepEqual(pairGeneration(state.database, state.artifacts), { database: "old", artifacts: "old" });
+    assert.equal(existsSync(journal(state.database)), false);
+  } finally { rmSync(state.root, { recursive: true, force: true }); }
+});
+
+test("symlink race loses to atomic backup reservation without touching its target", () => {
+  const state = prepareCase("horseness-restore-retained-symlink-race-");
   const attacker = join(state.root, "attacker-target");
   try {
-    const before = pairGeneration(state.database, state.artifacts);
-    writeFileSync(join(state.root, "attacker-marker"), "marker");
-    // A directory target makes any accidental traversal or recursive population observable.
-    const marker = join(state.root, "attacker-marker");
-    assert.equal(readFileSync(marker, "utf8"), "marker");
     mkdirSync(attacker, { mode: 0o700 });
-    let substituted = false;
-    assert.throws(
-      () => restoreBackup(state.backup, state.database, state.artifacts, confirmed(state), point => {
-        if (!substituted && point === "backup.final.before-rename") {
-          symlinkSync(attacker, state.retained, "dir");
-          substituted = true;
-        }
-      }),
-      /destination already exists/,
-    );
-    assert.equal(substituted, true);
-    assert.deepEqual(readdirSync(attacker), []);
-    assert.deepEqual(pairGeneration(state.database, state.artifacts), before);
+    writeFileSync(join(attacker, "marker"), "preserved");
+    let raced = false;
+    assert.throws(() => restoreBackup(state.backup, state.database, state.artifacts, confirmed(state), point => {
+      if (!raced && point === "backup.final.before-reserve") { symlinkSync(attacker, state.retained, "dir"); raced = true; }
+    }), /destination already exists/);
+    assert.equal(raced, true);
+    assert.equal(readFileSync(join(attacker, "marker"), "utf8"), "preserved");
+    assert.deepEqual(pairGeneration(state.database, state.artifacts), { database: "old", artifacts: "old" });
     assert.equal(existsSync(journal(state.database)), false);
+  } finally { rmSync(state.root, { recursive: true, force: true }); }
+});
+
+test("reservation substitution preserves attacker marker and cleanup removes only the pinned leaf", () => {
+  const state = prepareCase("horseness-restore-retained-reservation-substitution-");
+  const attacker = join(state.root, "reservation-attacker");
+  try {
+    mkdirSync(attacker, { mode: 0o700 });
+    writeFileSync(join(attacker, "marker"), "preserved");
+    let substituted = false;
+    assert.throws(() => restoreBackup(state.backup, state.database, state.artifacts, confirmed(state), point => {
+      if (!substituted && point === "backup.final.after-reserve") {
+        rmSync(state.retained, { recursive: true });
+        symlinkSync(attacker, state.retained, "dir");
+        substituted = true;
+      }
+    }), /non-symlink directory|identity changed/);
+    assert.equal(substituted, true);
+    assert.equal(readFileSync(join(attacker, "marker"), "utf8"), "preserved");
+    assert.deepEqual(pairGeneration(state.database, state.artifacts), { database: "old", artifacts: "old" });
+    assert.equal(existsSync(journal(state.database)), false);
+  } finally { rmSync(state.root, { recursive: true, force: true }); }
+});
+
+test("failed reserved backup removes its own partial directory", () => {
+  const state = prepareCase("horseness-restore-retained-cleanup-");
+  try {
+    assert.throws(() => restoreBackup(state.backup, state.database, state.artifacts, confirmed(state), point => {
+      if (point === "backup.final.populated") throw new Error("injected backup failure");
+    }), /injected backup failure/);
+    assert.equal(existsSync(state.retained), false);
+    assert.deepEqual(pairGeneration(state.database, state.artifacts), { database: "old", artifacts: "old" });
+    assert.equal(existsSync(journal(state.database)), false);
+  } finally { rmSync(state.root, { recursive: true, force: true }); }
+});
+
+test("reserved backup is published only after manifest verification", () => {
+  const state = prepareCase("horseness-restore-retained-reserved-success-");
+  const points: string[] = [];
+  try {
+    restoreBackup(state.backup, state.database, state.artifacts, confirmed(state), point => { if (point.startsWith("backup.")) points.push(point); });
+    assert.deepEqual(points, ["backup.final.before-reserve", "backup.final.after-reserve", "backup.final.populated", "backup.final.verified"]);
+    assert.equal(verifyBackupIdentity(state.retained).kind, "HorsenessVerifiedBackupIdentityV1");
+    assert.deepEqual(pairGeneration(state.database, state.artifacts), { database: "new", artifacts: "new" });
   } finally { rmSync(state.root, { recursive: true, force: true }); }
 });
 

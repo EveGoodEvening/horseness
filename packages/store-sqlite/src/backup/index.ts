@@ -1,5 +1,5 @@
-import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, realpathSync, rmSync, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { DatabaseSync as Database } from "node:sqlite";
@@ -21,7 +21,7 @@ export interface VerifiedBackupIdentityV1 {
   readonly databaseDigest:string;
   readonly createdAt:string;
 }
-export type BackupCreationPoint = "backup.temp.created" | "backup.temp.populated" | "backup.final.before-rename" | "backup.final.after-rename";
+export type BackupCreationPoint = "backup.final.before-reserve" | "backup.final.after-reserve" | "backup.final.populated" | "backup.final.verified";
 export type BackupCreationInjector = (point: BackupCreationPoint, path: string) => void;
 
 
@@ -97,28 +97,29 @@ function syncTree(path:string):void {for(const entry of readdirSync(path)){const
 interface PinnedDirectory { readonly path:string; readonly realpath:string; readonly device:bigint; readonly inode:bigint }
 function pinDirectory(path:string,label:string):PinnedDirectory {const absolute=resolve(path),stat=lstatSync(absolute,{bigint:true});if(stat.isSymbolicLink()||!stat.isDirectory())throw new Error(`${label} is not a non-symlink directory`);const real=realpathSync(absolute);if(real!==absolute)throw new Error(`${label} is not a real directory path`);return{path:absolute,realpath:real,device:stat.dev,inode:stat.ino};}
 function assertPinnedDirectory(identity:PinnedDirectory,label:string):void {const current=pinDirectory(identity.path,label);if(current.realpath!==identity.realpath||current.device!==identity.device||current.inode!==identity.inode)throw new Error(`${label} identity changed`);}
-function assertAbsent(path:string):void {try{lstatSync(path);throw new Error("backup destination already exists");}catch(error){if(error instanceof Error&&"code" in error&&error.code==="ENOENT")return;throw error;}}
+function writeExclusive(path:string,data:Uint8Array):void {let fd:number|undefined;try{fd=openSync(path,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);let offset=0;while(offset<data.length)offset+=writeSync(fd,data,offset,data.length-offset);fsyncSync(fd);}finally{if(fd!==undefined)closeSync(fd);}}
+function ensureReservedDirectory(root:PinnedDirectory,path:string):void {assertPinnedDirectory(root,"backup destination");const relativePath=relative(root.path,path);if(relativePath===""||relativePath.startsWith("..")||isAbsolute(relativePath))throw new Error("backup directory escapes reserved destination");let current=root.path;for(const part of relativePath.split(sep)){current=join(current,part);try{mkdirSync(current,{recursive:false,mode:0o700});}catch(error){if(!(error instanceof Error&&"code" in error&&error.code==="EEXIST"))throw error;const stat=lstatSync(current);if(stat.isSymbolicLink()||!stat.isDirectory())throw new Error("backup directory contains symlink or non-directory");}const real=realpathSync(current);if(!real.startsWith(`${root.path}${sep}`))throw new Error("backup directory escapes reserved destination");}assertPinnedDirectory(root,"backup destination");}
 
 export function createBackup(db:Database,artifactRoot:string,destination:string,inject:BackupCreationInjector=()=>undefined):BackupManifestV1 {
-  destination=resolve(destination);const parent=pinDirectory(dirname(destination),"backup destination parent");const leaf=basename(destination);if(leaf===""||leaf==="."||leaf===".."||join(parent.path,leaf)!==destination)throw new Error("unsafe backup destination leaf");assertAbsent(destination);
+  destination=resolve(destination);const parent=pinDirectory(dirname(destination),"backup destination parent");const leaf=basename(destination);if(leaf===""||leaf==="."||leaf===".."||join(parent.path,leaf)!==destination)throw new Error("unsafe backup destination leaf");
   verifyAuthority(db,artifactRoot);
-  const temporary=join(parent.path,`.${leaf}.backup-${randomUUID()}`);mkdirSync(temporary,{mode:0o700});const pinnedTemporary=pinDirectory(temporary,"backup temporary directory");
+  inject("backup.final.before-reserve",destination);assertPinnedDirectory(parent,"backup destination parent");
+  try{mkdirSync(destination,{recursive:false,mode:0o700});}catch(error){if(error instanceof Error&&"code" in error&&error.code==="EEXIST")throw new Error("backup destination already exists");throw error;}
+  const reserved=pinDirectory(destination,"backup destination");
   try {
-    inject("backup.temp.created",temporary);assertPinnedDirectory(parent,"backup destination parent");assertPinnedDirectory(pinnedTemporary,"backup temporary directory");
-    mkdirSync(join(temporary,"db"),{mode:0o700});mkdirSync(join(temporary,"artifacts"),{mode:0o700});assertPinnedDirectory(pinnedTemporary,"backup temporary directory");
-    const databasePath=join(temporary,"db","authority.sqlite");db.exec(`VACUUM INTO '${databasePath.replaceAll("'","''")}'`);assertPinnedDirectory(pinnedTemporary,"backup temporary directory");
+    inject("backup.final.after-reserve",destination);assertPinnedDirectory(parent,"backup destination parent");assertPinnedDirectory(reserved,"backup destination");
+    ensureReservedDirectory(reserved,join(destination,"db"));ensureReservedDirectory(reserved,join(destination,"artifacts"));
+    const databasePath=join(destination,"db","authority.sqlite");db.exec(`VACUUM INTO '${databasePath.replaceAll("'","''")}'`);assertPinnedDirectory(reserved,"backup destination");
     const catalog=db.prepare("SELECT digest,byte_length,relative_path FROM artifacts ORDER BY relative_path").all() as {digest:string;byte_length:number;relative_path:string}[];
-    const artifacts:BackupFileV1[]=catalog.map(row=>{assertPinnedDirectory(pinnedTemporary,"backup temporary directory");const relativePath=parsePortableRelativePath(`artifacts/${row.relative_path}`,"artifacts").slice("artifacts/".length);const source=resolve(artifactRoot,...relativePath.split("/"));const sourceRootRelative=relative(resolve(artifactRoot),source);if(sourceRootRelative.startsWith("..")||isAbsolute(sourceRootRelative))throw new Error("artifact catalog path escapes root");const data=readRegularNoFollow(source);if(data.length!==row.byte_length||digest(data)!==row.digest)throw new Error(`artifact catalog mismatch: ${relativePath}`);const target=join(temporary,"artifacts",...relativePath.split("/"));mkdirSync(dirname(target),{recursive:true,mode:0o700});assertPinnedDirectory(pinnedTemporary,"backup temporary directory");writeFileSync(target,data,{mode:0o600,flag:"wx"});return{path:`artifacts/${relativePath}`,digest:row.digest,bytes:data.length};});
+    const artifacts:BackupFileV1[]=catalog.map(row=>{assertPinnedDirectory(reserved,"backup destination");const relativePath=parsePortableRelativePath(`artifacts/${row.relative_path}`,"artifacts").slice("artifacts/".length);const source=resolve(artifactRoot,...relativePath.split("/"));const sourceRootRelative=relative(resolve(artifactRoot),source);if(sourceRootRelative.startsWith("..")||isAbsolute(sourceRootRelative))throw new Error("artifact catalog path escapes root");const data=readRegularNoFollow(source);if(data.length!==row.byte_length||digest(data)!==row.digest)throw new Error(`artifact catalog mismatch: ${relativePath}`);const target=join(destination,"artifacts",...relativePath.split("/"));ensureReservedDirectory(reserved,dirname(target));writeExclusive(target,data);return{path:`artifacts/${relativePath}`,digest:row.digest,bytes:row.byte_length};});
     const databaseBytes=readRegularNoFollow(databasePath);const version=(db.prepare("SELECT max(version) AS version FROM schema_migrations").get() as {version:number|null}).version;
     if(version===null)throw new Error("authority has no schema version");
     const manifest:BackupManifestV1={kind:"HorsenessBackupManifestV1",schemaVersion:1,authoritySchemaVersion:version,createdAt:new Date().toISOString(),database:{file:"db/authority.sqlite",digest:digest(databaseBytes),bytes:databaseBytes.length},artifacts};
-    writeFileSync(join(temporary,"manifest.json"),`${JSON.stringify(manifest,null,2)}\n`,{encoding:"utf8",mode:0o600,flag:"wx"});assertPinnedDirectory(pinnedTemporary,"backup temporary directory");syncTree(temporary);syncDirectory(parent.path);
-    inject("backup.temp.populated",temporary);assertPinnedDirectory(parent,"backup destination parent");assertPinnedDirectory(pinnedTemporary,"backup temporary directory");
-    inject("backup.final.before-rename",destination);assertPinnedDirectory(parent,"backup destination parent");assertPinnedDirectory(pinnedTemporary,"backup temporary directory");assertAbsent(destination);
-    renameSync(temporary,destination);syncDirectory(parent.path);inject("backup.final.after-rename",destination);
-    assertPinnedDirectory(parent,"backup destination parent");const finalIdentity=pinDirectory(destination,"backup destination");if(finalIdentity.device!==pinnedTemporary.device||finalIdentity.inode!==pinnedTemporary.inode||finalIdentity.realpath!==destination)throw new Error("backup destination identity changed");
-    return manifest;
-  } catch(error) {try{const current=lstatSync(temporary,{bigint:true});if(!current.isSymbolicLink()&&current.isDirectory()&&current.dev===pinnedTemporary.device&&current.ino===pinnedTemporary.inode)rmSync(temporary,{recursive:true,force:true});}catch{}throw error;}
+    inject("backup.final.populated",destination);assertPinnedDirectory(parent,"backup destination parent");assertPinnedDirectory(reserved,"backup destination");
+    writeExclusive(join(destination,"manifest.json"),Buffer.from(`${JSON.stringify(manifest,null,2)}\n`,"utf8"));syncTree(destination);syncDirectory(parent.path);
+    const verified=verifyBackup(destination);assertPinnedDirectory(parent,"backup destination parent");assertPinnedDirectory(reserved,"backup destination");inject("backup.final.verified",destination);
+    return verified;
+  } catch(error) {try{const current=lstatSync(destination,{bigint:true});if(!current.isSymbolicLink()&&current.isDirectory()&&current.dev===reserved.device&&current.ino===reserved.inode)rmSync(destination,{recursive:true,force:true});}catch{}throw error;}
 }
 
 export function readBackupManifest(root:string):BackupManifestV1 {const pinned=resolveBackupRoot(root);return parseBackupManifest(JSON.parse(readRegularNoFollow(join(pinned,"manifest.json")).toString("utf8")) as unknown);}
