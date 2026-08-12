@@ -15,8 +15,25 @@ test("workspace admission replay advances authority projections but never policy
   const workspace=reduceWorkspaceState(null,{eventType:"WorkspaceCreatedV1",sequence:1,workspaceId:"w",authorityPrincipalId:"authority",initialGrantDigest:"grant",authorityConsumptionMarker:"used",activePolicyDigest:"policy"});
   const states=["accepted","rejected","conflicted","quarantined","approval_required"] as const;
   let projected=workspace;
-  for(let index=0;index<states.length;index+=1){const state=states[index]!;projected=reduceWorkspaceState(projected,{eventType:"WorkspaceAdmissionRecordedV1",sequence:index+2,workspaceId:"w",proposalDigest:`proposal-${state}`,decisionEventId:`decision-${state}`,quotaId:"quota",quotaDigest:"quota-v1",consumed:state==="accepted"?"yes":"no"});}
+  for(let index=0;index<states.length;index+=1){const state=states[index]!;projected=reduceWorkspaceState(projected,{eventType:"WorkspaceAdmissionRecordedV1",sequence:index+2,workspaceId:"w",proposalDigest:`proposal-${state}`,decisionEventId:`decision-${state}`,state,quotaId:"quota",quotaDigest:"quota-v1",consumed:state==="accepted"?"yes":"no"});}
   assert.equal(projected.activePolicyDigest,"policy"); assert.equal(Object.keys(projected.admissions).length,states.length); assert.deepEqual(projected.quotas.quota?.consumedDecisionEventIds,["decision-accepted"]); assert.equal(projected.quotas.quota?.observedDecisionEventIds.length,states.length);
+});
+
+test("workspace admission continuations are closed and terminal decisions are immutable",()=>{
+  const genesis=reduceWorkspaceState(null,{eventType:"WorkspaceCreatedV1",sequence:1,workspaceId:"w",authorityPrincipalId:"authority",initialGrantDigest:"grant",authorityConsumptionMarker:"used",activePolicyDigest:"policy"});
+  const pending=["approval_required","quarantined"] as const;
+  const terminal=["accepted","rejected"] as const;
+  for(const from of pending) for(const to of terminal){
+    const first=reduceWorkspaceState(genesis,{eventType:"WorkspaceAdmissionRecordedV1",sequence:2,workspaceId:"w",proposalDigest:`${from}-${to}`,decisionEventId:`${from}-1-${to}`,state:from,quotaId:"quota",quotaDigest:"quota-v1",consumed:"no"});
+    const continued=reduceWorkspaceState(first,{eventType:"WorkspaceAdmissionRecordedV1",sequence:3,workspaceId:"w",proposalDigest:`${from}-${to}`,decisionEventId:`${from}-2-${to}`,state:to,quotaId:"quota",quotaDigest:"quota-v1",consumed:to==="accepted"?"yes":"no"});
+    assert.equal(continued.admissions[`${from}-${to}`]?.state,to); assert.equal(continued.admissions[`${from}-${to}`]?.history.length,2);
+  }
+  const all=["accepted","rejected","conflicted","quarantined","approval_required"] as const;
+  for(const from of all) for(const to of all){
+    if((from==="approval_required"||from==="quarantined")&&(to==="accepted"||to==="rejected")) continue;
+    const first=reduceWorkspaceState(genesis,{eventType:"WorkspaceAdmissionRecordedV1",sequence:2,workspaceId:"w",proposalDigest:`${from}-${to}`,decisionEventId:`${from}-1-${to}`,state:from,quotaId:"quota",quotaDigest:"quota-v1",consumed:from==="accepted"?"yes":"no"});
+    assert.throws(()=>reduceWorkspaceState(first,{eventType:"WorkspaceAdmissionRecordedV1",sequence:3,workspaceId:"w",proposalDigest:`${from}-${to}`,decisionEventId:`${from}-2-${to}`,state:to,quotaId:"quota",quotaDigest:"quota-v1",consumed:to==="accepted"?"yes":"no"}),/ILLEGAL_ADMISSION_TRANSITION/);
+  }
 });
 
 test("canonical replay binds sequence, aggregate identity, prior hash, and resulting document hash",()=>{

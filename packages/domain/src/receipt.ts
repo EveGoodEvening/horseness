@@ -57,13 +57,15 @@ export function reduceCanonicalDocument(state: CanonicalDocument | null, event: 
   }
 }
 
-export interface WorkspaceAdmissionProjectionV1 { proposalDigest: string; decisionEventId: string; quotaId: string; quotaDigest: string; consumed: "yes" | "no" }
+export type WorkspaceAdmissionDecisionStateV1 = "accepted" | "rejected" | "conflicted" | "quarantined" | "approval_required";
+export interface WorkspaceAdmissionDecisionV1 { decisionEventId: string; state: WorkspaceAdmissionDecisionStateV1; consumed: "yes" | "no" }
+export interface WorkspaceAdmissionProjectionV1 { proposalDigest: string; decisionEventId: string; state: WorkspaceAdmissionDecisionStateV1; quotaId: string; quotaDigest: string; consumed: "yes" | "no"; history: readonly WorkspaceAdmissionDecisionV1[] }
 export interface WorkspaceQuotaProjectionV1 { quotaDigest: string; consumedDecisionEventIds: readonly string[]; observedDecisionEventIds: readonly string[] }
 export interface WorkspaceState { workspaceId: string; authorityPrincipalId: string; initialGrantDigest: string; authorityConsumptionMarker: string; activePolicyDigest: string; admissions: Readonly<Record<string, WorkspaceAdmissionProjectionV1>>; quotas: Readonly<Record<string, WorkspaceQuotaProjectionV1>>; contextEpoch: number; lastEventSequence: number }
 export type WorkspaceOperationalEvent =
   | { eventType: "WorkspaceCreatedV1"; sequence: number; workspaceId: string; authorityPrincipalId: string; initialGrantDigest: string; authorityConsumptionMarker: string; activePolicyDigest: string }
   | { eventType: "PolicyReferenceChangedV1"; sequence: number; workspaceId: string; activePolicyDigest: string }
-  | { eventType: "WorkspaceAdmissionRecordedV1"; sequence: number; workspaceId: string; proposalDigest: string; decisionEventId: string; quotaId: string; quotaDigest: string; consumed: "yes" | "no" };
+  | { eventType: "WorkspaceAdmissionRecordedV1"; sequence: number; workspaceId: string; proposalDigest: string; decisionEventId: string; state: WorkspaceAdmissionDecisionStateV1; quotaId: string; quotaDigest: string; consumed: "yes" | "no" };
 export function reduceWorkspaceState(state: WorkspaceState | null, event: WorkspaceOperationalEvent): WorkspaceState {
   switch (event.eventType) {
     case "WorkspaceCreatedV1":
@@ -79,12 +81,21 @@ export function reduceWorkspaceState(state: WorkspaceState | null, event: Worksp
       if (event.workspaceId !== state.workspaceId) throw new DomainError("AGGREGATE_IDENTITY_MISMATCH");
       if (event.sequence !== state.lastEventSequence + 1) throw new DomainError("EVENT_SEQUENCE_INVALID");
       if (event.consumed !== "yes" && event.consumed !== "no") throw new DomainError("MALFORMED_EVENT");
-      if (state.admissions[event.proposalDigest] !== undefined || Object.values(state.admissions).some((item) => item.decisionEventId === event.decisionEventId)) throw new DomainError("DUPLICATE_ADMISSION_TRANSITION");
+      if (!(["accepted", "rejected", "conflicted", "quarantined", "approval_required"] as readonly string[]).includes(event.state)) throw new DomainError("MALFORMED_EVENT");
+      if ((event.state === "accepted") !== (event.consumed === "yes")) throw new DomainError("ADMISSION_QUOTA_INCONSISTENT");
+      if (Object.values(state.admissions).some((item) => item.history.some((decision) => decision.decisionEventId === event.decisionEventId))) throw new DomainError("DUPLICATE_ADMISSION_TRANSITION");
+      const prior = state.admissions[event.proposalDigest];
+      if (prior !== undefined) {
+        if (prior.quotaId !== event.quotaId || prior.quotaDigest !== event.quotaDigest) throw new DomainError("ADMISSION_IDENTITY_CONFLICT");
+        const validContinuation = (prior.state === "approval_required" || prior.state === "quarantined") && (event.state === "accepted" || event.state === "rejected");
+        if (!validContinuation) throw new DomainError("ILLEGAL_ADMISSION_TRANSITION");
+      }
       const quota = state.quotas[event.quotaId];
       if (quota !== undefined && quota.quotaDigest !== event.quotaDigest) throw new DomainError("QUOTA_IDENTITY_CONFLICT");
       const observedDecisionEventIds = [...(quota?.observedDecisionEventIds ?? []), event.decisionEventId];
       const consumedDecisionEventIds = event.consumed === "yes" ? [...(quota?.consumedDecisionEventIds ?? []), event.decisionEventId] : [...(quota?.consumedDecisionEventIds ?? [])];
-      return { ...state, admissions: { ...state.admissions, [event.proposalDigest]: { proposalDigest: event.proposalDigest, decisionEventId: event.decisionEventId, quotaId: event.quotaId, quotaDigest: event.quotaDigest, consumed: event.consumed } }, quotas: { ...state.quotas, [event.quotaId]: { quotaDigest: event.quotaDigest, consumedDecisionEventIds, observedDecisionEventIds } }, contextEpoch: state.contextEpoch + 1, lastEventSequence: event.sequence };
+      const decision = { decisionEventId: event.decisionEventId, state: event.state, consumed: event.consumed };
+      return { ...state, admissions: { ...state.admissions, [event.proposalDigest]: { proposalDigest: event.proposalDigest, decisionEventId: event.decisionEventId, state: event.state, quotaId: event.quotaId, quotaDigest: event.quotaDigest, consumed: event.consumed, history: [...(prior?.history ?? []), decision] } }, quotas: { ...state.quotas, [event.quotaId]: { quotaDigest: event.quotaDigest, consumedDecisionEventIds, observedDecisionEventIds } }, contextEpoch: state.contextEpoch + 1, lastEventSequence: event.sequence };
     }
     default: throw new DomainError("UNSUPPORTED_EVENT_TYPE");
   }
@@ -106,7 +117,8 @@ export function deterministicWorkspaceReplay(events: readonly HashedEventEnvelop
       case "PolicyReferenceChangedV1": state = reduceWorkspaceState(state, { eventType: "PolicyReferenceChangedV1", ...common, activePolicyDigest: text(payload.activePolicyDigest) }); break;
       case "WorkspaceAdmissionRecordedV1": {
         const consumed = text(payload.consumed); if (consumed !== "yes" && consumed !== "no") throw new DomainError("MALFORMED_EVENT");
-        state = reduceWorkspaceState(state, { eventType: "WorkspaceAdmissionRecordedV1", ...common, proposalDigest: text(payload.proposalDigest), decisionEventId: text(payload.decisionEventId), quotaId: text(payload.quotaId), quotaDigest: text(payload.quotaDigest), consumed }); break;
+        const decisionState = text(payload.state); if (!["accepted", "rejected", "conflicted", "quarantined", "approval_required"].includes(decisionState)) throw new DomainError("MALFORMED_EVENT");
+        state = reduceWorkspaceState(state, { eventType: "WorkspaceAdmissionRecordedV1", ...common, proposalDigest: text(payload.proposalDigest), decisionEventId: text(payload.decisionEventId), state: decisionState as WorkspaceAdmissionDecisionStateV1, quotaId: text(payload.quotaId), quotaDigest: text(payload.quotaDigest), consumed }); break;
       }
       default: throw new DomainError("UNSUPPORTED_EVENT_TYPE");
     }

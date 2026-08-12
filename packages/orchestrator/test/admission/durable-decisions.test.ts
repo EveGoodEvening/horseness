@@ -19,7 +19,7 @@ test("approval-required decisions durably resolve through approve or reject",()=
   assert.equal(rejected.proposals.reject?.status,"rejected");
 });
 
-test("quarantine release binds the terminal provenance artifact without mutating policy",()=>{
+test("reviewed release persists acceptance only after a delta acceptance",()=>{
   const workspace=reduceWorkspaceState(null,{eventType:"WorkspaceCreatedV1",sequence:1,workspaceId:"w",activePolicyDigest:NO_POLICY_DIGEST});
   let state=decide(submit(base(),"release"),"release","quarantined");
   state=reduceOperationalState(state,{eventType:"DeltaAcceptedV1",sequence:state.lastEventSequence+1,workspaceId:"w",runId:"r",proposalId:"release",proposalDigest:"digest-release"});
@@ -27,4 +27,12 @@ test("quarantine release binds the terminal provenance artifact without mutating
   assert.equal(state.proposals.release?.provenanceDigest,"provenance-released");
   assert.equal(state.proposals.release?.artifactDigest,"artifact-released");
   assert.equal(workspace.activePolicyDigest,NO_POLICY_DIGEST);
+});
+
+test("release review outcomes remain durable and are not rewritten as acceptance",()=>{
+  for(const outcome of ["rejected","quarantined","approval_required"] as const){
+    const state=decide(submit(base(),outcome),outcome,outcome,`release-${outcome}`);
+    assert.equal(state.proposals[outcome]?.status,outcome);
+    assert.equal(state.proposals[outcome]?.provenanceDigest,`provenance-release-${outcome}`);
+  }
 });
