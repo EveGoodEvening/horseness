@@ -188,7 +188,7 @@ function decisionEvent(value: unknown, proposalId: string, proposalDigest: strin
 
 export class WorkerClientV1 {
   readonly #binding: Readonly<WorkerBindingV1>;
-  readonly #expected: Readonly<{ forkPinDigest: string; manifestDigest: string; contextBindingDigest: string; deltaAuthorityScopeDigest: string; pinnedPolicyDigest: string }>;
+  readonly #expected: Readonly<{ forkPinDigest: string; manifestDigest: string; contextBindingDigest: string; deltaAuthorityScopeDigest: string; pinnedPolicyDigest: string; currentPolicyDigest: string; allowedProducerPrincipalId: string; allowedProducerGrantDigest: string; authorPrincipalId: string; authorGrantDigest: string; baseRevision: number; baseStateHash: string; canonicalizerVersion: string; hashVersion: string }>;
   readonly #acceptedReceipts = new Map<string, AttemptReceiptEnvelopeV1>();
   readonly #publishedEvidence = new Map<string, { digest: string; claim: string }>();
   readonly #resumeScopes = new Map<string, { subscriptionId: string; proposalId: string; proposalDigest: string; cursor: CompositeCursorV1 }>();
@@ -196,7 +196,22 @@ export class WorkerClientV1 {
   constructor(readonly coordinator: CoordinatorClientV1, binding: WorkerBindingV1) {
     assertBinding(binding);
     this.#binding = cloneFreeze(binding);
-    this.#expected = Object.freeze({ forkPinDigest: binding.forkPin.forkPinDigest, manifestDigest: contextManifestCoreDigest(binding.manifest), contextBindingDigest: attemptContextBindingDigest(binding.contextBinding), deltaAuthorityScopeDigest: binding.forkPin.core.deltaAuthorityScopeDigest, pinnedPolicyDigest: binding.forkPin.core.pinnedPolicyDigest });
+    this.#expected = Object.freeze({
+      forkPinDigest: binding.forkPin.forkPinDigest,
+      manifestDigest: contextManifestCoreDigest(binding.manifest),
+      contextBindingDigest: attemptContextBindingDigest(binding.contextBinding),
+      deltaAuthorityScopeDigest: binding.forkPin.core.deltaAuthorityScopeDigest,
+      pinnedPolicyDigest: binding.forkPin.core.pinnedPolicyDigest,
+      currentPolicyDigest: binding.manifest.authorizationOverlayV1.policyDigest,
+      allowedProducerPrincipalId: binding.contextBinding.allowedProducerPrincipalId,
+      allowedProducerGrantDigest: binding.contextBinding.allowedProducerGrantDigest,
+      authorPrincipalId: binding.contextBinding.allowedProducerPrincipalId,
+      authorGrantDigest: binding.contextBinding.allowedProducerGrantDigest,
+      baseRevision: binding.forkPin.core.canonicalRevision,
+      baseStateHash: binding.forkPin.core.canonicalStateHash,
+      canonicalizerVersion: binding.forkPin.core.canonicalizerVersion,
+      hashVersion: binding.forkPin.core.hashVersion,
+    });
   }
   get binding(): Readonly<WorkerBindingV1> { return this.#binding; }
   async readBoundContext(): Promise<ContextManifestCoreV1> {
@@ -255,13 +270,13 @@ export class WorkerClientV1 {
   }
   #assertReceipt(receipt: AttemptReceiptEnvelopeV1): void {
     const b = this.#binding;
-    if (receipt.workspaceId !== b.workspaceId || receipt.runId !== b.runId || receipt.taskId !== b.taskId || receipt.attemptId !== b.attemptId || receipt.generation !== b.generation || receipt.forkPinDigest !== b.forkPin.forkPinDigest || receipt.contextManifestCoreDigest !== contextManifestCoreDigest(b.manifest) || receipt.attemptContextBindingDigest !== attemptContextBindingDigest(b.contextBinding) || receipt.providerId !== b.providerId || receipt.providerIdempotencyKeyDigest !== b.providerIdempotencyKeyDigest) throw new SdkError("SCOPE_SUBSTITUTION", "receipt differs from immutable worker binding");
+    if (receipt.workspaceId !== b.workspaceId || receipt.runId !== b.runId || receipt.taskId !== b.taskId || receipt.attemptId !== b.attemptId || receipt.generation !== b.generation || receipt.forkPinDigest !== b.forkPin.forkPinDigest || receipt.contextManifestCoreDigest !== contextManifestCoreDigest(b.manifest) || receipt.attemptContextBindingDigest !== attemptContextBindingDigest(b.contextBinding) || receipt.providerId !== b.providerId || receipt.providerIdempotencyKeyDigest !== b.providerIdempotencyKeyDigest || receipt.producerPrincipalId !== this.#expected.allowedProducerPrincipalId || receipt.producerGrantDigest !== this.#expected.allowedProducerGrantDigest) throw new SdkError("SCOPE_SUBSTITUTION", "receipt differs from immutable worker binding");
   }
   #assertProposal(proposal: ProposalEnvelopeV1): void {
     const b = this.#binding;
     const receiptDigests = [...this.#acceptedReceipts.keys()].sort();
     const evidenceClaims = [...this.#publishedEvidence.values()].sort((a, c) => a.digest.localeCompare(c.digest) || a.claim.localeCompare(c.claim));
-    if (proposal.core.workspaceId !== b.workspaceId || proposal.core.runId !== b.runId || proposal.core.attemptId !== b.attemptId || proposal.core.forkPinDigest !== this.#expected.forkPinDigest || proposal.core.deltaAuthorityScopeDigest !== this.#expected.deltaAuthorityScopeDigest || proposal.core.pinnedPolicyDigest !== this.#expected.pinnedPolicyDigest || !same(proposal.core.proposalSealingObservationCursor, b.observationCursor) || !same(proposal.core.proposalSealingContextVersion, b.contextBinding.authorizationContextVersion) || !same(proposal.core.receiptDigests, receiptDigests) || !same(proposal.core.evidenceClaims, evidenceClaims)) throw new SdkError("SCOPE_SUBSTITUTION", "proposal differs from exact publication, receipt, sealing, policy, or authority binding");
+    if (proposal.core.workspaceId !== b.workspaceId || proposal.core.runId !== b.runId || proposal.core.attemptId !== b.attemptId || proposal.core.forkPinDigest !== this.#expected.forkPinDigest || proposal.core.deltaAuthorityScopeDigest !== this.#expected.deltaAuthorityScopeDigest || proposal.core.pinnedPolicyDigest !== this.#expected.pinnedPolicyDigest || proposal.core.currentPolicyDigest !== this.#expected.currentPolicyDigest || proposal.core.authorPrincipalId !== this.#expected.authorPrincipalId || proposal.core.authorGrantDigest !== this.#expected.authorGrantDigest || proposal.core.baseRevision !== this.#expected.baseRevision || proposal.core.baseStateHash !== this.#expected.baseStateHash || proposal.core.canonicalizerVersion !== this.#expected.canonicalizerVersion || proposal.core.hashVersion !== this.#expected.hashVersion || !same(proposal.core.proposalSealingObservationCursor, b.observationCursor) || !same(proposal.core.proposalSealingContextVersion, b.contextBinding.authorizationContextVersion) || !same(proposal.core.receiptDigests, receiptDigests) || !same(proposal.core.evidenceClaims, evidenceClaims)) throw new SdkError("SCOPE_SUBSTITUTION", "proposal differs from exact publication, receipt, sealing, policy, or authority binding");
   }
   #monotonic(prior: CompositeCursorV1, next: CompositeCursorV1): boolean {
     if (prior.workspaceId !== next.workspaceId || prior.runId !== next.runId || next.workspaceSequence < prior.workspaceSequence || next.runSequence < prior.runSequence || next.workspaceContextEpoch < prior.workspaceContextEpoch || next.runContextEpoch < prior.runContextEpoch) return false;
