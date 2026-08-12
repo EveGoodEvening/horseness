@@ -17,7 +17,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { containedBackupPath, resolveBackupRoot, verifyBackup } from "../backup/index.js";
+import { containedBackupPath, createBackup, resolveBackupRoot, verifyBackup, verifyBackupIdentity, type VerifiedBackupIdentityV1 } from "../backup/index.js";
 import { verifyAuthority } from "../recovery/index.js";
 
 export type RestorePhase =
@@ -33,6 +33,17 @@ export type RestoreCrashPoint =
   | `restore.remove.${"database" | "artifacts" | "old-database" | "old-artifacts" | "stage-database" | "stage-artifacts" | "journal"}.${"before" | "after"}`;
 
 export type RestoreCrashInjector = (point: RestoreCrashPoint) => void;
+export interface RestoreOptions {
+  readonly confirmReplacement?: boolean;
+  readonly retainedBackupRoot?: string;
+}
+
+export interface RestoreCommitEvidenceV1 {
+  readonly version: "HorsenessRestoreCommitEvidenceV1";
+  readonly generationToken: string;
+  readonly retainedBackupRoot: string;
+  readonly retainedBackupIdentity: VerifiedBackupIdentityV1;
+}
 const noCrash: RestoreCrashInjector = () => undefined;
 
 interface RestoreJournalV1 {
@@ -41,6 +52,8 @@ interface RestoreJournalV1 {
   generationToken: string;
   hadDatabase: boolean;
   hadArtifacts: boolean;
+  retainedBackupRoot: string | null;
+  retainedBackupIdentity: VerifiedBackupIdentityV1 | null;
 }
 
 interface RestorePaths extends RestoreJournalV1 {
@@ -54,6 +67,7 @@ interface RestorePaths extends RestoreJournalV1 {
 
 const journalPath = (databasePath: string): string => `${databasePath}.restore-intent.json`;
 const journalNextPath = (databasePath: string): string => `${journalPath(databasePath)}.next`;
+const commitEvidencePath = (databasePath: string): string => `${databasePath}.restore-commit.json`;
 
 function syncFile(path: string): void {
   const fd = openSync(path, "r");
@@ -89,6 +103,8 @@ function writeJournal(journal: RestorePaths, inject: RestoreCrashInjector): void
     generationToken: journal.generationToken,
     hadDatabase: journal.hadDatabase,
     hadArtifacts: journal.hadArtifacts,
+    retainedBackupRoot: journal.retainedBackupRoot,
+    retainedBackupIdentity: journal.retainedBackupIdentity,
   };
   inject("restore.journal.write.before");
   writeFileSync(next, `${JSON.stringify(persisted)}\n`, { mode: 0o600 });
@@ -150,16 +166,28 @@ function parseJournal(databasePath: string, artifactRoot: string): RestorePaths 
   const value: unknown = JSON.parse(readFileSync(journalPath(databasePath), "utf8"));
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("invalid restore journal");
   const keys = Object.keys(value).sort();
-  if (keys.join("\0") !== ["generationToken", "hadArtifacts", "hadDatabase", "phase", "version"].sort().join("\0")) throw new Error("invalid restore journal keys");
+  if (keys.join("\0") !== ["generationToken", "hadArtifacts", "hadDatabase", "phase", "retainedBackupIdentity", "retainedBackupRoot", "version"].sort().join("\0")) throw new Error("invalid restore journal keys");
   const journal = value as Partial<RestoreJournalV1>;
   const phases: readonly RestorePhase[] = ["staged", "old-moved", "database-activated", "artifacts-activated", "committed"];
+  const identity = journal.retainedBackupIdentity;
+  const validIdentity = identity === null || (
+    typeof identity === "object" && identity !== null &&
+    Object.keys(identity).sort().join("\0") === ["createdAt", "databaseDigest", "kind", "manifestDigest"].sort().join("\0") &&
+    identity.kind === "HorsenessVerifiedBackupIdentityV1" &&
+    typeof identity.createdAt === "string" &&
+    typeof identity.databaseDigest === "string" && /^[0-9a-f]{64}$/u.test(identity.databaseDigest) &&
+    typeof identity.manifestDigest === "string" && /^[0-9a-f]{64}$/u.test(identity.manifestDigest)
+  );
   if (
     journal.version !== "HorsenessRestoreJournalV1" ||
     !phases.includes(journal.phase as RestorePhase) ||
     typeof journal.generationToken !== "string" ||
     !GENERATION_TOKEN.test(journal.generationToken) ||
     typeof journal.hadDatabase !== "boolean" ||
-    typeof journal.hadArtifacts !== "boolean"
+    typeof journal.hadArtifacts !== "boolean" ||
+    !(journal.retainedBackupRoot === null || typeof journal.retainedBackupRoot === "string") ||
+    !validIdentity ||
+    ((journal.hadDatabase || journal.hadArtifacts) && (journal.retainedBackupRoot === null || identity === null))
   ) throw new Error("invalid restore journal");
   return deriveRestorePaths(databasePath, artifactRoot, journal as RestoreJournalV1);
 }
@@ -224,7 +252,7 @@ export function recoverInterruptedRestore(databasePath: string, artifactRoot: st
   removePath(path, false, "journal", inject);
 }
 
-export function restoreBackup(backupRoot: string, databasePath: string, artifactRoot: string, inject: RestoreCrashInjector = noCrash): void {
+export function restoreBackup(backupRoot: string, databasePath: string, artifactRoot: string, options: RestoreOptions = {}, inject: RestoreCrashInjector = noCrash): RestoreCommitEvidenceV1 {
   databasePath = resolve(databasePath);
   artifactRoot = resolve(artifactRoot);
   mkdirSync(dirname(databasePath), { recursive: true });
@@ -234,13 +262,28 @@ export function restoreBackup(backupRoot: string, databasePath: string, artifact
   backupRoot = resolveBackupRoot(backupRoot);
   const manifest = verifyBackup(backupRoot);
   recoverInterruptedRestore(databasePath, artifactRoot, inject);
+  const hadDatabase = existsSync(databasePath);
+  const hadArtifacts = existsSync(artifactRoot);
+  let retainedBackupRoot: string | null = null;
+  let retainedBackupIdentity: VerifiedBackupIdentityV1 | null = null;
+  if (hadDatabase || hadArtifacts) {
+    if (options.confirmReplacement !== true) throw new Error("live authority replacement requires explicit confirmation");
+    if (!options.retainedBackupRoot) throw new Error("live authority replacement requires a retained pre-restore backup location");
+    if (!hadDatabase || !hadArtifacts) throw new Error("cannot retain incomplete live authority unit");
+    retainedBackupRoot = resolve(options.retainedBackupRoot);
+    const live = new DatabaseSync(databasePath);
+    try { createBackup(live, artifactRoot, retainedBackupRoot); } finally { live.close(); }
+    retainedBackupIdentity = verifyBackupIdentity(retainedBackupRoot);
+  }
   const token = randomUUID();
   const journal = deriveRestorePaths(databasePath, artifactRoot, {
     version: "HorsenessRestoreJournalV1",
     phase: "staged",
     generationToken: token,
-    hadDatabase: existsSync(databasePath),
-    hadArtifacts: existsSync(artifactRoot),
+    hadDatabase,
+    hadArtifacts,
+    retainedBackupRoot,
+    retainedBackupIdentity,
   });
   cpSync(containedBackupPath(backupRoot, manifest.database.file), journal.stageDatabase, { errorOnExist: true });
   cpSync(join(backupRoot, "artifacts"), journal.stageArtifacts, { recursive: true, errorOnExist: true });
@@ -265,7 +308,16 @@ export function restoreBackup(backupRoot: string, databasePath: string, artifact
   journal.phase = "artifacts-activated"; writeJournal(journal, inject);
   verifyPair(databasePath, artifactRoot);
   journal.phase = "committed"; writeJournal(journal, inject);
+  const evidence: RestoreCommitEvidenceV1 = { version: "HorsenessRestoreCommitEvidenceV1", generationToken: token, retainedBackupRoot: retainedBackupRoot ?? "", retainedBackupIdentity: retainedBackupIdentity ?? verifyBackupIdentity(backupRoot) };
+  writeFileSync(commitEvidencePath(databasePath), `${JSON.stringify(evidence)}\n`, { mode: 0o600 });
+  syncFile(commitEvidencePath(databasePath));
+  syncDirectory(dirname(databasePath));
   finishForward(journal, inject);
   removePath(journalNextPath(databasePath), false, "journal", inject);
   removePath(journalPath(databasePath), false, "journal", inject);
+  return evidence;
+}
+
+export function rollbackFromRetainedBackup(retainedBackupRoot: string, databasePath: string, artifactRoot: string, options: RestoreOptions, inject: RestoreCrashInjector = noCrash): RestoreCommitEvidenceV1 {
+  return restoreBackup(retainedBackupRoot, databasePath, artifactRoot, options, inject);
 }

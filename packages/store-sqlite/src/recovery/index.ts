@@ -21,8 +21,11 @@ export function verifyAuthority(db:DatabaseSync, artifactRoot:string, options:{a
   const integrity=db.prepare("PRAGMA integrity_check").get() as Record<string,unknown>|undefined;if(integrity?.integrity_check!=="ok")throw new RecoveryIntegrityError("sqlite integrity failure");
   const streams=db.prepare("SELECT workspace_id,stream_kind,stream_id,head_sequence,head_hash FROM streams ORDER BY workspace_id,stream_kind,stream_id").all() as {workspace_id:string;stream_kind:string;stream_id:string;head_sequence:number;head_hash:string|null}[];
   let eventCount=0;
+  const authenticatedWorkspaceCounts = new Map<string, number>();
+  const authenticatedRuns: { workspaceId: string; streamId: string }[] = [];
   for(const stream of streams){
     const rows=db.prepare("SELECT workspace_id,stream_kind,stream_id,sequence,envelope_hash,prior_envelope_hash,event_id,idempotency_key,command_id,envelope_json FROM events WHERE workspace_id=? AND stream_kind=? AND stream_id=? ORDER BY sequence").all(stream.workspace_id,stream.stream_kind,stream.stream_id) as {workspace_id:string;stream_kind:string;stream_id:string;sequence:number;envelope_hash:string;prior_envelope_hash:string|null;event_id:string;idempotency_key:string;command_id:string;envelope_json:string}[];
+    if (rows.length === 0) throw new RecoveryIntegrityError(`empty ${stream.stream_kind} stream row`);
     let chain:HashedEventEnvelopeV1<DomainEventPayloadV1>[];
     try{chain=rows.map((row,index)=>{
       const value=JSON.parse(row.envelope_json) as HashedEventEnvelopeV1<DomainEventPayloadV1>;
@@ -49,7 +52,18 @@ export function verifyAuthority(db:DatabaseSync, artifactRoot:string, options:{a
     } catch (error) {
       throw new RecoveryIntegrityError(`semantic event replay failed: ${error instanceof Error ? error.message : String(error)}`);
     }
+    if (stream.stream_kind === "workspace") {
+      if (stream.stream_id !== stream.workspace_id) throw new RecoveryIntegrityError("workspace stream identity mismatch");
+      authenticatedWorkspaceCounts.set(stream.workspace_id, (authenticatedWorkspaceCounts.get(stream.workspace_id) ?? 0) + 1);
+    } else {
+      authenticatedRuns.push({ workspaceId: stream.workspace_id, streamId: stream.stream_id });
+    }
     eventCount+=rows.length;
+  }
+  for (const run of authenticatedRuns) {
+    if (authenticatedWorkspaceCounts.get(run.workspaceId) !== 1) {
+      throw new RecoveryIntegrityError(`orphan run authority ${run.workspaceId}/${run.streamId}`);
+    }
   }
   const artifacts=db.prepare("SELECT digest,byte_length,relative_path FROM artifacts ORDER BY digest").all() as {digest:string;byte_length:number;relative_path:string}[];
   for(const item of artifacts){const path=join(artifactRoot,item.relative_path);if(!existsSync(path)){const table=db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='retention_intents'").get();const pending=table===undefined?undefined:db.prepare("SELECT 1 FROM retention_intents WHERE digest=? AND state IN ('pending','deleting')").get(item.digest);const refs=db.prepare("SELECT (SELECT count(*) FROM artifact_refs WHERE digest=?)+(SELECT count(*) FROM artifact_pins WHERE digest=?) AS count").get(item.digest,item.digest) as {count:number};if(options.allowPendingRetentionMissing===true&&pending!==undefined&&refs.count===0)continue;throw new RecoveryIntegrityError(`dangling artifact ${item.digest}`);}const bytes=readFileSync(path);if(bytes.length!==item.byte_length||createHash("sha256").update(bytes).digest("hex")!==item.digest)throw new RecoveryIntegrityError(`artifact integrity failure ${item.digest}`);}

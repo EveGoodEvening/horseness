@@ -168,3 +168,59 @@ test("authority verification rejects a valid-hash illegal workspace transition",
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("authority verification accepts authenticated workspace and run authorities", () => {
+  const root = mkdtempSync(join(tmpdir(), "horseness-recovery-authority-positive-"));
+  try {
+    const { store } = authorityWithRun(root);
+    assert.deepEqual(verifyAuthority(store.db, join(root, "artifacts")), {
+      streams: 2,
+      events: 2,
+      artifacts: 0,
+    });
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("authority verification rejects a valid-hash orphan run authority", () => {
+  const root = mkdtempSync(join(tmpdir(), "horseness-recovery-orphan-run-"));
+  try {
+    const { store, workspaceId } = authorityWithRun(root);
+    store.db.exec("PRAGMA foreign_keys = OFF");
+    store.db.prepare("DELETE FROM events WHERE workspace_id=? AND stream_kind='workspace'").run(workspaceId);
+    store.db.prepare("DELETE FROM streams WHERE workspace_id=? AND stream_kind='workspace'").run(workspaceId);
+    store.db.exec("PRAGMA foreign_keys = ON");
+
+    assert.throws(
+      () => verifyAuthority(store.db, join(root, "artifacts")),
+      /orphan run authority workspace-a\/run-a/,
+    );
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+for (const streamKind of ["workspace", "run"] as const) {
+  test(`authority verification rejects an empty ${streamKind} stream row`, () => {
+    const root = mkdtempSync(join(tmpdir(), `horseness-recovery-empty-${streamKind}-`));
+    try {
+      const store = new SQLiteAuthority(join(root, "authority.sqlite"), join(root, "artifacts"));
+      const workspaceId = "workspace-empty";
+      const streamId = streamKind === "workspace" ? workspaceId : "run-empty";
+      store.db.prepare(
+        "INSERT INTO streams(stream_kind,workspace_id,stream_id,head_sequence,head_hash) VALUES(?,?,?,0,NULL)",
+      ).run(streamKind, workspaceId, streamId);
+
+      assert.throws(
+        () => verifyAuthority(store.db, join(root, "artifacts")),
+        new RegExp(`empty ${streamKind} stream row`),
+      );
+      store.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}

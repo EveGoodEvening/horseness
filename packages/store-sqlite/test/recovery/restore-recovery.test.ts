@@ -4,11 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { createBackup } from "../../src/backup/index.js";
+import { createBackup, verifyBackupIdentity } from "../../src/backup/index.js";
 import { upgradeAuthority } from "../../src/migrations/index.js";
 import {
   recoverInterruptedRestore,
   restoreBackup,
+  rollbackFromRetainedBackup,
   type RestoreCrashPoint,
 } from "../../src/restore/index.js";
 import { SQLiteAuthority } from "../../src/sqlite-authority.js";
@@ -51,7 +52,7 @@ function durableJournalPhase(database: string): string | undefined {
 }
 
 
-function prepareCase(prefix: string): { root: string; backup: string; database: string; artifacts: string } {
+function prepareCase(prefix: string): { root: string; backup: string; retained: string; database: string; artifacts: string } {
   const root = mkdtempSync(join(tmpdir(), prefix));
   const source = makeAuthority(root, "source", "new");
   const sourceDb = new DatabaseSync(source.database);
@@ -59,13 +60,51 @@ function prepareCase(prefix: string): { root: string; backup: string; database: 
   createBackup(sourceDb, source.artifacts, backup);
   sourceDb.close();
   const target = makeAuthority(root, "target", "old");
-  return { root, backup, database: target.database, artifacts: target.artifacts };
+  return { root, backup, retained: join(root, "retained-old"), database: target.database, artifacts: target.artifacts };
 }
+
+function confirmed(state: { retained: string }): { confirmReplacement: true; retainedBackupRoot: string } {
+  return { confirmReplacement: true, retainedBackupRoot: state.retained };
+}
+
+test("restore refuses live replacement without explicit confirmation", () => {
+  const state = prepareCase("horseness-restore-refusal-");
+  try {
+    assert.throws(() => restoreBackup(state.backup, state.database, state.artifacts), /explicit confirmation/);
+    assert.deepEqual(pairGeneration(state.database, state.artifacts), { database: "old", artifacts: "old" });
+    assert.equal(existsSync(state.retained), false);
+  } finally { rmSync(state.root, { recursive: true, force: true }); }
+});
+
+test("pre-restore backup failure leaves live authority untouched", () => {
+  const state = prepareCase("horseness-restore-prebackup-failure-");
+  try {
+    writeFileSync(state.retained, "occupied");
+    assert.throws(() => restoreBackup(state.backup, state.database, state.artifacts, confirmed(state)), /destination already exists/);
+    assert.deepEqual(pairGeneration(state.database, state.artifacts), { database: "old", artifacts: "old" });
+    assert.equal(existsSync(journal(state.database)), false);
+  } finally { rmSync(state.root, { recursive: true, force: true }); }
+});
+
+test("restore retains verified pre-restore backup and supports rollback", () => {
+  const state = prepareCase("horseness-restore-retained-");
+  try {
+    const evidence = restoreBackup(state.backup, state.database, state.artifacts, confirmed(state));
+    assert.deepEqual(pairGeneration(state.database, state.artifacts), { database: "new", artifacts: "new" });
+    assert.deepEqual(evidence.retainedBackupIdentity, verifyBackupIdentity(state.retained));
+    assert.equal(evidence.retainedBackupRoot, state.retained);
+    const rollbackRetention = join(state.root, "retained-new");
+    rollbackFromRetainedBackup(state.retained, state.database, state.artifacts, { confirmReplacement: true, retainedBackupRoot: rollbackRetention });
+    assert.deepEqual(pairGeneration(state.database, state.artifacts), { database: "old", artifacts: "old" });
+    assert.equal(verifyBackupIdentity(rollbackRetention).kind, "HorsenessVerifiedBackupIdentityV1");
+    assert.equal(existsSync(state.retained), true);
+  } finally { rmSync(state.root, { recursive: true, force: true }); }
+});
 
 test("restore records committed authority generation and removes its journal", () => {
   const state = prepareCase("horseness-restore-");
   try {
-    restoreBackup(state.backup, state.database, state.artifacts);
+    restoreBackup(state.backup, state.database, state.artifacts, confirmed(state));
     assert.deepEqual(pairGeneration(state.database, state.artifacts), { database: "new", artifacts: "new" });
     assert.equal(existsSync(journal(state.database)), false);
   } finally { rmSync(state.root, { recursive: true, force: true }); }
@@ -75,7 +114,7 @@ test("restore crash matrix never reopens a mixed database/artifact generation", 
   const observed: RestoreCrashPoint[] = [];
   const discovery = prepareCase("horseness-restore-discovery-");
   try {
-    restoreBackup(discovery.backup, discovery.database, discovery.artifacts, point => { observed.push(point); });
+    restoreBackup(discovery.backup, discovery.database, discovery.artifacts, confirmed(discovery), point => { observed.push(point); });
   } finally { rmSync(discovery.root, { recursive: true, force: true }); }
   assert.ok(observed.length > 0);
 
@@ -84,7 +123,7 @@ test("restore crash matrix never reopens a mixed database/artifact generation", 
     let visit = 0;
     try {
       assert.throws(
-        () => restoreBackup(state.backup, state.database, state.artifacts, point => {
+        () => restoreBackup(state.backup, state.database, state.artifacts, confirmed(state), point => {
           if (visit === crashIndex) throw new Error(`crash:${point}:${crashIndex}`);
           visit += 1;
         }),
@@ -104,7 +143,7 @@ test("recovery itself is idempotent across every rename and removal interruption
   const points = new Set<RestoreCrashPoint>();
   const discovery = prepareCase("horseness-recovery-discovery-");
   try {
-    assert.throws(() => restoreBackup(discovery.backup, discovery.database, discovery.artifacts, point => {
+    assert.throws(() => restoreBackup(discovery.backup, discovery.database, discovery.artifacts, confirmed(discovery), point => {
       if (point === "restore.remove.old-database.before") throw new Error("stop-after-commit");
     }), /stop-after-commit/);
     recoverInterruptedRestore(discovery.database, discovery.artifacts, point => { points.add(point); });
@@ -113,7 +152,7 @@ test("recovery itself is idempotent across every rename and removal interruption
   for (const crashPoint of points) {
     const state = prepareCase("horseness-recovery-crash-");
     try {
-      assert.throws(() => restoreBackup(state.backup, state.database, state.artifacts, point => {
+      assert.throws(() => restoreBackup(state.backup, state.database, state.artifacts, confirmed(state), point => {
         if (point === "restore.remove.old-database.before") throw new Error("stop-after-commit");
       }), /stop-after-commit/);
       let crashed = false;
@@ -131,7 +170,7 @@ test("rollback recovery is idempotent across every rename and removal interrupti
   const points = new Set<RestoreCrashPoint>();
   const discovery = prepareCase("horseness-rollback-discovery-");
   try {
-    assert.throws(() => restoreBackup(discovery.backup, discovery.database, discovery.artifacts, point => {
+    assert.throws(() => restoreBackup(discovery.backup, discovery.database, discovery.artifacts, confirmed(discovery), point => {
       if (point === "restore.rename.database-activate.before") throw new Error("stop-before-commit");
     }), /stop-before-commit/);
     recoverInterruptedRestore(discovery.database, discovery.artifacts, point => { points.add(point); });
@@ -140,7 +179,7 @@ test("rollback recovery is idempotent across every rename and removal interrupti
   for (const crashPoint of points) {
     const state = prepareCase("horseness-rollback-crash-");
     try {
-      assert.throws(() => restoreBackup(state.backup, state.database, state.artifacts, point => {
+      assert.throws(() => restoreBackup(state.backup, state.database, state.artifacts, confirmed(state), point => {
         if (point === "restore.rename.database-activate.before") throw new Error("stop-before-commit");
       }), /stop-before-commit/);
       let crashed = false;
@@ -172,6 +211,8 @@ test("recovery rejects untrusted journal generations before victim mutation", ()
         generationToken,
         hadDatabase: true,
         hadArtifacts: true,
+        retainedBackupRoot: null,
+        retainedBackupIdentity: null,
       }));
       assert.throws(() => recoverInterruptedRestore(state.database, state.artifacts), /invalid restore journal/);
       assert.equal(readFileSync(victim, "utf8"), "untouched");
@@ -192,6 +233,8 @@ test("recovery rejects legacy path fields and extra keys before mutation", () =>
       hadDatabase: true,
       hadArtifacts: true,
       oldDatabase: victim,
+      retainedBackupRoot: null,
+      retainedBackupIdentity: null,
     }));
     assert.throws(() => recoverInterruptedRestore(state.database, state.artifacts), /invalid restore journal keys/);
     assert.equal(readFileSync(victim, "utf8"), "untouched");

@@ -47,9 +47,7 @@ export function inspectMigrationLedger(db: DatabaseSync): number {
   return rows.length;
 }
 
-export function migrate(db: DatabaseSync): void {
-  // Ledger compatibility is checked before PRAGMAs or transactions that mutate database state.
-  const appliedCount = inspectMigrationLedger(db);
+function applyMigrations(db: DatabaseSync, appliedCount: number): void {
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = FULL");
@@ -64,4 +62,18 @@ export function migrate(db: DatabaseSync): void {
       throw error;
     }
   }
+}
+
+export function migrate(db: DatabaseSync): void {
+  // Fresh creation and exact-current reopen are safe without authenticating prior authority.
+  const appliedCount = inspectMigrationLedger(db);
+  if (appliedCount > 0 && appliedCount < CURRENT_STORAGE_SCHEMA) {
+    throw new Error("verified authority upgrade required");
+  }
+  applyMigrations(db, appliedCount);
+}
+
+export function migrateVerifiedAuthority(db: DatabaseSync): void {
+  // The caller must authenticate the complete authority unit immediately before this mutation.
+  applyMigrations(db, inspectMigrationLedger(db));
 }

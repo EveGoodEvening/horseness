@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, realpathSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { DatabaseSync as Database } from "node:sqlite";
@@ -14,6 +14,12 @@ export interface BackupManifestV1 {
   readonly createdAt:string;
   readonly database:BackupDatabaseV1;
   readonly artifacts:readonly BackupFileV1[];
+}
+export interface VerifiedBackupIdentityV1 {
+  readonly kind:"HorsenessVerifiedBackupIdentityV1";
+  readonly manifestDigest:string;
+  readonly databaseDigest:string;
+  readonly createdAt:string;
 }
 
 const SHA256=/^[0-9a-f]{64}$/u;
@@ -82,6 +88,8 @@ function enumerateRegularFiles(root:string,prefix=""):string[] {
 }
 
 function assertEqualSets(actual:readonly string[],expected:readonly string[],message:string):void {const a=[...actual].sort().join("\0"),e=[...expected].sort().join("\0");if(a!==e)throw new Error(message);}
+function syncDirectory(path:string):void {const fd=openSync(path,"r");try{fsyncSync(fd);}finally{closeSync(fd);}}
+function syncTree(path:string):void {for(const entry of readdirSync(path)){const child=join(path,entry);const stat=lstatSync(child);if(stat.isSymbolicLink())throw new Error("backup tree contains symlink");if(stat.isDirectory())syncTree(child);else if(stat.isFile()){const fd=openSync(child,"r");try{fsyncSync(fd);}finally{closeSync(fd);}}else throw new Error("backup tree contains special file");}syncDirectory(path);}
 
 export function createBackup(db:Database,artifactRoot:string,destination:string):BackupManifestV1 {
   if(existsSync(destination))throw new Error("backup destination already exists");
@@ -92,7 +100,7 @@ export function createBackup(db:Database,artifactRoot:string,destination:string)
   const databaseBytes=readRegularNoFollow(databasePath);const version=(db.prepare("SELECT max(version) AS version FROM schema_migrations").get() as {version:number|null}).version;
   if(version===null)throw new Error("authority has no schema version");
   const manifest:BackupManifestV1={kind:"HorsenessBackupManifestV1",schemaVersion:1,authoritySchemaVersion:version,createdAt:new Date().toISOString(),database:{file:"db/authority.sqlite",digest:digest(databaseBytes),bytes:databaseBytes.length},artifacts};
-  writeFileSync(join(destination,"manifest.json"),`${JSON.stringify(manifest,null,2)}\n`,{encoding:"utf8",mode:0o600,flag:"wx"});return manifest;
+  writeFileSync(join(destination,"manifest.json"),`${JSON.stringify(manifest,null,2)}\n`,{encoding:"utf8",mode:0o600,flag:"wx"});syncTree(destination);syncDirectory(dirname(resolve(destination)));return manifest;
 }
 
 export function readBackupManifest(root:string):BackupManifestV1 {const pinned=resolveBackupRoot(root);return parseBackupManifest(JSON.parse(readRegularNoFollow(join(pinned,"manifest.json")).toString("utf8")) as unknown);}
@@ -107,4 +115,11 @@ export function verifyBackup(root:string):BackupManifestV1 {
   try {const version=(authority.prepare("SELECT max(version) AS version FROM schema_migrations").get() as {version:number|null}).version;if(version!==manifest.authoritySchemaVersion)throw new Error("backup authority schema mismatch");const catalog=authority.prepare("SELECT digest,byte_length,relative_path FROM artifacts ORDER BY relative_path").all() as {digest:string;byte_length:number;relative_path:string}[];const expected=catalog.map(row=>`artifacts/${row.relative_path}`);assertEqualSets(manifest.artifacts.map(item=>item.path),expected,"backup artifact catalog mismatch");for(const row of catalog){const item=manifest.artifacts.find(candidate=>candidate.path===`artifacts/${row.relative_path}`);if(!item||item.digest!==row.digest||item.bytes!==row.byte_length)throw new Error("backup artifact catalog metadata mismatch");}verifyAuthority(authority,join(pinnedRoot,"artifacts"));}finally{authority.close();}
   const finalIdentity=lstatSync(pinnedRoot);if(finalIdentity.isSymbolicLink()||!finalIdentity.isDirectory()||finalIdentity.dev!==identity.dev||finalIdentity.ino!==identity.ino||realpathSync(pinnedRoot)!==pinnedRoot)throw new Error("backup root identity changed during verification");
   return manifest;
+}
+
+export function verifyBackupIdentity(root:string):VerifiedBackupIdentityV1 {
+  const pinnedRoot=resolveBackupRoot(root);
+  const manifest=verifyBackup(pinnedRoot);
+  const manifestDigest=digest(readRegularNoFollow(join(pinnedRoot,"manifest.json")));
+  return {kind:"HorsenessVerifiedBackupIdentityV1",manifestDigest,databaseDigest:manifest.database.digest,createdAt:manifest.createdAt};
 }

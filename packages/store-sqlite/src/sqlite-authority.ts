@@ -2,7 +2,9 @@ import { DatabaseSync } from "node:sqlite";
 import { canonicalJson, domainDigest, parseDomainEventPayloadV1, parseObservationCursorV1, verifyEventChain, type AbsentRunGenesisCursorV1, type DomainEventPayloadV1, type HashedEventEnvelopeV1, type JsonValue, type RunCreatedV1, type RunEventPayloadV1, type WorkspaceEventPayloadV1 } from "@horseness/domain";
 import { ArtifactStore } from "./artifact-store.js";
 import { noCrash, type CrashInjector } from "./crash.js";
-import { migrate } from "./migrations.js";
+import { inspectMigrationLedger, migrate } from "./migrations.js";
+import { upgradeAuthority } from "./migrations/index.js";
+import { recoverInterruptedRestore } from "./restore/index.js";
 
 export type EventStream="workspace"|"run";
 export type StoredEvent=HashedEventEnvelopeV1<DomainEventPayloadV1>;
@@ -20,7 +22,21 @@ const now=():string=>new Date().toISOString();
 
 export class SQLiteAuthority {
   readonly db:DatabaseSync; readonly artifacts:ArtifactStore;
-  constructor(databasePath:string,artifactRoot:string,private readonly crash:CrashInjector=noCrash){this.db=new DatabaseSync(databasePath);migrate(this.db);this.artifacts=new ArtifactStore(artifactRoot,this.db,crash);}
+  constructor(databasePath:string,artifactRoot:string,private readonly crash:CrashInjector=noCrash,verifiedOpen=false){
+    this.db=new DatabaseSync(databasePath);
+    try {
+      const appliedCount=inspectMigrationLedger(this.db);
+      if(appliedCount===1){
+        if(!verifiedOpen)throw new StoreIntegrityError("verified authority open required for schema upgrade");
+        upgradeAuthority(this.db,artifactRoot);
+      }else migrate(this.db);
+      this.artifacts=new ArtifactStore(artifactRoot,this.db,crash);
+    }catch(error){this.db.close();throw error;}
+  }
+  static open(databasePath:string,artifactRoot:string,crash:CrashInjector=noCrash):SQLiteAuthority{
+    recoverInterruptedRestore(databasePath,artifactRoot);
+    return new SQLiteAuthority(databasePath,artifactRoot,crash,true);
+  }
   close():void{this.db.close();}
   migrationVersions():number[]{return (this.db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as {version:number}[]).map(r=>r.version);}
   private validateAppend<T extends DomainEventPayloadV1>(request:AppendRequest<T>):void {
