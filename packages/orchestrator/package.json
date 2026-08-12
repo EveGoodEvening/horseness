@@ -14,7 +14,9 @@
     "typecheck": "tsc --noEmit -p ../../tsconfig.base.json",
     "lint": "eslint src --max-warnings=0",
     "test": "node src/admission/test-runner.mjs",
-    "test:admission": "node src/admission/test-runner.mjs"
+    "test:admission": "node src/admission/test-runner.mjs",
+    "test:tasks-forks-receipts": "tsx --test test/forks/**/*.test.ts test/projections/**/*.test.ts",
+    "test:model": "tsx --test test/projections/**/*.test.ts"
   },
   "dependencies": {
     "@horseness/domain": "workspace:*",
