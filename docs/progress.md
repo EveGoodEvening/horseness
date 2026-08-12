@@ -5,8 +5,8 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 ## Global status
 
 - **Planning state:** C00, C01, C02, C03, C04, C05, and C06 are complete; F001/F002 are closed; R001/R002 are complete
-- **Active claims:** none
-- **Next eligible:** C07 only
+- **Active claims:** C07, claimed from integrated base `fcc0b0a`
+- **Next eligible:** none while C07 is in progress
 - **Active blockers:** none
 - **Last integrated receipt:** immutable C01 `docs/checkpoints/C01/final/1.json`, envelope digest `17ddd75b49e35d3bf6f432c8c6acca30b4a66512229453aca4fc63e7f427ea7d`, indexed at A01 commit `223023330cb000b759d8a8b2419514638c1aa179`; receipt/index bytes must not be overwritten
 - **Release readiness:** not started
@@ -30,8 +30,8 @@ For C02 onward: commit the two tracker files to claim a dependency-ready chunk; 
 | C04 | Policy/admission evaluator | C03 | complete; claim `a5ad6fa`; implementation `385449c`; review fixes/final candidate `44f99b9`, `489345b`; typecheck and 10 tests green; clean final review |
 | C05 | SQLite 0001/artifacts | C04 | complete; claim `6259949`; implementation `13e765e`; review fixes `0adcd98`, `f7acb74`, `ef4a921`, `6f587c8`; relevant tracker commit `bd44a2b`; final candidate `6f587c8`; Node 22 gates green: typecheck exit 0, migration 9/9, crash matrix 43/43; two definitive reviews clean |
 | C06 | Recovery/import/retention | C05 | complete; claim `f469bd7`; implementation `c85f741`; review fixes `0f95464`, `0814993`, `4ee725f`, `bbec9e8`, `c022c4c`, `6d898b5`; final candidate `6d898b5`; Node 22 gates green: typecheck exit 0, full test 58/58, recovery 30/30, import-retention 10/10; final in-scope blocker/high review clean |
-| C07 | Admission service | C06 | sole next eligible chunk |
-| C08 | Task/fork projections | C07 | not-started |
+| C07 | Admission service | C06 | in-progress; claim base `fcc0b0a`; tracker claim awaiting integration before source edits |
+| C08 | Task/fork projections | C07 | not-started; dependency-ineligible while C07 is in progress |
 | C09 | Context reconstruction | C08 | not-started |
 | C10 | Scheduler/dispatch | C09 | not-started |
 | C11 | Four-host feasibility | C10 | not-started |
@@ -60,8 +60,10 @@ C04 is complete. Its tracker-only claim began at base `33550d0` with claim commi
 
 C05 is complete. Tracker claim commit `6259949` preceded source edits; implementation commit `13e765e`, review-fix commits `0adcd98`, `f7acb74`, `ef4a921`, and `6f587c8`, and relevant tracker commit `bd44a2b` are integrated, with final candidate `6f587c8`. All three literal C05 gates ran in order under Node 22 with exact environment `CI=1 TZ=UTC LANG=C NODE_OPTIONS=--unhandled-rejections=strict`: typecheck exit 0; migration 9/9; crash matrix 43/43. Two independent definitive reviews were clean, all C05 checklist items are checked, and C06 is the sole next eligible chunk.
 
-C06 is complete. Tracker claim commit `f469bd7` preceded source edits; implementation commit `c85f741` and review-fix commits `0f95464`, `0814993`, `4ee725f`, `bbec9e8`, `c022c4c`, and `6d898b5` are integrated, with final candidate `6d898b5`. All four literal C06 gates ran in order under Node 22 with exact environment `CI=1 TZ=UTC LANG=C NODE_OPTIONS=--unhandled-rejections=strict`: typecheck exit 0; full test 58/58; recovery 30/30; import-retention 10/10. The recovery count includes the final retained-backup race tests. The final review was clean for every in-scope blocker/high issue. The final same-user post-reservation namespace race was explicitly rejected as outside the frozen v1 boundary—not fixed—under `docs/security/threat-model.md` and the same-user exclusions in `docs/architecture.md` and `AGENTS.md`. All C06 checklist items are checked, and C07 is the sole next eligible chunk.
+C06 is complete. Tracker claim commit `f469bd7` preceded source edits; implementation commit `c85f741` and review-fix commits `0f95464`, `0814993`, `4ee725f`, `bbec9e8`, `c022c4c`, and `6d898b5` are integrated, with final candidate `6d898b5` and completion commit `fcc0b0a`. All four literal C06 gates ran in order under Node 22 with exact environment `CI=1 TZ=UTC LANG=C NODE_OPTIONS=--unhandled-rejections=strict`: typecheck exit 0; full test 58/58; recovery 30/30; import-retention 10/10. The recovery count includes the final retained-backup race tests. The final review was clean for every in-scope blocker/high issue. The final same-user post-reservation namespace race was explicitly rejected as outside the frozen v1 boundary—not fixed—under `docs/security/threat-model.md` and the same-user exclusions in `docs/architecture.md` and `AGENTS.md`. All C06 checklist items are checked.
+
+C07 is claimed from integrated base `fcc0b0a`. Its exact owned paths and two ordered Node 22 acceptance commands are recorded in `docs/progress/C07.md`. This tracker claim must be integrated before source edits. C08 and every later chunk remain dependency-ineligible until C07 is completed.
 
 ## Planning review status
 
-The bootstrap workflow blocker remains closed. C02, C03, C04, C05, and C06 are complete with all accepted in-scope review findings resolved and exact acceptance evidence recorded. C06 completed at final candidate `6d898b5` after claim `f469bd7`, implementation `c85f741`, and review fixes `0f95464`, `0814993`, `4ee725f`, `bbec9e8`, `c022c4c`, and `6d898b5`; its exact Node 22 gates passed with typecheck exit 0, full test 58/58, recovery 30/30, and import-retention 10/10. The final same-user post-reservation namespace race remains explicitly rejected as outside frozen v1 rather than fixed, consistent with `docs/security/threat-model.md`, `docs/architecture.md`, and `AGENTS.md`. C07 is the sole next eligible chunk; every later chunk remains dependency-ineligible, and no recursive development-attestation work is required.
+The bootstrap workflow blocker remains closed. C02, C03, C04, C05, and C06 are complete with all accepted in-scope review findings resolved and exact acceptance evidence recorded. C06 completed at final candidate `6d898b5` and completion commit `fcc0b0a` after claim `f469bd7`, implementation `c85f741`, and review fixes `0f95464`, `0814993`, `4ee725f`, `bbec9e8`, `c022c4c`, and `6d898b5`; its exact Node 22 gates passed with typecheck exit 0, full test 58/58, recovery 30/30, and import-retention 10/10. The final same-user post-reservation namespace race remains explicitly rejected as outside frozen v1 rather than fixed, consistent with `docs/security/threat-model.md`, `docs/architecture.md`, and `AGENTS.md`. C07 is claimed and in progress from base `fcc0b0a`; C08 and every later chunk remain dependency-ineligible, and no recursive development-attestation work is required.
