@@ -13,12 +13,16 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p ../../tsconfig.base.json",
     "lint": "eslint src --max-warnings=0",
-    "test": "node --test"
+    "test": "node src/admission/test-runner.mjs",
+    "test:admission": "node src/admission/test-runner.mjs"
   },
   "dependencies": {
     "@horseness/domain": "workspace:*",
     "@horseness/policy": "workspace:*",
     "@horseness/protocol": "workspace:*",
     "@horseness/store-sqlite": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "4.20.5"
   }
 }
