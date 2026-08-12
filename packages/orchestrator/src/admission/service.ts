@@ -97,15 +97,12 @@ function snapshotAt(authority:SQLiteAuthority, workspaceId:string, runId:string,
 }
 function currentAuthorityAt(authority:SQLiteAuthority, workspaceId:string, runId:string, observed:CompositeCursorV1):JsonValue {
   const exact=authority.db.prepare("SELECT envelope_hash,state_json FROM snapshots WHERE workspace_id=? AND stream_kind='run' AND stream_id=? AND sequence=? AND projection_name='admission-current' AND projection_version='1'").get(workspaceId,runId,observed.runSequence) as {envelope_hash:string;state_json:string}|undefined;
-  if(exact!==undefined){if(exact.envelope_hash!==observed.runEnvelopeHash)fail("AUTHORITY_STATE_SUBSTITUTED");return JSON.parse(exact.state_json) as JsonValue;}
-  const projection=authority.db.prepare("SELECT last_sequence,last_envelope_hash FROM projection_metadata WHERE projection_name='admission-current' AND projection_version='1' AND workspace_id=? AND stream_kind='run' AND stream_id=?").get(workspaceId,runId) as {last_sequence:number;last_envelope_hash:string|null}|undefined;
-  if(projection===undefined||projection.last_sequence!==observed.runSequence||projection.last_envelope_hash!==observed.runEnvelopeHash)fail("AUTHORITY_STATE_MISSING");
-  const snapshot=authority.latestSnapshot(workspaceId,"run",runId,"admission-current","1");
-  if(snapshot===null||snapshot.sequence>observed.runSequence)fail("AUTHORITY_STATE_SUBSTITUTED");
-  const anchor=authority.replay(workspaceId,"run",runId).find(item=>item.envelope.sequence===snapshot.sequence);
-  if(anchor===undefined||anchor.envelopeHash!==snapshot.envelopeHash)fail("AUTHORITY_STATE_SUBSTITUTED");
-  const value=authorityRecord(snapshot.state,"AUTHORITY_STATE_SUBSTITUTED");
-  return {...value,evaluationObservationCursor:observed} as unknown as JsonValue;
+  if(exact===undefined)fail("AUTHORITY_STATE_MISSING");
+  if(exact.envelope_hash!==observed.runEnvelopeHash)fail("AUTHORITY_STATE_SUBSTITUTED");
+  const workspace=authority.replay(workspaceId,"workspace",workspaceId).find(item=>item.envelope.sequence===observed.workspaceSequence);
+  const run=authority.replay(workspaceId,"run",runId).find(item=>item.envelope.sequence===observed.runSequence);
+  if(workspace===undefined||run===undefined||workspace.envelopeHash!==observed.workspaceEnvelopeHash||run.envelopeHash!==observed.runEnvelopeHash||observed.workspaceContextEpoch!==Math.max(0,observed.workspaceSequence-1)||observed.runContextEpoch!==Math.max(0,observed.runSequence-1))fail("AUTHORITY_STATE_SUBSTITUTED");
+  return JSON.parse(exact.state_json) as JsonValue;
 }
 function authorityRecord(value:unknown,code:string):Record<string,unknown>{if(value===null||typeof value!=="object"||Array.isArray(value))fail(code);return value as Record<string,unknown>;}
 function loadAuthorities(authority:SQLiteAuthority, request:AdmissionRequestV1, observed:CompositeCursorV1):{historical:AdmissionSealingAuthorityV1;current:AdmissionCurrentAuthorityV1} {
@@ -187,7 +184,9 @@ export class AdmissionService {
     const workspaceEvent=event({streamKind:"workspace",workspaceId:core.workspaceId,streamId:core.workspaceId,sequence:workspaceHead.envelope.sequence+1,prior:workspaceHead.envelopeHash,type:"WorkspaceAdmissionRecordedV1",payload:{eventType:"WorkspaceAdmissionRecordedV1",workspaceId:core.workspaceId,proposalDigest:request.proposal.proposalDigest,decisionEventId:decision.envelope.eventId,state,quotaId:request.quotaId,quotaDigest:validated.snapshots.observedQuotaDigest,consumed:state==="accepted"?"yes":"no"},commandId:request.commandId,principalId:core.authorPrincipalId});
     const runAppend=[...(submitted===null?[]:[submitted]),...(accepted===null?[]:[accepted]),decision] as HashedEventEnvelopeV1<RunEventPayloadV1>[];
     const artifact={data:provenanceJson,mediaType:"application/vnd.horseness.admission-provenance+json",references:[{ownerKind:"event",ownerId:decision.envelope.eventId}]};
-    try { this.authority.publishAndAppendAtomic({commandId:request.commandId,workspace:{streamKind:"workspace",workspaceId:core.workspaceId,streamId:core.workspaceId,expectedSequence:workspaceHead.envelope.sequence,expectedEnvelopeHash:workspaceHead.envelopeHash,events:[workspaceEvent as HashedEventEnvelopeV1<WorkspaceEventPayloadV1>]},run:{streamKind:"run",workspaceId:core.workspaceId,streamId:core.runId,expectedSequence:runHead.envelope.sequence,expectedEnvelopeHash:runHead.envelopeHash,events:runAppend},artifacts:[artifact],requiredArtifactDigests:[artifactDigest],projections:[{workspaceId:core.workspaceId,name:"admission-current",version:"1",streamKind:"run",streamId:core.runId,lastSequence:decision.envelope.sequence,lastEnvelopeHash:decision.envelopeHash}]}); }
+    const resultingCursor:CompositeCursorV1={schemaVersion:"1",kind:"composite",workspaceId:core.workspaceId,workspaceSequence:workspaceEvent.envelope.sequence,workspaceEnvelopeHash:workspaceEvent.envelopeHash,workspaceContextEpoch:Math.max(0,workspaceEvent.envelope.sequence-1),runId:core.runId,runSequence:decision.envelope.sequence,runEnvelopeHash:decision.envelopeHash,runContextEpoch:Math.max(0,decision.envelope.sequence-1)};
+    const resultingCurrent:AdmissionCurrentAuthorityV1={...loaded.current,evaluationObservationCursor:resultingCursor};
+    try { this.authority.publishAndAppendAtomic({commandId:request.commandId,workspace:{streamKind:"workspace",workspaceId:core.workspaceId,streamId:core.workspaceId,expectedSequence:workspaceHead.envelope.sequence,expectedEnvelopeHash:workspaceHead.envelopeHash,events:[workspaceEvent as HashedEventEnvelopeV1<WorkspaceEventPayloadV1>]},run:{streamKind:"run",workspaceId:core.workspaceId,streamId:core.runId,expectedSequence:runHead.envelope.sequence,expectedEnvelopeHash:runHead.envelopeHash,events:runAppend},artifacts:[artifact],requiredArtifactDigests:[artifactDigest],projections:[{workspaceId:core.workspaceId,name:"admission-current",version:"1",streamKind:"run",streamId:core.runId,lastSequence:decision.envelope.sequence,lastEnvelopeHash:decision.envelopeHash}],snapshots:[{workspaceId:core.workspaceId,streamKind:"run",streamId:core.runId,sequence:decision.envelope.sequence,envelopeHash:decision.envelopeHash,projectionName:"admission-current",projectionVersion:"1",state:resultingCurrent as unknown as JsonValue}]}); }
     catch(error){if(error instanceof StoreConflictError)fail("STALE_BASE");throw error;}
     return {schemaVersion:"1",state,proposalId:request.proposal.proposalId,proposalDigest:request.proposal.proposalDigest,revision:resultingRevision,stateHash:resultingHash,provenanceDigest,deduplicated:false};
   }
