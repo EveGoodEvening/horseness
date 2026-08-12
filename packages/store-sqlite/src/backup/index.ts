@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { DatabaseSync as Database } from "node:sqlite";
@@ -51,8 +51,19 @@ export function parseBackupManifest(value:unknown):BackupManifestV1 {
   return {kind:"HorsenessBackupManifestV1",schemaVersion:1,authoritySchemaVersion:Number(value.authoritySchemaVersion),createdAt:value.createdAt,database,artifacts};
 }
 
+export function resolveBackupRoot(root:string):string {
+  const absolute=resolve(root);
+  const rootStat=lstatSync(absolute);
+  if(rootStat.isSymbolicLink()||!rootStat.isDirectory())throw new Error("backup root must be a non-symlink directory");
+  const real=realpathSync(absolute);
+  if(real!==absolute)throw new Error("backup root must be a real directory path");
+  const pinned=lstatSync(real);
+  if(pinned.isSymbolicLink()||!pinned.isDirectory()||pinned.dev!==rootStat.dev||pinned.ino!==rootStat.ino)throw new Error("backup root identity changed");
+  return real;
+}
+
 export function containedBackupPath(root:string,portablePath:string):string {
-  const absoluteRoot=resolve(root);const candidate=resolve(absoluteRoot,...portablePath.split("/"));
+  const absoluteRoot=resolveBackupRoot(root);const candidate=resolve(absoluteRoot,...portablePath.split("/"));
   if(candidate===absoluteRoot||!candidate.startsWith(`${absoluteRoot}${sep}`))throw new Error("backup path containment failure");
   return candidate;
 }
@@ -84,15 +95,16 @@ export function createBackup(db:Database,artifactRoot:string,destination:string)
   writeFileSync(join(destination,"manifest.json"),`${JSON.stringify(manifest,null,2)}\n`,{encoding:"utf8",mode:0o600,flag:"wx"});return manifest;
 }
 
-export function readBackupManifest(root:string):BackupManifestV1 {return parseBackupManifest(JSON.parse(readRegularNoFollow(join(root,"manifest.json")).toString("utf8")) as unknown);}
+export function readBackupManifest(root:string):BackupManifestV1 {const pinned=resolveBackupRoot(root);return parseBackupManifest(JSON.parse(readRegularNoFollow(join(pinned,"manifest.json")).toString("utf8")) as unknown);}
 
 export function verifyBackup(root:string):BackupManifestV1 {
-  const manifest=readBackupManifest(root);const rootEntries=readdirSync(root,{withFileTypes:true});
+  const pinnedRoot=resolveBackupRoot(root);const identity=lstatSync(pinnedRoot);const manifest=readBackupManifest(pinnedRoot);const rootEntries=readdirSync(pinnedRoot,{withFileTypes:true});
   if(rootEntries.some(entry=>entry.isSymbolicLink()||(!entry.isDirectory()&&!entry.isFile())))throw new Error("backup root contains symlink or special file");
-  assertEqualSets(enumerateRegularFiles(root),["manifest.json",manifest.database.file,...manifest.artifacts.map(item=>item.path)],"backup manifest enumeration mismatch");
-  const databaseBytes=readRegularNoFollow(containedBackupPath(root,manifest.database.file));if(databaseBytes.length!==manifest.database.bytes||digest(databaseBytes)!==manifest.database.digest)throw new Error(`backup member digest mismatch: ${manifest.database.file}`);
-  for(const item of manifest.artifacts){const data=readRegularNoFollow(containedBackupPath(root,item.path));if(data.length!==item.bytes||digest(data)!==item.digest)throw new Error(`backup member digest mismatch: ${item.path}`);}
-  const authority=new DatabaseSync(containedBackupPath(root,manifest.database.file),{readOnly:true});
-  try {const version=(authority.prepare("SELECT max(version) AS version FROM schema_migrations").get() as {version:number|null}).version;if(version!==manifest.authoritySchemaVersion)throw new Error("backup authority schema mismatch");const catalog=authority.prepare("SELECT digest,byte_length,relative_path FROM artifacts ORDER BY relative_path").all() as {digest:string;byte_length:number;relative_path:string}[];const expected=catalog.map(row=>`artifacts/${row.relative_path}`);assertEqualSets(manifest.artifacts.map(item=>item.path),expected,"backup artifact catalog mismatch");for(const row of catalog){const item=manifest.artifacts.find(candidate=>candidate.path===`artifacts/${row.relative_path}`);if(!item||item.digest!==row.digest||item.bytes!==row.byte_length)throw new Error(`backup artifact catalog metadata mismatch: ${row.relative_path}`);}} finally {authority.close();}
+  assertEqualSets(enumerateRegularFiles(pinnedRoot),["manifest.json",manifest.database.file,...manifest.artifacts.map(item=>item.path)],"backup manifest enumeration mismatch");
+  const databaseBytes=readRegularNoFollow(containedBackupPath(pinnedRoot,manifest.database.file));if(databaseBytes.length!==manifest.database.bytes||digest(databaseBytes)!==manifest.database.digest)throw new Error(`backup member digest mismatch: ${manifest.database.file}`);
+  for(const item of manifest.artifacts){const data=readRegularNoFollow(containedBackupPath(pinnedRoot,item.path));if(data.length!==item.bytes||digest(data)!==item.digest)throw new Error(`backup member digest mismatch: ${item.path}`);}
+  const authority=new DatabaseSync(containedBackupPath(pinnedRoot,manifest.database.file),{readOnly:true});
+  try {const version=(authority.prepare("SELECT max(version) AS version FROM schema_migrations").get() as {version:number|null}).version;if(version!==manifest.authoritySchemaVersion)throw new Error("backup authority schema mismatch");const catalog=authority.prepare("SELECT digest,byte_length,relative_path FROM artifacts ORDER BY relative_path").all() as {digest:string;byte_length:number;relative_path:string}[];const expected=catalog.map(row=>`artifacts/${row.relative_path}`);assertEqualSets(manifest.artifacts.map(item=>item.path),expected,"backup artifact catalog mismatch");for(const row of catalog){const item=manifest.artifacts.find(candidate=>candidate.path===`artifacts/${row.relative_path}`);if(!item||item.digest!==row.digest||item.bytes!==row.byte_length)throw new Error("backup artifact catalog metadata mismatch");}verifyAuthority(authority,join(pinnedRoot,"artifacts"));}finally{authority.close();}
+  const finalIdentity=lstatSync(pinnedRoot);if(finalIdentity.isSymbolicLink()||!finalIdentity.isDirectory()||finalIdentity.dev!==identity.dev||finalIdentity.ino!==identity.ino||realpathSync(pinnedRoot)!==pinnedRoot)throw new Error("backup root identity changed during verification");
   return manifest;
 }

@@ -14,33 +14,54 @@ CREATE TABLE artifact_refs(workspace_id TEXT NOT NULL, owner_kind TEXT NOT NULL 
 CREATE TABLE artifact_pins(pin_id TEXT NOT NULL, digest TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(pin_id,digest), FOREIGN KEY(digest) REFERENCES artifacts(digest) ON DELETE RESTRICT);
 `;
 
-const migrationName = "0001_initial_authority";
+export const MIGRATION_0002 = `
+CREATE TABLE retention_intents(intent_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, digest TEXT NOT NULL UNIQUE, state TEXT NOT NULL CHECK(state IN ('pending','deleting','deleted')), created_at TEXT NOT NULL, delete_committed_at TEXT, completed_at TEXT);
+CREATE TABLE artifact_tombstones(digest TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, deleted_at TEXT NOT NULL, intent_id TEXT NOT NULL UNIQUE, FOREIGN KEY(intent_id) REFERENCES retention_intents(intent_id));
+CREATE TRIGGER retention_blocks_refs BEFORE INSERT ON artifact_refs WHEN EXISTS(SELECT 1 FROM retention_intents WHERE digest=NEW.digest) BEGIN SELECT RAISE(ABORT,'artifact is under retention'); END;
+CREATE TRIGGER retention_blocks_pins BEFORE INSERT ON artifact_pins WHEN EXISTS(SELECT 1 FROM retention_intents WHERE digest=NEW.digest) BEGIN SELECT RAISE(ABORT,'artifact is under retention'); END;
+`;
 
-function inspectSchemaVersion(db: DatabaseSync): boolean {
+export const CURRENT_STORAGE_SCHEMA = 2;
+
+const migrations = [
+  { version: 1, name: "0001_initial_authority", sql: MIGRATION_0001 },
+  { version: 2, name: "0002_retention_recovery", sql: MIGRATION_0002 },
+] as const;
+
+export function inspectMigrationLedger(db: DatabaseSync): number {
   const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").get();
-  if (table === undefined) return false;
+  if (table === undefined) return 0;
   const rows = db.prepare("SELECT version,name FROM schema_migrations ORDER BY version").all() as {version:number;name:string}[];
-  const newer = rows.find((row) => row.version > 1);
+  const newer = rows.find((row) => row.version > CURRENT_STORAGE_SCHEMA);
   if (newer !== undefined) throw new Error(`unsupported newer schema version ${newer.version}`);
-  const versionOne = rows.find((row) => row.version === 1);
-  if (versionOne !== undefined && versionOne.name !== migrationName) throw new Error("migration 0001 identity mismatch");
-  return versionOne !== undefined;
+  for (const [index, row] of rows.entries()) {
+    const expected = migrations[index];
+    if (expected === undefined) {
+      if (row.version > CURRENT_STORAGE_SCHEMA) throw new Error(`unsupported newer schema version ${row.version}`);
+      throw new Error(`unknown migration ledger entry ${row.version}`);
+    }
+    if (row.version !== expected.version || row.name !== expected.name) {
+      throw new Error(`migration ${String(expected.version).padStart(4, "0")} identity/order mismatch`);
+    }
+  }
+  return rows.length;
 }
 
 export function migrate(db: DatabaseSync): void {
-  // Version compatibility is checked before PRAGMAs or transactions that mutate database state.
-  const migrationApplied = inspectSchemaVersion(db);
+  // Ledger compatibility is checked before PRAGMAs or transactions that mutate database state.
+  const appliedCount = inspectMigrationLedger(db);
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = FULL");
-  if (migrationApplied) return;
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    db.exec(MIGRATION_0001);
-    db.prepare("INSERT INTO schema_migrations(version,name,applied_at) VALUES(1,?,?)").run(migrationName, new Date().toISOString());
-    db.exec("COMMIT");
-  } catch (error) {
-    if (db.isTransaction) db.exec("ROLLBACK");
-    throw error;
+  for (const migration of migrations.slice(appliedCount)) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec(migration.sql);
+      db.prepare("INSERT INTO schema_migrations(version,name,applied_at) VALUES(?,?,?)").run(migration.version, migration.name, new Date().toISOString());
+      db.exec("COMMIT");
+    } catch (error) {
+      if (db.isTransaction) db.exec("ROLLBACK");
+      throw error;
+    }
   }
 }

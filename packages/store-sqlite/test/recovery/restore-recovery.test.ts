@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -152,4 +152,49 @@ test("rollback recovery is idempotent across every rename and removal interrupti
       assert.equal(existsSync(journal(state.database)), false);
     } finally { rmSync(state.root, { recursive: true, force: true }); }
   }
+});
+
+test("recovery rejects untrusted journal generations before victim mutation", () => {
+  const maliciousTokens = [
+    "../victim",
+    "12345678-1234-4123-8123-123456789abc/../../victim",
+    "x12345678-1234-4123-8123-123456789abc",
+    "12345678-1234-4123-8123-123456789abc.old-prefix",
+  ];
+  for (const generationToken of maliciousTokens) {
+    const state = prepareCase("horseness-journal-traversal-");
+    const victim = join(state.root, "victim");
+    try {
+      writeFileSync(victim, "untouched");
+      writeFileSync(journal(state.database), JSON.stringify({
+        version: "HorsenessRestoreJournalV1",
+        phase: "staged",
+        generationToken,
+        hadDatabase: true,
+        hadArtifacts: true,
+      }));
+      assert.throws(() => recoverInterruptedRestore(state.database, state.artifacts), /invalid restore journal/);
+      assert.equal(readFileSync(victim, "utf8"), "untouched");
+      assert.deepEqual(pairGeneration(state.database, state.artifacts), { database: "old", artifacts: "old" });
+    } finally { rmSync(state.root, { recursive: true, force: true }); }
+  }
+});
+
+test("recovery rejects legacy path fields and extra keys before mutation", () => {
+  const state = prepareCase("horseness-journal-extra-");
+  const victim = join(state.root, "victim");
+  try {
+    writeFileSync(victim, "untouched");
+    writeFileSync(journal(state.database), JSON.stringify({
+      version: "HorsenessRestoreJournalV1",
+      phase: "staged",
+      generationToken: "12345678-1234-4123-8123-123456789abc",
+      hadDatabase: true,
+      hadArtifacts: true,
+      oldDatabase: victim,
+    }));
+    assert.throws(() => recoverInterruptedRestore(state.database, state.artifacts), /invalid restore journal keys/);
+    assert.equal(readFileSync(victim, "utf8"), "untouched");
+    assert.deepEqual(pairGeneration(state.database, state.artifacts), { database: "old", artifacts: "old" });
+  } finally { rmSync(state.root, { recursive: true, force: true }); }
 });
