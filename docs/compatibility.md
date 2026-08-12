@@ -38,6 +38,14 @@ The domain package exposes `horseness-vectors-verify`, its package-local `vector
  
 Pagination names `afterObservationCursor` separately from emitted result cursors. Subscription resumption binds subscription ID, after-observation cursor, and opaque resume token. Stable success/error envelopes, local-only transport metadata, domain-owned receipt/proposal mappings, capability detection, provider lifecycle SPI, and `WorkerReturnV1` are public v1 contracts. Generated canonical schemas/manifests and executable vectors are checked byte-for-byte; no v1 reader infers missing cursor scope, transport identity, idempotency, or authority.
 
+## Adapter-kit v1 implementation train
+
+`@horseness/adapter-kit` consumes the protocol-owned adapter SPI rather than defining a competing wire contract. It retains the complete immutable attempt binding across launch, cancel, reconcile, reattach, native resume, and receipt collection; repeated callbacks are idempotent and any workspace, run, task, attempt, generation, ForkPin, manifest, binding, capability, or provider-key substitution fails closed.
+
+Credentials cross the adapter boundary only as versioned opaque references scoped to a workspace, adapter, and purpose. Secure subprocesses use argv arrays without a shell, realpath-confined executable and working-directory roots, an explicit environment allowlist with secret-shaped keys stripped, time limits, byte limits, and deterministic redaction. Install contributions are declarative relative paths and content identities only: adapters expose no install hooks and never write host targets. Doctor results are versioned, exact, read-only records; repair remains a separate installer operation.
+
+The executable adapter conformance suite covers capability detection, lifecycle recovery, immutable binding retention, callback deduplication, credential/reference exclusion, scope rejection, executable/cwd and symlink confinement, bounded/redacted output, declarative install and doctor validation, and a `WorkerReturnV1` artifact/receipt/proposal/decision-resume loop through an SDK-compatible client fake. The repository root `adapter:conformance` command is the focused gate for this contract.
+
 ## Policy v1 implementation train
 
 `@horseness/policy` writes immutable `PolicyDocumentV1` values addressed by the domain-separated `horseness.policy.v1` digest and strict `PolicyReferenceStateV1` lifecycle values. `NoPolicyV1` and `NO_POLICY_DIGEST` are the only neutral representation; policy references and pinned/current policy slots are never nullable. Readers reject unknown versions, kinds, effects, extra fields, malformed lineage, duplicate or noncanonical rule/evidence identifiers, substituted document digests, noncanonical JSON Pointers, and noncanonical UTF-8 ordering.

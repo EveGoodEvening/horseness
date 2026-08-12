@@ -11,13 +11,16 @@
     }
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p ../../tsconfig.base.json",
-    "lint": "eslint src --max-warnings=0",
-    "test": "node --test"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint src test --max-warnings=0",
+    "test": "node ./bin/test-runner.mjs",
+    "adapter:conformance": "node ./bin/test-runner.mjs"
   },
   "dependencies": {
     "@horseness/domain": "workspace:*",
-    "@horseness/protocol": "workspace:*",
-    "@horseness/sdk": "workspace:*"
+    "@horseness/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "4.20.5"
   }
 }

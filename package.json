@@ -13,6 +13,7 @@
     "c00:contract": "node scripts/c00-contract-gate.mjs",
     "vectors:verify": "pnpm --filter @horseness/domain run vectors:verify",
     "protocol:conformance": "pnpm --filter @horseness/protocol run protocol:conformance",
+    "adapter:conformance": "pnpm --filter @horseness/adapter-kit run adapter:conformance",
     "generated:check": "pnpm --filter @horseness/protocol run generated:check",
     "typecheck": "pnpm -r --if-present run typecheck",
     "lint": "pnpm -r --if-present run lint && eslint scripts/*.mjs eslint.config.js --max-warnings=0",
