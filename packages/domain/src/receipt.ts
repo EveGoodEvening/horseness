@@ -75,10 +75,11 @@ export function reduceWorkspaceState(state: WorkspaceState | null, event: Worksp
   }
 }
 
-export interface RunOperationalState { workspaceId: string; runId: string; eventCount: number; proposals: Readonly<Record<string, { status: "submitted" | "accepted"; proposalDigest: string }>>; receipts: Readonly<Record<string, { receiptDigest: string; outcome: "succeeded" | "failed" | "cancelled" }>>; taskStates: Readonly<Record<string, "succeeded" | "failed" | "cancelled">>; contextEpoch: number; lastEventSequence: number }
+export interface RunOperationalState { workspaceId: string; runId: string; eventCount: number; proposals: Readonly<Record<string, { status: "submitted" | "accepted" | "rejected" | "conflicted" | "quarantined" | "approval_required"; proposalDigest: string; provenanceDigest?: string; artifactDigest?: string }>>; receipts: Readonly<Record<string, { receiptDigest: string; outcome: "succeeded" | "failed" | "cancelled" }>>; taskStates: Readonly<Record<string, "succeeded" | "failed" | "cancelled">>; contextEpoch: number; lastEventSequence: number }
 export type RunOperationalEvent =
   | { eventType: "RunCreatedV1"; sequence: number; workspaceId: string; runId: string }
   | { eventType: "ProposalSubmittedV1"; sequence: number; workspaceId: string; runId: string; proposalId: string; proposalDigest: string }
+  | { eventType: "AdmissionDecisionRecordedV1"; sequence: number; workspaceId: string; runId: string; proposalId: string; proposalDigest: string; state: "accepted" | "rejected" | "conflicted" | "quarantined" | "approval_required"; provenanceDigest: string; artifactDigest: string }
   | { eventType: "DeltaAcceptedV1"; sequence: number; workspaceId: string; runId: string; proposalId: string; proposalDigest: string }
   | { eventType: "AttemptReceiptRecordedV1"; sequence: number; workspaceId: string; runId: string; receiptId: string; receiptDigest: string; outcome: "succeeded" | "failed" | "cancelled" }
   | { eventType: "TaskResolvedV1"; sequence: number; workspaceId: string; runId: string; taskId: string; resolution: "succeeded" | "failed" | "cancelled" }
@@ -102,8 +103,16 @@ export function reduceOperationalState(state: RunOperationalState | null, event:
     case "DeltaAcceptedV1": {
       const existing = next.proposals[event.proposalId];
       if (existing !== undefined && existing.proposalDigest !== event.proposalDigest) throw new DomainError("PROPOSAL_IDENTITY_CONFLICT");
-      if (existing === undefined || existing.status !== "submitted") throw new DomainError("PROPOSAL_NOT_SUBMITTED");
+      if (existing === undefined || !["submitted","approval_required","quarantined"].includes(existing.status)) throw new DomainError("PROPOSAL_NOT_SUBMITTED");
       return { ...next, proposals: { ...next.proposals, [event.proposalId]: { ...existing, status: "accepted" } } };
+    }
+    case "AdmissionDecisionRecordedV1": {
+      const existing = next.proposals[event.proposalId];
+      if (existing === undefined || existing.proposalDigest !== event.proposalDigest) throw new DomainError(existing === undefined ? "PROPOSAL_NOT_SUBMITTED" : "PROPOSAL_IDENTITY_CONFLICT");
+      const completesAcceptedDelta = existing.status === "accepted" && event.state === "accepted";
+      const resolvesPending = ["approval_required","quarantined"].includes(existing.status) && ["accepted","rejected"].includes(event.state);
+      if (existing.provenanceDigest !== undefined && !completesAcceptedDelta && !resolvesPending) throw new DomainError("DUPLICATE_PROPOSAL_TRANSITION");
+      return { ...next, proposals: { ...next.proposals, [event.proposalId]: { proposalDigest:event.proposalDigest, status:event.state, provenanceDigest:event.provenanceDigest, artifactDigest:event.artifactDigest } } };
     }
     case "AttemptReceiptRecordedV1": {
       const existing = next.receipts[event.receiptId];
@@ -148,6 +157,10 @@ export function deterministicReplay(events: readonly HashedEventEnvelopeV1<unkno
         break;
       }
       case "ProposalSubmittedV1": operational = reduceOperationalState(operational, { eventType: "ProposalSubmittedV1", ...common, proposalId: text(payload.proposalId), proposalDigest: text(payload.proposalDigest) }); break;
+      case "AdmissionDecisionRecordedV1": {
+        const state=text(payload.state); if(!["accepted","rejected","conflicted","quarantined","approval_required"].includes(state)) throw new DomainError("MALFORMED_EVENT");
+        operational=reduceOperationalState(operational,{eventType:"AdmissionDecisionRecordedV1",...common,proposalId:text(payload.proposalId),proposalDigest:text(payload.proposalDigest),state:state as "accepted"|"rejected"|"conflicted"|"quarantined"|"approval_required",provenanceDigest:text(payload.provenanceDigest),artifactDigest:text(payload.artifactDigest)}); break;
+      }
       case "DeltaAcceptedV1": {
         const proposalId = text(payload.proposalId); const proposalDigest = text(payload.proposalDigest);
         canonical = reduceCanonicalDocument(canonical, { eventType: "DeltaAcceptedV1", ...common, proposalId, priorStateHash: text(payload.priorStateHash), resultingStateHash: text(payload.resultingStateHash), resultingDocument: json(payload.resultingDocument) });
