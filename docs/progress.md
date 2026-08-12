@@ -5,8 +5,8 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 ## Global status
 
 - **Planning state:** C00, C01, C02, C03, C04, C05, C06, C07, C08, and C09 are complete; F001/F002 are closed; R001/R002 are complete
-- **Active claims:** none
-- **Next eligible:** C10 is the sole next dependency-ready chunk
+- **Active claims:** C10 at base `ddad712`; tracker claim commit pending integration
+- **Next eligible:** none while C10 is in progress; C11 remains dependency-ineligible until C10 completes
 - **Active blockers:** none
 - **Last integrated receipt:** immutable C01 `docs/checkpoints/C01/final/1.json`, envelope digest `17ddd75b49e35d3bf6f432c8c6acca30b4a66512229453aca4fc63e7f427ea7d`, indexed at A01 commit `223023330cb000b759d8a8b2419514638c1aa179`; receipt/index bytes must not be overwritten
 - **Release readiness:** not started
@@ -33,8 +33,8 @@ For C02 onward: commit the two tracker files to claim a dependency-ready chunk; 
 | C07 | Admission service | C06 | complete; claim `eefbd9e`; implementation `6999bea`; review fixes `a247df9`, `9ad86da`, `bd4a105`, `da49adc`, `b3fd849`; ownership correction integrated at `9ad86da`; final candidate `b3fd849`; completion `935c02e`; Node 22 gates green: orchestrator typecheck exit 0, admission 19/19; supplemental domain typecheck exit 0 and tests 41/41; clean final review |
 | C08 | Task/fork projections | C07 | complete; claim `d6bfd42`; implementation `171b86d`; review fixes `f7721d5`, `241a977`, `219f740`, `3c87b2a`, `2a3c873`; final candidate `2a3c873`; Node 22 gates green: orchestrator typecheck exit 0, task/fork/receipt 16/16, model 6/6; supplemental store typecheck exit 0 and tests 61/61; clean final review |
 | C09 | Context reconstruction | C08 | complete; claim `33f6529`; implementation `f350ba8`; review fixes `ff18b7e`, `023c948`, `0913eb0`; reviewed ownership correction recorded; final candidate `0913eb0`; Node 22 gates green: orchestrator typecheck exit 0, context golden 15/15, context-binding vectors 3/3; supplemental store typecheck exit 0 and full tests 74/74; clean final review |
-| C10 | Scheduler/dispatch | C09 | not-started; sole next dependency-ready chunk |
-| C11 | Four-host feasibility | C10 | not-started |
+| C10 | Scheduler/dispatch | C09 | in-progress; claimed at base `ddad712`; tracker claim commit pending integration |
+| C11 | Four-host feasibility | C10 | not-started; dependency-ineligible while C10 is incomplete |
 | C12 | SDK/adapter kit | C11 | not-started |
 | C13 | Daemon/bootstrap auth | C12 | not-started |
 | C14 | CLI/credentials | C13 | not-started |
@@ -68,6 +68,8 @@ C08 is complete. Tracker claim commit `d6bfd42` preceded source edits; implement
 
 C09 is complete. Tracker claim commit `33f6529` preceded source edits; implementation commit `f350ba8` and review-fix commits `ff18b7e`, `023c948`, and `0913eb0` are integrated, with final candidate `0913eb0`. Review recorded the narrow ownership correction for additive orchestrator exports, trusted exact-cursor context materialization, and crash-safe authoritative context publication without broadening the authorized paths. All three literal C09 gates ran in order under Node 22 with exact environment `CI=1 TZ=UTC LANG=C NODE_OPTIONS=--unhandled-rejections=strict`: orchestrator typecheck exit 0, `test:context-golden` 15/15, and `context-binding` vectors 3/3. Supplemental store verification reported typecheck exit 0 and full tests 74/74. The final blocker/high review was clean, all C09 checklist items are checked, no blockers remain, and C10 is the sole next dependency-ready chunk.
 
+C10 is in progress under a serialized tracker-only claim from integrated base `ddad712`; the tracker claim commit must integrate before any C10 source edit. C09 completion in `docs/progress/C09.md` is the satisfied dependency. C10 ownership is bounded to `packages/orchestrator/src/{scheduler,attempts,leases,dispatch,recovery}/**`, matching tests under `packages/orchestrator/test/{scheduler,attempts,leases,dispatch,recovery}/**`, the package-changing-row expansion, and the two tracker ledgers. Its exact ordered Node 22 gates are orchestrator typecheck, `test:dispatch-property`, and `test:dispatch-restart-races` under the frozen environment. C11 remains dependency-ineligible until C10 completes. No blockers are active.
+
 ## Planning review status
 
-The bootstrap workflow blocker remains closed. C02 through C09 are complete with all accepted in-scope review findings resolved and exact acceptance evidence recorded. C09 completed at final candidate `0913eb0` after claim `33f6529`, implementation `f350ba8`, and review fixes `ff18b7e`, `023c948`, and `0913eb0`; its narrow ownership correction is recorded. Its exact ordered Node 22 gates passed with orchestrator typecheck exit 0, context golden tests 15/15, and context-binding vectors 3/3; supplemental store typecheck exited 0 and the full store suite passed 74/74. The final review was clean. No blockers or active claims remain, and C10 is the sole next dependency-ready chunk.
+The bootstrap workflow blocker remains closed. C02 through C09 are complete with all accepted in-scope review findings resolved and exact acceptance evidence recorded. C09 completed at final candidate `0913eb0` after claim `33f6529`, implementation `f350ba8`, and review fixes `ff18b7e`, `023c948`, and `0913eb0`; its narrow ownership correction is recorded. Its exact ordered Node 22 gates passed with orchestrator typecheck exit 0, context golden tests 15/15, and context-binding vectors 3/3; supplemental store typecheck exited 0 and the full store suite passed 74/74. The final review was clean. C10 is now the sole active claim at base `ddad712`, no blockers are active, and C11 remains dependency-ineligible until C10 completes.
