@@ -12,10 +12,12 @@ import {
   type AttemptGenerationStateV1,
   type AttemptReceiptRecordedV1,
 } from "@horseness/domain";
-import { SQLiteAuthority, trustedAuthorityReader } from "@horseness/store-sqlite";
+import { SQLiteAuthority } from "@horseness/store-sqlite";
 import * as orchestrator from "../../src/index.js";
 import {
   emptyReceiptProjection,
+  applyStoredRetryDecision,
+  issueStoredRetryDecision,
   issueStoredReceiptCapabilities,
   projectAuthenticatedReceipt,
   registerReceiptGeneration,
@@ -87,9 +89,12 @@ const plainAuthority = (generationNumber = 1): AttemptAuthorityInputV1 => ({
   },
 });
 
-function storedCapabilities(generationNumber = 1) {
+function storedCapabilities(generationNumber = 1, outcome: "succeeded" | "failed" = "succeeded") {
   const root = mkdtempSync(join(tmpdir(), "horseness-receipt-projection-"));
-  const authority = new SQLiteAuthority(join(root, "authority.sqlite"), join(root, "artifacts"));
+  const reducers = ["receipt-event", "receipt-authority", "receipt-retry-decision", "receipt-cancellation"].map((projectionName) => ({ projectionName, projectionVersion: "1", match: "exact" as const, validate: () => undefined }));
+  const databasePath = join(root, "authority.sqlite");
+  const artifactRoot = join(root, "artifacts");
+  const bootstrap = SQLiteAuthority.open(databasePath, artifactRoot);
   const workspace = createWorkspaceGenesis({
     workspaceId: "w",
     authorityPrincipalId: "authority",
@@ -98,15 +103,24 @@ function storedCapabilities(generationNumber = 1) {
     activePolicyDigest: NO_POLICY_DIGEST,
     commandId: "workspace",
   });
-  authority.appendAtomic({
+  bootstrap.appendAtomic({
     commandId: "workspace",
     workspace: { streamKind: "workspace", workspaceId: "w", streamId: "w", expectedSequence: 0, expectedEnvelopeHash: null, events: [workspace.event] },
   });
   const observationCursor = { ...workspace.resultCursor, kind: "absent-run-genesis" as const, runId: "r", expectedRunHead: "absent" as const };
   const run = createRunGenesis({ observationCursor, initialDocument: {}, principalId: "coordinator", commandId: "run" });
-  authority.appendAtomic({ commandId: "run", runGenesis: { observationCursor, event: run.event } });
+  bootstrap.appendAtomic({ commandId: "run", runGenesis: { observationCursor, event: run.event } });
+  bootstrap.close();
+  const { authority, reader } = SQLiteAuthority.openAuthenticatedWorkspace(databasePath, artifactRoot, { workspaceId: "w", sessionId: `receipt-${generationNumber}-${outcome}-${root}`, snapshotReducers: reducers });
 
-  const value = receipt(generationNumber);
+  const original = receipt(generationNumber);
+  const value = outcome === "succeeded" ? original : sealAttemptReceipt({
+    schemaVersion: "1", workspaceId: "w", runId: "r", taskId: "task", attemptId: "attempt", generation: generationNumber,
+    attemptContextBindingDigest: `binding-${generationNumber}`, contextManifestCoreDigest: `manifest-${generationNumber}`, forkPinDigest: `fork-${generationNumber}`,
+    providerId: "provider", providerOperationId: `operation-${generationNumber}`, providerIdempotencyKeyDigest: `key-${generationNumber}`,
+    producerPrincipalId: "adapter", producerGrantDigest: "grant", adapterId: "adapter", adapterVersion: "1", hostId: "host", hostVersion: "1",
+    outcome: "failed", startedAt: "2026-08-12T00:00:00Z", finishedAt: "2026-08-12T00:00:01Z", outputDigest: null, evidence: [], provenance: {}, nonce: `nonce-${generationNumber}`,
+  });
   const payload: AttemptReceiptRecordedV1 = {
     eventType: "AttemptReceiptRecordedV1",
     workspaceId: "w",
@@ -130,32 +144,18 @@ function storedCapabilities(generationNumber = 1) {
     priorEnvelopeHash: run.event.envelopeHash,
     payload,
   });
-  authority.appendAtomic({
+  authority.publishAndAppendAtomic({
     commandId: `receipt-command:${generationNumber}`,
     run: { streamKind: "run", workspaceId: "w", streamId: "r", expectedSequence: 1, expectedEnvelopeHash: run.event.envelopeHash, events: [stored] },
+    artifacts: [],
+    snapshots: [
+      { workspaceId: "w", streamKind: "run", streamId: "r", sequence: 2, envelopeHash: stored.envelopeHash, projectionName: "receipt-event", projectionVersion: "1", state: { eventSequence: 2, eventDigest: stored.envelopeHash, authenticatedPrincipalId: "adapter", receipt: value } },
+      { workspaceId: "w", streamKind: "run", streamId: "r", sequence: 2, envelopeHash: stored.envelopeHash, projectionName: "receipt-authority", projectionVersion: "1", state: plainAuthority(generationNumber) },
+      { workspaceId: "w", streamKind: "run", streamId: "r", sequence: 2, envelopeHash: stored.envelopeHash, projectionName: "receipt-retry-decision", projectionVersion: "1", state: { workspaceId: "w", runId: "r", taskId: "task", attemptId: "attempt", generation: generationNumber, decision: "permitted", retryPolicyDigest: "retry-policy", eventSequence: 2, eventHash: stored.envelopeHash } },
+    ],
   });
-  authority.putSnapshot({
-    workspaceId: "w",
-    streamKind: "run",
-    streamId: "r",
-    sequence: 2,
-    envelopeHash: stored.envelopeHash,
-    projectionName: "receipt-event",
-    projectionVersion: "1",
-    state: { eventSequence: 2, eventDigest: stored.envelopeHash, authenticatedPrincipalId: "adapter", receipt: value },
-  });
-  authority.putSnapshot({
-    workspaceId: "w",
-    streamKind: "run",
-    streamId: "r",
-    sequence: 2,
-    envelopeHash: stored.envelopeHash,
-    projectionName: "receipt-authority",
-    projectionVersion: "1",
-    state: plainAuthority(generationNumber),
-  });
-  const capabilities = issueStoredReceiptCapabilities(trustedAuthorityReader(authority), { workspaceId: "w", runId: "r", receiptEventSequence: 2 });
-  return { authority, capabilities, close: () => { authority.close(); rmSync(root, { recursive: true, force: true }); } };
+  const capabilities = issueStoredReceiptCapabilities(reader, { workspaceId: "w", runId: "r", receiptEventSequence: 2 });
+  return { authority, reader, capabilities, close: () => { authority.close(); rmSync(root, { recursive: true, force: true }); } };
 }
 
 const state = (generationNumber = 1) => registerReceiptGeneration(emptyReceiptProjection("attempt"), generation(generationNumber));
@@ -200,4 +200,19 @@ test("package root exposes only capability consumers and trusted issuers", () =>
   assert.equal("verifyAttemptAuthority" in orchestrator, false);
   assert.equal(orchestrator.issueStoredReceiptCapabilities, issueStoredReceiptCapabilities);
   assert.equal("projectReceipt" in orchestrator, false);
+  assert.equal("setRetryPermitted" in orchestrator, false);
+  assert.equal("recordExplicitTaskCancellation" in orchestrator, false);
+});
+
+test("only an exact-head stored retry decision can keep failed arbitration open", () => {
+  const fixture = storedCapabilities(1, "failed");
+  try {
+    const retry = issueStoredRetryDecision(fixture.reader, { workspaceId: "w", runId: "r", taskId: "task", attemptId: "attempt", generation: 1 });
+    const projected = projectAuthenticatedReceipt(state(), fixture.capabilities.event, fixture.capabilities.authority);
+    assert.equal(projected.resolution?.resolution, "failed");
+    const prepared = applyStoredRetryDecision(state(), fixture.reader, retry);
+    assert.equal(projectAuthenticatedReceipt(prepared, fixture.capabilities.event, fixture.capabilities.authority).resolution, null);
+    assert.throws(() => applyStoredRetryDecision(state(), fixture.reader, { ...retry } as typeof retry), /ARBITRATION_AUTHORITY_UNAUTHENTICATED/);
+    assert.equal("setRetryPermitted" in orchestrator, false);
+  } finally { fixture.close(); }
 });

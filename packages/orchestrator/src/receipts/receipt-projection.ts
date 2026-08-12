@@ -6,6 +6,7 @@ import {
   type AttemptGenerationStateV1,
   type AttemptReceiptEnvelopeV1,
   type AttemptTerminalState,
+  type CompositeCursorV1,
   type JsonValue,
   type TaskResolution,
 } from "@horseness/domain";
@@ -69,8 +70,25 @@ declare const verifiedAttemptAuthorityBrand: unique symbol;
 export type VerifiedReceiptEventV1 = ReceiptEventV1 & { readonly [verifiedReceiptEventBrand]: true };
 export type VerifiedAttemptAuthorityV1 = AttemptAuthorityInputV1 & { readonly [verifiedAttemptAuthorityBrand]: true };
 
+export interface RetryDecisionEventV1 {
+  readonly workspaceId: string; readonly runId: string; readonly taskId: string; readonly attemptId: string;
+  readonly generation: number; readonly decision: "permitted" | "denied"; readonly retryPolicyDigest: string;
+  readonly eventSequence: number; readonly eventHash: string; readonly cursor: CompositeCursorV1;
+}
+export interface CancellationEventV1 {
+  readonly workspaceId: string; readonly runId: string; readonly taskId: string; readonly attemptId: string;
+  readonly generation: number; readonly decision: "cancelled"; readonly eventSequence: number;
+  readonly eventHash: string; readonly cursor: CompositeCursorV1;
+}
+declare const retryDecisionBrand: unique symbol;
+declare const cancellationBrand: unique symbol;
+export type VerifiedRetryDecisionV1 = RetryDecisionEventV1 & { readonly [retryDecisionBrand]: true };
+export type VerifiedCancellationV1 = CancellationEventV1 & { readonly [cancellationBrand]: true };
+
 const verifiedReceiptEvents = new WeakSet<object>();
 const verifiedAttemptAuthorities = new WeakSet<object>();
+const verifiedRetryDecisions = new WeakSet<object>();
+const verifiedCancellations = new WeakSet<object>();
 const receiptIdentities = new WeakMap<object, object>();
 const authorityIdentities = new WeakMap<object, object>();
 const identities = new Map<string, object>();
@@ -109,6 +127,47 @@ export function issueStoredReceiptCapabilities(reader:TrustedAuthorityReader,inp
   return Object.freeze({event:verifiedEvent,authority:verifiedAuthority});
 }
 
+function exactCursor(left: CompositeCursorV1, right: CompositeCursorV1): boolean {
+  return left.workspaceId === right.workspaceId && left.runId === right.runId &&
+    left.workspaceSequence === right.workspaceSequence && left.workspaceEnvelopeHash === right.workspaceEnvelopeHash && left.workspaceContextEpoch === right.workspaceContextEpoch &&
+    left.runSequence === right.runSequence && left.runEnvelopeHash === right.runEnvelopeHash && left.runContextEpoch === right.runContextEpoch;
+}
+
+function arbitrationState(reader: TrustedAuthorityReader, workspaceId: string, runId: string, projectionName: string): Record<string, JsonValue> {
+  return record(reader.exactRunHeadSnapshot(workspaceId, runId, projectionName).state, "ARBITRATION_AUTHORITY_UNAUTHENTICATED");
+}
+
+export function issueStoredRetryDecision(reader: TrustedAuthorityReader, input: { workspaceId: string; runId: string; taskId: string; attemptId: string; generation: number }): VerifiedRetryDecisionV1 {
+  const view = reader.authenticatedView(input.workspaceId, input.runId);
+  const state = arbitrationState(reader, input.workspaceId, input.runId, "receipt-retry-decision");
+  const sequence = state.eventSequence;
+  const decision = state.decision;
+  const event = typeof sequence === "number" ? view.runEvents.find((item) => item.envelope.sequence === sequence) : undefined;
+  if (!event) throw new DomainError("ARBITRATION_AUTHORITY_UNAUTHENTICATED");
+  if ((decision !== "permitted" && decision !== "denied") || state.workspaceId !== input.workspaceId || state.runId !== input.runId || state.taskId !== input.taskId || state.attemptId !== input.attemptId || state.generation !== input.generation || typeof state.retryPolicyDigest !== "string" || !state.retryPolicyDigest || state.eventHash !== event.envelopeHash) fail("ARBITRATION_AUTHORITY_UNAUTHENTICATED");
+  if (event.envelope.eventType !== "AttemptReceiptRecordedV1") fail("ARBITRATION_AUTHORITY_UNAUTHENTICATED");
+  const payload = event.envelope.payload as unknown as { workspaceId: string; runId: string; outcome: string };
+  if (payload.workspaceId !== input.workspaceId || payload.runId !== input.runId || payload.outcome !== "failed") fail("ARBITRATION_AUTHORITY_UNAUTHENTICATED");
+  const capability = Object.freeze({ ...input, decision, retryPolicyDigest: state.retryPolicyDigest, eventSequence: sequence, eventHash: event.envelopeHash, cursor: view.cursor }) as VerifiedRetryDecisionV1;
+  verifiedRetryDecisions.add(capability);
+  return capability;
+}
+
+export function issueStoredCancellation(reader: TrustedAuthorityReader, input: { workspaceId: string; runId: string; taskId: string; attemptId: string; generation: number }): VerifiedCancellationV1 {
+  const view = reader.authenticatedView(input.workspaceId, input.runId);
+  const state = arbitrationState(reader, input.workspaceId, input.runId, "receipt-cancellation");
+  const sequence = state.eventSequence;
+  const event = typeof sequence === "number" ? view.runEvents.find((item) => item.envelope.sequence === sequence) : undefined;
+  if (!event) throw new DomainError("ARBITRATION_AUTHORITY_UNAUTHENTICATED");
+  if (state.decision !== "cancelled" || state.workspaceId !== input.workspaceId || state.runId !== input.runId || state.taskId !== input.taskId || state.attemptId !== input.attemptId || state.generation !== input.generation || state.eventHash !== event.envelopeHash) fail("ARBITRATION_AUTHORITY_UNAUTHENTICATED");
+  if (event.envelope.eventType !== "TaskResolvedV1") fail("ARBITRATION_AUTHORITY_UNAUTHENTICATED");
+  const payload = event.envelope.payload as unknown as { workspaceId: string; runId: string; taskId: string; resolution: string };
+  if (payload.workspaceId !== input.workspaceId || payload.runId !== input.runId || payload.taskId !== input.taskId || payload.resolution !== "cancelled") fail("ARBITRATION_AUTHORITY_UNAUTHENTICATED");
+  const capability = Object.freeze({ ...input, decision: "cancelled", eventSequence: sequence, eventHash: event.envelopeHash, cursor: view.cursor }) as VerifiedCancellationV1;
+  verifiedCancellations.add(capability);
+  return capability;
+}
+
 const terminal = (state: AttemptGenerationStateV1["state"]): state is AttemptTerminalState => state === "succeeded" || state === "failed" || state === "cancelled";
 const findings = (values: readonly string[]): string[] => [...new Set(values)].sort();
 
@@ -126,19 +185,23 @@ export function registerReceiptGeneration(state: AttemptReceiptProjectionV1, gen
   return { ...state, generations };
 }
 
-export function setRetryPermitted(state: AttemptReceiptProjectionV1, generation: number, permitted: boolean): AttemptReceiptProjectionV1 {
-  if (!state.generations.has(generation)) throw new DomainError("INVALID_ATTEMPT_STATE");
+export function applyStoredRetryDecision(state: AttemptReceiptProjectionV1, reader: TrustedAuthorityReader, capability: VerifiedRetryDecisionV1): AttemptReceiptProjectionV1 {
+  if (!verifiedRetryDecisions.has(capability)) throw new DomainError("ARBITRATION_AUTHORITY_UNAUTHENTICATED");
+  const view = reader.authenticatedView(capability.workspaceId, capability.runId);
+  if (!exactCursor(view.cursor, capability.cursor)) throw new DomainError("ARBITRATION_AUTHORITY_STALE");
+  if (capability.attemptId !== state.attemptId || !state.generations.has(capability.generation) || state.taskId !== null && state.taskId !== capability.taskId) throw new DomainError("RECEIPT_MISMATCH");
   const next = new Set(state.retryPermittedGenerations);
-  if (permitted) next.add(generation); else next.delete(generation);
-  return { ...state, retryPermittedGenerations: next };
+  if (capability.decision === "permitted") next.add(capability.generation); else next.delete(capability.generation);
+  return resolve({ ...state, taskId: state.taskId ?? capability.taskId, retryPermittedGenerations: next }, capability.eventSequence);
 }
 
-export function recordExplicitTaskCancellation(state: AttemptReceiptProjectionV1, eventSequence: number, taskId = state.taskId): AttemptReceiptProjectionV1 {
-  if (eventSequence < 1) throw new DomainError("INVALID_EVENT_SEQUENCE");
-  if (!taskId) throw new DomainError("TASK_NOT_FOUND");
-  if (state.taskId !== null && state.taskId !== taskId) throw new DomainError("RECEIPT_MISMATCH");
+export function applyStoredCancellation(state: AttemptReceiptProjectionV1, reader: TrustedAuthorityReader, capability: VerifiedCancellationV1): AttemptReceiptProjectionV1 {
+  if (!verifiedCancellations.has(capability)) throw new DomainError("ARBITRATION_AUTHORITY_UNAUTHENTICATED");
+  const view = reader.authenticatedView(capability.workspaceId, capability.runId);
+  if (!exactCursor(view.cursor, capability.cursor)) throw new DomainError("ARBITRATION_AUTHORITY_STALE");
+  if (capability.attemptId !== state.attemptId || !state.generations.has(capability.generation) || state.taskId !== null && state.taskId !== capability.taskId) throw new DomainError("RECEIPT_MISMATCH");
   if (state.resolution) return { ...state, findings: findings([...state.findings, "LATE_EXPLICIT_CANCELLATION"]) };
-  return resolve({ ...state, taskId, explicitCancellationEventSequence: state.explicitCancellationEventSequence ?? eventSequence }, eventSequence);
+  return resolve({ ...state, taskId: capability.taskId, explicitCancellationEventSequence: state.explicitCancellationEventSequence ?? capability.eventSequence }, capability.eventSequence);
 }
 
 function validateAuthority(event: VerifiedReceiptEventV1, authority: VerifiedAttemptAuthorityV1, state: AttemptReceiptProjectionV1): AttemptGenerationStateV1 {

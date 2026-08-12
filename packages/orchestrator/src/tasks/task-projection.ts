@@ -41,6 +41,18 @@ declare const verifiedAuthorityEventBrand:unique symbol;
 export type VerifiedAuthorityEventV1=DurableAuthorityEventV1&{readonly [verifiedAuthorityEventBrand]:true};
 const verifiedAuthorityEvents=new WeakSet<object>();
 
+export interface StoredTaskResolvedCapabilityV1 {
+  readonly workspaceId:string;
+  readonly runId:string;
+  readonly taskId:string;
+  readonly resolution:TaskResolution;
+  readonly winningGeneration:number|null;
+  readonly eventSequence:number;
+  readonly eventDigest:string;
+  readonly compositeCursor:CompositeCursorV1;
+}
+const storedTaskResolvedCapabilities=new WeakSet<object>();
+
 function deepFreeze<T>(value:T):T {
   if(typeof value!=="object"||value===null||Object.isFrozen(value))return value;
   Object.freeze(value);
@@ -59,6 +71,27 @@ export function issueStoredAuthorityEvent(reader:TrustedAuthorityReader,input:{w
   const issued=deepFreeze(structuredClone(record)) as VerifiedAuthorityEventV1;
   verifiedAuthorityEvents.add(issued);
   return issued;
+}
+
+export function issueStoredTaskResolvedCapability(reader:TrustedAuthorityReader,input:{workspaceId:string;runId:string;taskId:string}):StoredTaskResolvedCapabilityV1 {
+  const view=reader.authenticatedView(input.workspaceId,input.runId),candidate=view.runEvents.at(-1);
+  if(candidate===undefined)throw new DomainError("TASK_RESOLUTION_UNAUTHENTICATED");
+  const stored=candidate;
+  if(stored.envelope.eventType!=="TaskResolvedV1"||stored.envelope.sequence!==view.cursor.runSequence||stored.envelopeHash!==view.cursor.runEnvelopeHash)fail("TASK_RESOLUTION_UNAUTHENTICATED");
+  const payload=stored.envelope.payload;
+  if(payload===null||typeof payload!=="object"||Array.isArray(payload))fail("TASK_RESOLUTION_UNAUTHENTICATED");
+  const record=payload as unknown as Record<string,unknown>;
+  const resolution=record.resolution;
+  if(record.eventType!=="TaskResolvedV1"||record.workspaceId!==input.workspaceId||record.runId!==input.runId||record.taskId!==input.taskId)fail("TASK_RESOLUTION_UNAUTHENTICATED");
+  if(resolution!=="succeeded"&&resolution!=="failed"&&resolution!=="cancelled")throw new DomainError("TASK_RESOLUTION_UNAUTHENTICATED");
+  const authenticatedResolution:TaskResolution=resolution;
+  const snapshot=reader.exactRunHeadSnapshot(input.workspaceId,input.runId,`task-resolution/${input.taskId}`);
+  if(snapshot.state===null||typeof snapshot.state!=="object"||Array.isArray(snapshot.state))fail("TASK_RESOLUTION_UNAUTHENTICATED");
+  const resolutionState=snapshot.state as Record<string,unknown>,winningGeneration=resolutionState.winningGeneration;
+  if(resolutionState.workspaceId!==input.workspaceId||resolutionState.runId!==input.runId||resolutionState.taskId!==input.taskId||resolutionState.resolution!==authenticatedResolution||resolutionState.eventSequence!==stored.envelope.sequence||resolutionState.eventDigest!==stored.envelopeHash||(winningGeneration!==null&&(!Number.isSafeInteger(winningGeneration)||(winningGeneration as number)<1)))fail("TASK_RESOLUTION_UNAUTHENTICATED");
+  const capability:StoredTaskResolvedCapabilityV1=deepFreeze({workspaceId:input.workspaceId,runId:input.runId,taskId:input.taskId,resolution:authenticatedResolution,winningGeneration:winningGeneration as number|null,eventSequence:stored.envelope.sequence,eventDigest:stored.envelopeHash,compositeCursor:structuredClone(view.cursor)});
+  storedTaskResolvedCapabilities.add(capability);
+  return capability;
 }
 
 export type AuthorityTruthV1 = "allowed" | "denied" | "unknown";
@@ -131,9 +164,10 @@ export function projectDurablePredicate(state:TaskProjectionV1,event:VerifiedAut
   const identity=completionPredicateIdentity(predicate);if(!predicateIds(current.contract.completionPolicy).includes(identity))fail("PREDICATE_NOT_IN_CONTRACT");
   const next=clone(state),ids=new Set(current.durablePredicateIds);ids.add(identity);next.tasks.set(taskId,{...cloneTask(current),durablePredicateIds:ids});return next;
 }
-export function resolveProjectedTask(state:TaskProjectionV1,input:{taskId:string;resolution:TaskResolution;winningGeneration:number|null;eventSequence:number;eventDigest:string}):TaskProjectionV1 {
-  const current=requireTask(state,input.taskId,"ILLEGAL_TASK_TRANSITION");if(current.lifecycle!=="active"||input.eventSequence<1||!input.eventDigest)fail("ILLEGAL_TASK_TRANSITION");if(!completionPolicySatisfied(current.contract.completionPolicy,current.durablePredicateIds))fail("TASK_COMPLETION_UNSATISFIED");
-  const next=clone(state);next.tasks.set(input.taskId,{...cloneTask(current),lifecycle:input.resolution,resolution:input.resolution,winningGeneration:input.winningGeneration,resolutionEventSequence:input.eventSequence,resolutionDigest:input.eventDigest});return next;
+export function resolveProjectedTask(state:TaskProjectionV1,capability:StoredTaskResolvedCapabilityV1):TaskProjectionV1 {
+  if(!storedTaskResolvedCapabilities.has(capability))fail("TASK_RESOLUTION_UNAUTHENTICATED");
+  const current=requireTask(state,capability.taskId,"ILLEGAL_TASK_TRANSITION");if(current.lifecycle!=="active"||capability.eventSequence<1||!capability.eventDigest)fail("ILLEGAL_TASK_TRANSITION");if(!completionPolicySatisfied(current.contract.completionPolicy,current.durablePredicateIds))fail("TASK_COMPLETION_UNSATISFIED");
+  const next=clone(state);next.tasks.set(capability.taskId,{...cloneTask(current),lifecycle:capability.resolution,resolution:capability.resolution,winningGeneration:capability.winningGeneration,resolutionEventSequence:capability.eventSequence,resolutionDigest:capability.eventDigest});return next;
 }
 const projectionName=(kind:TaskAuthorityComponentKindV1):string=>`task-authority/${kind}`;
 function componentDigest(snapshot:TaskAuthorityComponentSnapshotV1):string {const {projectionProof:_proof,...core}=snapshot;return domainDigest("horseness.task-authority-component.v1",core as unknown as JsonValue)}

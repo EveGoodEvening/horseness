@@ -8,8 +8,9 @@ export {
   type AppendRequest,
   type AppendResult,
   type AtomicAppendRequest,
+  type AuthenticatedWorkspaceOpenV1,
   type EventStream,
   type SnapshotRecord,
   type StoredEvent,
 } from "./sqlite-authority.js";
-export { TrustedAuthorityReader, trustedAuthorityReader, type AuthenticatedAuthorityViewV1 } from "./trusted-reader.js";
+export { TrustedAuthorityReader, type AuthenticatedAuthorityViewV1, type AuthenticatedWorkspaceSessionV1, type TrustedSnapshotReducerRegistrationV1, type TrustedSnapshotValidator } from "./trusted-reader.js";
