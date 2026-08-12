@@ -38,7 +38,7 @@ export interface AttemptReceiptProjectionV1 {
   readonly findings: readonly string[];
 }
 
-export interface AuthenticatedReceiptEventV1 {
+export interface AuthenticatedReceiptInputV1 {
   readonly eventSequence: number;
   readonly eventDigest: string;
   readonly authenticated: true;
@@ -92,7 +92,7 @@ export function recordExplicitTaskCancellation(state: AttemptReceiptProjectionV1
   return resolve({ ...state, taskId, explicitCancellationEventSequence: state.explicitCancellationEventSequence ?? eventSequence }, eventSequence);
 }
 
-function validateAuthority(event: AuthenticatedReceiptEventV1, state: AttemptReceiptProjectionV1): AttemptGenerationStateV1 {
+function validateAuthority(event: AuthenticatedReceiptInputV1, state: AttemptReceiptProjectionV1): AttemptGenerationStateV1 {
   verifyAttemptReceipt(event.receipt);
   const { receipt, binding } = event;
   if (!event.authenticated || event.eventSequence < 1 || !event.eventDigest) throw new DomainError("UNAUTHENTICATED_RECEIPT_EVENT");
@@ -105,7 +105,7 @@ function validateAuthority(event: AuthenticatedReceiptEventV1, state: AttemptRec
   return generation;
 }
 
-export function projectAuthenticatedReceipt(state: AttemptReceiptProjectionV1, event: AuthenticatedReceiptEventV1): AttemptReceiptProjectionV1 {
+export function projectAuthenticatedReceipt(state: AttemptReceiptProjectionV1, event: AuthenticatedReceiptInputV1): AttemptReceiptProjectionV1 {
   let generation = validateAuthority(event, state);
   const prior = state.outcomes.get(event.receipt.generation);
   if (prior) {
@@ -143,13 +143,3 @@ function resolved(state: AttemptReceiptProjectionV1, resolution: TaskResolution,
   return { ...state, resolution: projection, winningGeneration, findings: [...state.findings] };
 }
 
-/** Compatibility helper for already-authenticated callers with no dispatch authority model. */
-export function projectReceipt(state: AttemptReceiptProjectionV1, receipt: AttemptReceiptEnvelopeV1, eventSequence: number): AttemptReceiptProjectionV1 {
-  verifyAttemptReceipt(receipt);
-  const outcomes = new Map(state.outcomes);
-  const prior = outcomes.get(receipt.generation);
-  if (prior) return { ...state, findings: findings([...state.findings, prior.receiptDigest === receipt.receiptDigest ? "DUPLICATE_RECEIPT" : "RECEIPT_TERMINAL_CONFLICT"]) };
-  outcomes.set(receipt.generation, { generation: receipt.generation, outcome: receipt.outcome, receiptDigest: receipt.receiptDigest, receiptId: receipt.receiptId, terminalEventSequence: eventSequence });
-  const successes = [...outcomes.values()].filter((item) => item.outcome === "succeeded").sort((a,b)=>a.terminalEventSequence-b.terminalEventSequence||a.generation-b.generation);
-  return { ...state, taskId: state.taskId ?? receipt.taskId, outcomes, winningGeneration: successes[0]?.generation ?? null, findings: successes[0] && successes[0].generation !== receipt.generation ? findings([...state.findings,"LATE_GENERATION_RECEIPT"]) : state.findings };
-}
