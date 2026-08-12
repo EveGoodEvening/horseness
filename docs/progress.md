@@ -4,9 +4,9 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 
 ## Global status
 
-- **Planning state:** C00, C01, C02, C03, C04, C05, C06, C07, C08, C09, C10, and C11 are complete; C12 is in progress; F001/F002 are closed; R001/R002 are complete
-- **Active claims:** C12 (SDK and secure adapter/install SPI), solely claimed from integrated base `71b990bbc1edbaf5152a5b201ad0ed311b8422e5`
-- **Next eligible:** none; C13 remains dependency-ineligible until C12 is complete, accepted, reviewed, and recorded
+- **Planning state:** C00, C01, C02, C03, C04, C05, C06, C07, C08, C09, C10, C11, and C12 are complete; F001/F002 are closed; R001/R002 are complete
+- **Active claims:** none; C12 is complete
+- **Next eligible:** C13 (daemon/bootstrap auth), solely eligible from integrated C12 completion base
 - **Active blockers:** none
 - **Last integrated receipt:** immutable C01 `docs/checkpoints/C01/final/1.json`, envelope digest `17ddd75b49e35d3bf6f432c8c6acca30b4a66512229453aca4fc63e7f427ea7d`, indexed at A01 commit `223023330cb000b759d8a8b2419514638c1aa179`; receipt/index bytes must not be overwritten
 - **Release readiness:** not started
@@ -37,6 +37,7 @@ For C02 onward: commit the two tracker files to claim a dependency-ready chunk; 
 | C11 | Four-host feasibility | C10 | complete; claim `9bb051a`; implementation `05c5f4c6` (amended from `1dc6053` after fixture-theater rework); completion `8987a1af`; lessons `7defa3f1`; final candidate `05c5f4c6`; Node 22 gates green: typecheck exit 0, boundaries 14/14, host:validate:pi/omp/claude/codex all pass, harness 47/47, matrix pass; pinned real distributions: @mariozechner/pi-coding-agent@0.73.1, @oh-my-pi/pi-coding-agent@17.2.15, @anthropic-ai/claude-code-linux-x64@2.1.228, @openai/codex@0.144.1-linux-x64; Claude scope: credential-free gate narrowed to `nativeArtifactLoad` + `officialValidatorSatisfied`, 7 credential-gated capabilities deferred to C17; clean final code+security review after 3 review rounds |
 | C12 | SDK/adapter kit | C11 | in-progress; tracker-only claim from integrated base `71b990bbc1edbaf5152a5b201ad0ed311b8422e5`; C11 final candidate `05c5f4c6`, completion `8987a1af`, and lessons `7defa3f1` recorded; implementation and acceptance not yet completed |
 | C13 | Daemon/bootstrap auth | C12 | not-started; dependency-ineligible while C12 is active |
+| C12 | SDK/adapter kit | C11 | complete; claim `55a71fb9`; implementation `a77f0cbc`; review fixes `e432bb87`, `793d2608`; final candidate `793d2608`; Node 22 gates green: SDK typecheck exit 0, adapter-kit typecheck exit 0, SDK tests 8/8, adapter-kit tests 6/6, adapter:conformance 6/6, boundaries 14/14; two review rounds resolved 7 high findings (resume cursor, protocol cursor variants, deep immutable binding, proposal scope checks, closed credential grammar, producer/grant/policy/base binding, adapter-kit credential parser); final security review clean |
 | C14 | CLI/credentials | C13 | not-started |
 | C15 | Pi native bundle | C14 | not-started |
 | C16 | OMP native bundle | C15 | not-started |
@@ -78,4 +79,4 @@ Claude scope decision: Claude Code 2.1.228 provides genuine plugin validation an
 
 ## Planning review status
 
-The bootstrap workflow blocker remains closed. C02 through C11 are complete with all accepted in-scope review findings resolved and exact acceptance evidence recorded. C11 completed at final candidate `05c5f4c6`; its exact ordered Node 22 gates passed, and the final code and security reviews were clean. C12 is the sole next dependency-ready chunk from integrated base `05c5f4c6`.
+The bootstrap workflow blocker remains closed. C02 through C12 are complete with all accepted in-scope review findings resolved and exact acceptance evidence recorded. C12 completed at final candidate `793d2608`; its exact ordered Node 22 gates passed (SDK typecheck, adapter-kit typecheck, SDK tests 8/8, adapter-kit tests 6/6, adapter:conformance 6/6, boundaries 14/14), and the final security review was clean. C13 is the sole next dependency-ready chunk from integrated C12 completion base.
