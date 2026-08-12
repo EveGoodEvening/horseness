@@ -15,7 +15,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { containedBackupPath, createBackup, resolveBackupRoot, verifyBackup, verifyBackupIdentity, type VerifiedBackupIdentityV1 } from "../backup/index.js";
 import { verifyAuthority } from "../recovery/index.js";
@@ -143,6 +143,64 @@ function resolvedAuthorityPath(path: string, expected: "file" | "directory"): st
   return absolute;
 }
 
+interface StableDirectoryIdentity {
+  readonly path: string;
+  readonly device: bigint;
+  readonly inode: bigint;
+}
+
+function stableDirectoryIdentity(path: string, label: string): StableDirectoryIdentity {
+  const absolute = resolve(path);
+  const stat = lstatSync(absolute, { bigint: true });
+  if (stat.isSymbolicLink() || !stat.isDirectory() || realpathSync(absolute) !== absolute) throw new Error(`unsafe ${label}`);
+  return { path: absolute, device: stat.dev, inode: stat.ino };
+}
+
+function assertStableDirectory(identity: StableDirectoryIdentity, label: string): void {
+  const current = stableDirectoryIdentity(identity.path, label);
+  if (current.device !== identity.device || current.inode !== identity.inode) throw new Error(`${label} changed during restore`);
+}
+
+function pathsOverlap(left: string, right: string): boolean {
+  const fromLeft = relative(left, right);
+  const fromRight = relative(right, left);
+  return fromLeft === "" || (!fromLeft.startsWith(`..${sep}`) && fromLeft !== ".." && !isAbsolute(fromLeft)) || (!fromRight.startsWith(`..${sep}`) && fromRight !== ".." && !isAbsolute(fromRight));
+}
+
+function assertRetainedBackupContainment(retainedBackupRoot: string, paths: RestorePaths): StableDirectoryIdentity {
+  const retained = resolve(retainedBackupRoot);
+  const affectedPaths = [
+    paths.databasePath,
+    paths.artifactRoot,
+    paths.oldDatabase,
+    paths.oldArtifacts,
+    paths.stageDatabase,
+    paths.stageArtifacts,
+    journalPath(paths.databasePath),
+    journalNextPath(paths.databasePath),
+    commitEvidencePath(paths.databasePath),
+  ];
+  if (affectedPaths.some(path => pathsOverlap(retained, path))) throw new Error("retained backup root overlaps restore authority paths");
+  const retainedName = basename(retained);
+  const reservedPrefixes = [
+    `${basename(paths.databasePath)}.old-`,
+    `${basename(paths.databasePath)}.restore-`,
+    `${basename(paths.artifactRoot)}.old-`,
+    `${basename(paths.artifactRoot)}.restore-`,
+  ];
+  if (reservedPrefixes.some(prefix => retainedName.startsWith(prefix))) throw new Error("retained backup root collides with restore sibling namespace");
+  if (existsSync(retained)) throw new Error("retained backup destination already exists");
+  return stableDirectoryIdentity(dirname(retained), "retained backup parent");
+}
+
+function verifyRetainedBackupAfterRestore(root: string, expected: VerifiedBackupIdentityV1, parent: StableDirectoryIdentity): void {
+  assertStableDirectory(parent, "retained backup parent");
+  const stat = lstatSync(root);
+  if (stat.isSymbolicLink() || !stat.isDirectory() || realpathSync(root) !== root) throw new Error("retained backup identity is unsafe after restore");
+  const actual = verifyBackupIdentity(root);
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error("retained backup identity changed during restore");
+}
+
 function deriveRestorePaths(databasePath: string, artifactRoot: string, journal: RestoreJournalV1): RestorePaths {
   databasePath = resolvedAuthorityPath(databasePath, "file");
   artifactRoot = resolvedAuthorityPath(artifactRoot, "directory");
@@ -261,21 +319,38 @@ export function restoreBackup(backupRoot: string, databasePath: string, artifact
   artifactRoot = resolvedAuthorityPath(artifactRoot, "directory");
   backupRoot = resolveBackupRoot(backupRoot);
   const manifest = verifyBackup(backupRoot);
+  const token = randomUUID();
+  let retainedBackupRoot = options.retainedBackupRoot ? resolve(options.retainedBackupRoot) : null;
+  const preflightJournal = deriveRestorePaths(databasePath, artifactRoot, {
+    version: "HorsenessRestoreJournalV1",
+    phase: "staged",
+    generationToken: token,
+    hadDatabase: existsSync(databasePath),
+    hadArtifacts: existsSync(artifactRoot),
+    retainedBackupRoot,
+    retainedBackupIdentity: null,
+  });
+  let retainedBackupParent: StableDirectoryIdentity | null = null;
+  if (retainedBackupRoot !== null) retainedBackupParent = assertRetainedBackupContainment(retainedBackupRoot, preflightJournal);
+  if (retainedBackupRoot !== null && existsSync(journalPath(databasePath))) {
+    const interrupted = parseJournal(databasePath, artifactRoot);
+    assertRetainedBackupContainment(retainedBackupRoot, interrupted);
+  }
   recoverInterruptedRestore(databasePath, artifactRoot, inject);
   const hadDatabase = existsSync(databasePath);
   const hadArtifacts = existsSync(artifactRoot);
-  let retainedBackupRoot: string | null = null;
   let retainedBackupIdentity: VerifiedBackupIdentityV1 | null = null;
   if (hadDatabase || hadArtifacts) {
     if (options.confirmReplacement !== true) throw new Error("live authority replacement requires explicit confirmation");
-    if (!options.retainedBackupRoot) throw new Error("live authority replacement requires a retained pre-restore backup location");
+    if (retainedBackupRoot === null) throw new Error("live authority replacement requires a retained pre-restore backup location");
     if (!hadDatabase || !hadArtifacts) throw new Error("cannot retain incomplete live authority unit");
-    retainedBackupRoot = resolve(options.retainedBackupRoot);
+    retainedBackupParent ??= assertRetainedBackupContainment(retainedBackupRoot, preflightJournal);
+    assertStableDirectory(retainedBackupParent, "retained backup parent");
     const live = new DatabaseSync(databasePath);
     try { createBackup(live, artifactRoot, retainedBackupRoot); } finally { live.close(); }
+    assertStableDirectory(retainedBackupParent, "retained backup parent");
     retainedBackupIdentity = verifyBackupIdentity(retainedBackupRoot);
   }
-  const token = randomUUID();
   const journal = deriveRestorePaths(databasePath, artifactRoot, {
     version: "HorsenessRestoreJournalV1",
     phase: "staged",
@@ -313,6 +388,9 @@ export function restoreBackup(backupRoot: string, databasePath: string, artifact
   syncFile(commitEvidencePath(databasePath));
   syncDirectory(dirname(databasePath));
   finishForward(journal, inject);
+  if (retainedBackupRoot !== null && retainedBackupIdentity !== null && retainedBackupParent !== null) {
+    verifyRetainedBackupAfterRestore(retainedBackupRoot, retainedBackupIdentity, retainedBackupParent);
+  }
   removePath(journalNextPath(databasePath), false, "journal", inject);
   removePath(journalPath(databasePath), false, "journal", inject);
   return evidence;

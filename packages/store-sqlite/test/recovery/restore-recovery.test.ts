@@ -86,6 +86,46 @@ test("pre-restore backup failure leaves live authority untouched", () => {
   } finally { rmSync(state.root, { recursive: true, force: true }); }
 });
 
+test("retained backup inside artifact authority is rejected before mutation", () => {
+  const state = prepareCase("horseness-restore-retained-inside-artifacts-");
+  try {
+    const retained = join(state.artifacts, "retained");
+    assert.throws(
+      () => restoreBackup(state.backup, state.database, state.artifacts, { confirmReplacement: true, retainedBackupRoot: retained }),
+      /overlaps restore authority paths/,
+    );
+    assert.deepEqual(pairGeneration(state.database, state.artifacts), { database: "old", artifacts: "old" });
+    assert.equal(existsSync(retained), false);
+    assert.equal(existsSync(journal(state.database)), false);
+  } finally { rmSync(state.root, { recursive: true, force: true }); }
+});
+
+test("retained backup containing the authority is rejected before mutation", () => {
+  const state = prepareCase("horseness-restore-retained-containing-authority-");
+  try {
+    assert.throws(
+      () => restoreBackup(state.backup, state.database, state.artifacts, { confirmReplacement: true, retainedBackupRoot: state.root }),
+      /overlaps restore authority paths/,
+    );
+    assert.deepEqual(pairGeneration(state.database, state.artifacts), { database: "old", artifacts: "old" });
+    assert.equal(existsSync(journal(state.database)), false);
+  } finally { rmSync(state.root, { recursive: true, force: true }); }
+});
+
+test("retained backup restore sibling prefix collision is rejected before mutation", () => {
+  const state = prepareCase("horseness-restore-retained-stage-prefix-");
+  try {
+    const retained = join(state.root, "target.sqlite.restore-attacker");
+    assert.throws(
+      () => restoreBackup(state.backup, state.database, state.artifacts, { confirmReplacement: true, retainedBackupRoot: retained }),
+      /collides with restore sibling namespace/,
+    );
+    assert.deepEqual(pairGeneration(state.database, state.artifacts), { database: "old", artifacts: "old" });
+    assert.equal(existsSync(retained), false);
+    assert.equal(existsSync(journal(state.database)), false);
+  } finally { rmSync(state.root, { recursive: true, force: true }); }
+});
+
 test("restore retains verified pre-restore backup and supports rollback", () => {
   const state = prepareCase("horseness-restore-retained-");
   try {
