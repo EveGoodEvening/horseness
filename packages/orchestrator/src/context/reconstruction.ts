@@ -8,7 +8,6 @@ import {
   verifyForkPin,
   type AttemptContextBindingV1,
   type AuthorizationOverlayV1,
-  type CompositeCursorV1,
   type ContextManifestCoreV1,
   type ContextManifestRecordV1,
   type ContextVersionV1,
@@ -16,7 +15,7 @@ import {
   type SealedForkPinV1,
   type SourceDescriptorV1,
 } from "@horseness/domain";
-import type { AuthenticatedAuthorityViewV1, TrustedAuthorityReader } from "@horseness/store-sqlite";
+import type { AuthenticatedAuthorityViewV1, SQLiteAuthority, TrustedAuthorityReader } from "@horseness/store-sqlite";
 
 const encoder = new TextEncoder();
 const snapshots = new WeakSet<object>();
@@ -25,119 +24,44 @@ const same = (left: unknown, right: unknown): boolean => canonicalJson(left as J
 function fail(code: string): never { throw new DomainError(code); }
 
 export type ContextSourceKindV1 = "system" | "objective" | "task" | "canonical" | "dependency" | "receipt" | "evidence" | "decision" | "approval" | "policy" | "renderer" | "summary";
-export interface ContextSourceInputV1 {
-  readonly sourceId: string;
-  readonly kind: ContextSourceKindV1;
-  readonly priority: number;
-  readonly bytes: Uint8Array | string;
-  readonly digest: string;
-  readonly activationEpoch: number;
-  readonly deactivationEpoch: number | null;
-  readonly visibleAtRunSequence: number;
-  readonly artifactDigest: string | null;
-}
-export interface ContextArtifactAuthorityV1 {
-  readDurableReferenced(digest: string, workspaceId: string): Uint8Array;
+interface TrustedContextSourceV1 {
+  readonly sourceId: string; readonly kind: ContextSourceKindV1; readonly priority: number; readonly digest: string;
+  readonly activationEpoch: number; readonly deactivationEpoch: number | null; readonly visibleAtRunSequence: number;
+  readonly artifactDigest: string; readonly eventId: string;
 }
 export interface AuthenticatedContextSnapshotV1 {
-  readonly schemaVersion: "1";
-  readonly view: AuthenticatedAuthorityViewV1;
-  readonly pin: SealedForkPinV1;
-  readonly canonicalState: JsonValue;
-  readonly sources: readonly ContextSourceInputV1[];
-  readonly artifacts: ContextArtifactAuthorityV1;
+  readonly schemaVersion: "1"; readonly view: AuthenticatedAuthorityViewV1; readonly pin: SealedForkPinV1;
+  readonly canonicalState: JsonValue; readonly sources: readonly TrustedContextSourceV1[]; readonly authorizationOverlay: AuthorizationOverlayV1;
+  readonly authorizationContextVersion: ContextVersionV1; readonly reader: TrustedAuthorityReader;
 }
 export interface ReconstructContextRequestV1 {
-  readonly snapshot: AuthenticatedContextSnapshotV1;
-  readonly attemptId: string;
-  readonly generation: number;
-  readonly byteBudget: number;
-  readonly rendererVersion: string;
-  readonly authorizationObservationCursor: CompositeCursorV1;
-  readonly authorizationContextVersion: ContextVersionV1;
-  readonly authorizationOverlay: AuthorizationOverlayV1;
-  readonly providerIdempotencyKey: string;
-  readonly allowedProducerPrincipalId: string;
-  readonly allowedProducerGrantDigest: string;
-  readonly tokenizerMetadata?: JsonValue | null;
+  readonly snapshot: AuthenticatedContextSnapshotV1; readonly attemptId: string; readonly generation: number; readonly byteBudget: number;
+  readonly rendererVersion: string; readonly providerIdempotencyKey: string; readonly allowedProducerPrincipalId: string;
+  readonly allowedProducerGrantDigest: string; readonly tokenizerMetadata?: JsonValue | null;
 }
-export interface ReconstructedContextV1 {
-  readonly bytes: Uint8Array;
-  readonly manifest: ContextManifestRecordV1;
-  readonly binding: AttemptContextBindingV1;
-}
+export interface ReconstructedContextV1 { readonly bytes: Uint8Array; readonly manifest: ContextManifestRecordV1; readonly binding: AttemptContextBindingV1; }
+export interface ContextManifestPublicationV1 { readonly workspaceId:string;readonly runId:string;readonly attemptId:string;readonly generation:number;readonly manifestBytes:Uint8Array;readonly contextManifestCoreDigest:string;readonly attemptContextBindingDigest:string;readonly renderedOutputDigest:string; }
 
-function bytesOf(value: Uint8Array | string): Uint8Array { return typeof value === "string" ? encoder.encode(value.normalize("NFC")) : new Uint8Array(value); }
+function record(value: JsonValue, code: string): Record<string, JsonValue> { if (value === null || typeof value !== "object" || Array.isArray(value)) fail(code); return value as Record<string, JsonValue>; }
+function integer(value: JsonValue | undefined, code: string): number { if (!Number.isSafeInteger(value) || (value as number) < 0) fail(code); return value as number; }
+function text(value: JsonValue | undefined, code: string): string { if (typeof value !== "string" || !value) fail(code); return value; }
 function rawDigest(bytes: Uint8Array): string { return domainDigest("horseness.context-source-bytes.v1", Buffer.from(bytes).toString("base64") as unknown as JsonValue); }
 function cursorAtPin(view: AuthenticatedAuthorityViewV1, pin: SealedForkPinV1): void {
-  const cursor = pin.core.sourceObservationCursor;
-  const workspace = view.workspaceEvents.find((item) => item.envelope.sequence === cursor.workspaceSequence);
-  const run = view.runEvents.find((item) => item.envelope.sequence === cursor.runSequence);
-  if (!workspace || workspace.envelopeHash !== cursor.workspaceEnvelopeHash || !run || run.envelopeHash !== cursor.runEnvelopeHash) fail("CONTEXT_AUTHORITY_CURSOR_SUBSTITUTED");
-  if (cursor.workspaceContextEpoch !== Math.max(0, cursor.workspaceSequence - 1) || cursor.runContextEpoch !== Math.max(0, cursor.runSequence - 1)) fail("CONTEXT_AUTHORITY_CURSOR_SUBSTITUTED");
-  if (view.cursor.workspaceId !== cursor.workspaceId || view.cursor.runId !== cursor.runId || view.cursor.workspaceSequence < cursor.workspaceSequence || view.cursor.runSequence < cursor.runSequence) fail("CONTEXT_AUTHORITY_CURSOR_STALE");
+  const cursor=pin.core.sourceObservationCursor,workspace=view.workspaceEvents.find(item=>item.envelope.sequence===cursor.workspaceSequence),run=view.runEvents.find(item=>item.envelope.sequence===cursor.runSequence);
+  if(!workspace||workspace.envelopeHash!==cursor.workspaceEnvelopeHash||!run||run.envelopeHash!==cursor.runEnvelopeHash)fail("CONTEXT_AUTHORITY_CURSOR_SUBSTITUTED");
+  if(cursor.workspaceContextEpoch!==Math.max(0,cursor.workspaceSequence-1)||cursor.runContextEpoch!==Math.max(0,cursor.runSequence-1))fail("CONTEXT_AUTHORITY_CURSOR_SUBSTITUTED");
+  if(view.cursor.workspaceId!==cursor.workspaceId||view.cursor.runId!==cursor.runId||view.cursor.workspaceSequence<cursor.workspaceSequence||view.cursor.runSequence<cursor.runSequence)fail("CONTEXT_AUTHORITY_CURSOR_STALE");
 }
-
-export function authenticateContextSnapshot(reader: TrustedAuthorityReader, input: Omit<AuthenticatedContextSnapshotV1, "schemaVersion" | "view">): AuthenticatedContextSnapshotV1 {
-  verifyForkPin(input.pin);
-  const view = reader.authenticatedView(input.pin.core.workspaceId, input.pin.core.runId);
-  cursorAtPin(view, input.pin);
-  if (domainDigest("horseness.canonical-document.v1", input.canonicalState) !== input.pin.core.canonicalStateHash) fail("CONTEXT_CANONICAL_STATE_SUBSTITUTED");
-  const snapshot: AuthenticatedContextSnapshotV1 = Object.freeze({ schemaVersion: "1", view, ...input, sources: Object.freeze([...input.sources]) });
-  snapshots.add(snapshot);
-  return snapshot;
+function canonicalAtPin(view: AuthenticatedAuthorityViewV1, pin: SealedForkPinV1): JsonValue {
+  let state:JsonValue|undefined;
+  for(const stored of view.runEvents){if(stored.envelope.sequence>pin.core.sourceObservationCursor.runSequence)break;const payload=record(stored.envelope.payload as unknown as JsonValue,"CONTEXT_EVENT_INVALID");if(stored.envelope.eventType==="RunCreatedV1")state=payload.initialDocument!;else if(stored.envelope.eventType==="DeltaAcceptedV1")state=payload.resultingDocument!;}
+  if(state===undefined||domainDigest("horseness.canonical-document.v1",state)!==pin.core.canonicalStateHash)fail("CONTEXT_CANONICAL_STATE_SUBSTITUTED");return structuredClone(state);
 }
+function parseSources(value:JsonValue,pin:SealedForkPinV1):readonly TrustedContextSourceV1[]{const state=record(value,"CONTEXT_SOURCE_AUTHORITY_INVALID");if(state.schemaVersion!=="1"||state.workspaceId!==pin.core.workspaceId||state.runId!==pin.core.runId||state.forkPinDigest!==pin.forkPinDigest||!same(state.observationCursor,pin.core.sourceObservationCursor)||!Array.isArray(state.sources))fail("CONTEXT_SOURCE_AUTHORITY_INVALID");return Object.freeze(state.sources.map(item=>{const source=record(item,"CONTEXT_SOURCE_AUTHORITY_INVALID");const kind=text(source.kind,"CONTEXT_SOURCE_AUTHORITY_INVALID") as ContextSourceKindV1;if(!["system","objective","task","canonical","dependency","receipt","evidence","decision","approval","policy","renderer","summary"].includes(kind))fail("CONTEXT_SOURCE_AUTHORITY_INVALID");if("bytes" in source||"allowed" in source)fail("CONTEXT_SOURCE_AUTHORITY_INVALID");const activationEpoch=integer(source.activationEpoch,"CONTEXT_SOURCE_AUTHORITY_INVALID"),deactivationEpoch=source.deactivationEpoch===null?null:integer(source.deactivationEpoch,"CONTEXT_SOURCE_AUTHORITY_INVALID");if(deactivationEpoch!==null&&deactivationEpoch<=activationEpoch)fail("CONTEXT_SOURCE_AUTHORITY_INVALID");return Object.freeze({sourceId:text(source.sourceId,"CONTEXT_SOURCE_AUTHORITY_INVALID"),kind,priority:integer(source.priority,"CONTEXT_SOURCE_AUTHORITY_INVALID"),digest:text(source.digest,"CONTEXT_SOURCE_AUTHORITY_INVALID"),activationEpoch,deactivationEpoch,visibleAtRunSequence:integer(source.visibleAtRunSequence,"CONTEXT_SOURCE_AUTHORITY_INVALID"),artifactDigest:text(source.artifactDigest,"CONTEXT_SOURCE_AUTHORITY_INVALID"),eventId:text(source.eventId,"CONTEXT_SOURCE_AUTHORITY_INVALID")});}));}
+function parseAuthorization(value:JsonValue,view:AuthenticatedAuthorityViewV1,pin:SealedForkPinV1):{overlay:AuthorizationOverlayV1;version:ContextVersionV1}{const state=record(value,"CONTEXT_AUTHORIZATION_AUTHORITY_INVALID");if(state.schemaVersion!=="1"||state.workspaceId!==pin.core.workspaceId||state.runId!==pin.core.runId||!same(state.observationCursor,view.cursor)||state.grantRevoked!==false||state.quotaAvailable!==true||state.pinnedPolicyDigest!==undefined)fail("CONTEXT_AUTHORIZATION_AUTHORITY_INVALID");const version=state.contextVersion as unknown as ContextVersionV1;if(!same(version?.observationCursor,view.cursor))fail("CONTEXT_AUTHORIZATION_VERSION_SUBSTITUTED");return{overlay:Object.freeze({policyDigest:text(state.policyDigest,"CONTEXT_AUTHORIZATION_AUTHORITY_INVALID"),grantDigest:text(state.grantDigest,"CONTEXT_AUTHORIZATION_AUTHORITY_INVALID"),quotaDigest:text(state.quotaDigest,"CONTEXT_AUTHORIZATION_AUTHORITY_INVALID"),result:"allowed"}),version:Object.freeze(structuredClone(version))};}
 
-export function reconstructPinnedContext(request: ReconstructContextRequestV1): ReconstructedContextV1 {
-  if (!snapshots.has(request.snapshot)) fail("CONTEXT_AUTHORITY_UNAUTHENTICATED");
-  const { snapshot } = request;
-  verifyForkPin(snapshot.pin);
-  cursorAtPin(snapshot.view, snapshot.pin);
-  if (!Number.isSafeInteger(request.generation) || request.generation < 1 || !Number.isSafeInteger(request.byteBudget) || request.byteBudget < 0) fail("INVALID_CONTEXT_REQUEST");
-  if (!same(request.authorizationContextVersion.observationCursor, request.authorizationObservationCursor)) fail("CONTEXT_AUTHORIZATION_VERSION_SUBSTITUTED");
-  const pin = snapshot.pin.core;
-  if (pin.sourceContextVersion.kind !== "composite") fail("CONTEXT_VERSION_MISMATCH");
-  const epoch = pin.sourceContextVersion.runContextEpoch;
-  const visible = snapshot.sources.filter((source) => source.activationEpoch <= epoch && (source.deactivationEpoch === null || epoch < source.deactivationEpoch) && source.visibleAtRunSequence <= pin.sourceObservationCursor.runSequence);
-  const normalized = visible.map((source) => {
-    if (!source.sourceId || !Number.isSafeInteger(source.priority) || source.priority < 0 || source.activationEpoch < 0 || (source.deactivationEpoch !== null && source.deactivationEpoch <= source.activationEpoch)) fail("INVALID_CONTEXT_SOURCE");
-    let bytes = bytesOf(source.bytes);
-    if (source.artifactDigest !== null) {
-      const durable = snapshot.artifacts.readDurableReferenced(source.artifactDigest, pin.workspaceId);
-      if (!Buffer.from(durable).equals(Buffer.from(bytes))) fail("CONTEXT_ARTIFACT_SUBSTITUTED");
-      bytes = new Uint8Array(durable);
-    }
-    if (rawDigest(bytes) !== source.digest) fail("CONTEXT_SOURCE_DIGEST_MISMATCH");
-    return { source, bytes };
-  }).sort((a, b) => a.source.priority - b.source.priority || utf8Compare(a.source.kind, b.source.kind) || utf8Compare(a.source.sourceId, b.source.sourceId) || utf8Compare(a.source.digest, b.source.digest));
-  const chunks: Uint8Array[] = [], descriptors: SourceDescriptorV1[] = [], omissions: string[] = [];
-  let offset = 0;
-  for (const item of normalized) {
-    if (offset + item.bytes.byteLength > request.byteBudget) { omissions.push(`budget:${item.source.sourceId}`); continue; }
-    chunks.push(item.bytes); descriptors.push({ kind: item.source.kind, digest: item.source.digest, byteStart: offset, byteEnd: offset + item.bytes.byteLength, priority: item.source.priority }); offset += item.bytes.byteLength;
-  }
-  const bytes = new Uint8Array(offset); let position = 0; for (const chunk of chunks) { bytes.set(chunk, position); position += chunk.byteLength; }
-  const renderedOutputDigest = rawDigest(bytes);
-  const core: ContextManifestCoreV1 = {
-    schemaVersion: "1", workspaceId: pin.workspaceId, runId: pin.runId, attemptId: request.attemptId, generation: request.generation,
-    forkPinDigest: snapshot.pin.forkPinDigest, sourceObservationCursor: pin.sourceObservationCursor, sourceContextVersion: pin.sourceContextVersion,
-    authorizationObservationCursor: request.authorizationObservationCursor, authorizationContextVersion: request.authorizationContextVersion,
-    authorizationOverlayV1: request.authorizationOverlay, canonicalRevision: pin.canonicalRevision, canonicalStateHash: pin.canonicalStateHash,
-    canonicalizerVersion: pin.canonicalizerVersion, hashVersion: pin.hashVersion, sources: descriptors, rendererVersion: request.rendererVersion,
-    omissions: omissions.sort(utf8Compare), selectedBytes: offset, byteBudget: request.byteBudget, tokenizerMetadata: request.tokenizerMetadata ?? null, renderedOutputDigest,
-  };
-  const manifestDigest = contextManifestCoreDigest(core);
-  const binding: AttemptContextBindingV1 = {
-    schemaVersion: "1", attemptId: request.attemptId, generation: request.generation, forkPinDigest: snapshot.pin.forkPinDigest,
-    contextManifestCoreDigest: manifestDigest, sourceObservationCursor: pin.sourceObservationCursor, sourceContextVersion: pin.sourceContextVersion,
-    authorizationObservationCursor: request.authorizationObservationCursor, authorizationContextVersion: request.authorizationContextVersion,
-    providerIdempotencyKey: request.providerIdempotencyKey, expectedReceiptSchemaVersion: "1", allowedProducerPrincipalId: request.allowedProducerPrincipalId,
-    allowedProducerGrantDigest: request.allowedProducerGrantDigest,
-  };
-  const { contextManifestCoreDigest: _manifestDigest, ...bindingInput } = binding;
-  const manifest = bindContext(core, bindingInput);
-  if (manifest.contextManifestCoreDigest !== manifestDigest || manifest.attemptContextBindingDigest !== attemptContextBindingDigest(binding)) fail("CONTEXT_BINDING_DIGEST_MISMATCH");
-  return Object.freeze({ bytes, manifest, binding });
-}
+export function authenticateContextSnapshot(reader:TrustedAuthorityReader,input:{readonly pin:SealedForkPinV1}):AuthenticatedContextSnapshotV1{verifyForkPin(input.pin);const view=reader.authenticatedView(input.pin.core.workspaceId,input.pin.core.runId);cursorAtPin(view,input.pin);const sourceSnapshot=reader.exactRunSnapshot(input.pin.core.workspaceId,input.pin.core.runId,input.pin.core.sourceObservationCursor.runSequence,input.pin.core.sourceObservationCursor.runEnvelopeHash,"context-sources");const authorizationSnapshot=reader.exactRunHeadSnapshot(input.pin.core.workspaceId,input.pin.core.runId,"context-authorization");const authorization=parseAuthorization(authorizationSnapshot.state,view,input.pin);const snapshot=Object.freeze({schemaVersion:"1" as const,view,pin:input.pin,canonicalState:canonicalAtPin(view,input.pin),sources:parseSources(sourceSnapshot.state,input.pin),authorizationOverlay:authorization.overlay,authorizationContextVersion:authorization.version,reader});snapshots.add(snapshot);return snapshot;}
 
-export function contextSourceDigest(bytes: Uint8Array | string): string { return rawDigest(bytesOf(bytes)); }
+export function reconstructPinnedContext(request:ReconstructContextRequestV1):ReconstructedContextV1{if(!snapshots.has(request.snapshot))fail("CONTEXT_AUTHORITY_UNAUTHENTICATED");const{snapshot}=request;verifyForkPin(snapshot.pin);cursorAtPin(snapshot.view,snapshot.pin);if(!Number.isSafeInteger(request.generation)||request.generation<1||!Number.isSafeInteger(request.byteBudget)||request.byteBudget<0)fail("INVALID_CONTEXT_REQUEST");const pin=snapshot.pin.core;if(pin.sourceContextVersion.kind!=="composite")fail("CONTEXT_VERSION_MISMATCH");const epoch=pin.sourceContextVersion.runContextEpoch;const normalized=snapshot.sources.filter(source=>source.activationEpoch<=epoch&&(source.deactivationEpoch===null||epoch<source.deactivationEpoch)&&source.visibleAtRunSequence<=pin.sourceObservationCursor.runSequence).map(source=>{const bytes=snapshot.reader.readEventBoundArtifact(pin.workspaceId,source.eventId,source.artifactDigest);if(rawDigest(bytes)!==source.digest)fail("CONTEXT_SOURCE_DIGEST_MISMATCH");return{source,bytes};}).sort((a,b)=>a.source.priority-b.source.priority||utf8Compare(a.source.kind,b.source.kind)||utf8Compare(a.source.sourceId,b.source.sourceId)||utf8Compare(a.source.digest,b.source.digest));const chunks:Uint8Array[]=[],descriptors:SourceDescriptorV1[]=[],omissions:string[]=[];let offset=0;for(const item of normalized){if(offset+item.bytes.byteLength>request.byteBudget){omissions.push(`budget:${item.source.sourceId}`);continue;}chunks.push(item.bytes);descriptors.push({kind:item.source.kind,digest:item.source.digest,byteStart:offset,byteEnd:offset+item.bytes.byteLength,priority:item.source.priority});offset+=item.bytes.byteLength;}const bytes=new Uint8Array(offset);let position=0;for(const chunk of chunks){bytes.set(chunk,position);position+=chunk.byteLength;}const renderedOutputDigest=rawDigest(bytes),authorizationCursor=snapshot.authorizationContextVersion.observationCursor;const core:ContextManifestCoreV1={schemaVersion:"1",workspaceId:pin.workspaceId,runId:pin.runId,attemptId:request.attemptId,generation:request.generation,forkPinDigest:snapshot.pin.forkPinDigest,sourceObservationCursor:pin.sourceObservationCursor,sourceContextVersion:pin.sourceContextVersion,authorizationObservationCursor:authorizationCursor,authorizationContextVersion:snapshot.authorizationContextVersion,authorizationOverlayV1:snapshot.authorizationOverlay,canonicalRevision:pin.canonicalRevision,canonicalStateHash:pin.canonicalStateHash,canonicalizerVersion:pin.canonicalizerVersion,hashVersion:pin.hashVersion,sources:descriptors,rendererVersion:request.rendererVersion,omissions:omissions.sort(utf8Compare),selectedBytes:offset,byteBudget:request.byteBudget,tokenizerMetadata:request.tokenizerMetadata??null,renderedOutputDigest};const manifestDigest=contextManifestCoreDigest(core);const binding:AttemptContextBindingV1={schemaVersion:"1",attemptId:request.attemptId,generation:request.generation,forkPinDigest:snapshot.pin.forkPinDigest,contextManifestCoreDigest:manifestDigest,sourceObservationCursor:pin.sourceObservationCursor,sourceContextVersion:pin.sourceContextVersion,authorizationObservationCursor:authorizationCursor,authorizationContextVersion:snapshot.authorizationContextVersion,providerIdempotencyKey:request.providerIdempotencyKey,expectedReceiptSchemaVersion:"1",allowedProducerPrincipalId:request.allowedProducerPrincipalId,allowedProducerGrantDigest:request.allowedProducerGrantDigest};const{contextManifestCoreDigest:_digest,...bindingInput}=binding;const manifest=bindContext(core,bindingInput);if(manifest.contextManifestCoreDigest!==manifestDigest||manifest.attemptContextBindingDigest!==attemptContextBindingDigest(binding))fail("CONTEXT_BINDING_DIGEST_MISMATCH");return Object.freeze({bytes,manifest,binding});}
+export function contextSourceDigest(bytes:Uint8Array|string):string{const normalized=typeof bytes==="string"?encoder.encode(bytes.normalize("NFC")):new Uint8Array(bytes);return rawDigest(normalized);}
+export function publishReconstructedContext(authority:SQLiteAuthority,reconstructed:ReconstructedContextV1,input:{commandId:string;principalId:string}):ContextManifestPublicationV1{const publication=Object.freeze({workspaceId:reconstructed.manifest.core.workspaceId,runId:reconstructed.manifest.core.runId,attemptId:reconstructed.manifest.core.attemptId,generation:reconstructed.manifest.core.generation,manifestBytes:encoder.encode(canonicalJson(reconstructed.manifest as unknown as JsonValue)),contextManifestCoreDigest:reconstructed.manifest.contextManifestCoreDigest,attemptContextBindingDigest:reconstructed.manifest.attemptContextBindingDigest,renderedOutputDigest:reconstructed.manifest.core.renderedOutputDigest});authority.publishContextManifestAtomic({...publication,...input});return publication;}

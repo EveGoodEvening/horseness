@@ -1,0 +1,36 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { bindContext, canonicalJson, createRunGenesis, createWorkspaceGenesis, NO_POLICY_DIGEST, type ContextManifestCoreV1, type JsonValue } from "@horseness/domain";
+import { CrashInjectedError, SQLiteAuthority, type ContextManifestPublicationRequestV1, type CrashPoint } from "../src/index.js";
+
+interface ContextPublicationFixture { root:string; database:string; artifacts:string; store:SQLiteAuthority; request:ContextManifestPublicationRequestV1 }
+function fixture(crash?: (point:CrashPoint)=>void):ContextPublicationFixture{
+  const root=mkdtempSync(join(tmpdir(),"horseness-context-publish-")),database=join(root,"authority.sqlite"),artifacts=join(root,"artifacts"),store=new SQLiteAuthority(database,artifacts,crash);
+  const workspace=createWorkspaceGenesis({workspaceId:"w",authorityPrincipalId:"authority",initialGrantDigest:"grant",authorityConsumptionMarker:"marker",activePolicyDigest:NO_POLICY_DIGEST,commandId:"workspace"});
+  store.appendAtomic({commandId:"workspace",workspace:{streamKind:"workspace",workspaceId:"w",streamId:"w",expectedSequence:0,expectedEnvelopeHash:null,events:[workspace.event]}});
+  const absent={...workspace.resultCursor,kind:"absent-run-genesis" as const,runId:"r",expectedRunHead:"absent" as const};
+  const run=createRunGenesis({observationCursor:absent,initialDocument:{},principalId:"authority",commandId:"run"});
+  store.appendAtomic({commandId:"run",runGenesis:{observationCursor:absent,event:run.event}});
+  const version={schemaVersion:"1" as const,kind:"composite" as const,observationCursor:run.resultCursor,workspaceContextEpoch:run.resultCursor.workspaceContextEpoch,runContextEpoch:run.resultCursor.runContextEpoch};
+  const core:ContextManifestCoreV1={schemaVersion:"1",workspaceId:"w",runId:"r",attemptId:"a",generation:1,forkPinDigest:"fork",sourceObservationCursor:run.resultCursor,sourceContextVersion:version,authorizationObservationCursor:run.resultCursor,authorizationContextVersion:version,authorizationOverlayV1:{policyDigest:"policy",grantDigest:"grant",quotaDigest:"quota",result:"allowed"},canonicalRevision:0,canonicalStateHash:"state",canonicalizerVersion:"jcs-v1",hashVersion:"sha256-v1",sources:[],rendererVersion:"renderer",omissions:[],selectedBytes:0,byteBudget:0,tokenizerMetadata:null,renderedOutputDigest:"rendered"};
+  const manifest=bindContext(core,{schemaVersion:"1",attemptId:"a",generation:1,forkPinDigest:"fork",sourceObservationCursor:run.resultCursor,sourceContextVersion:version,authorizationObservationCursor:run.resultCursor,authorizationContextVersion:version,providerIdempotencyKey:"provider-key",expectedReceiptSchemaVersion:"1",allowedProducerPrincipalId:"producer",allowedProducerGrantDigest:"producer-grant"});
+  const manifestBytes=Buffer.from(canonicalJson(manifest as unknown as JsonValue));
+  const request:ContextManifestPublicationRequestV1={workspaceId:"w",runId:"r",attemptId:"a",generation:1,manifestBytes,contextManifestCoreDigest:manifest.contextManifestCoreDigest,attemptContextBindingDigest:manifest.attemptContextBindingDigest,renderedOutputDigest:"rendered",principalId:"authority",commandId:"publish-context"};
+  return {root,database,artifacts,store,request};
+}
+
+function close(f:ContextPublicationFixture):void{try{f.store.close();}finally{rmSync(f.root,{recursive:true,force:true});}}
+
+test("context manifest is durably published before its atomic event reference and retries identically",()=>{const f=fixture();try{const first=f.store.publishContextManifestAtomic(f.request);assert.equal(first.deduplicated,false);const second=f.store.publishContextManifestAtomic(f.request);assert.equal(second.deduplicated,true);assert.equal(second.artifactDigest,first.artifactDigest);assert.equal(second.eventId,first.eventId);assert.equal(f.store.replay("w","run","r").filter(event=>event.envelope.eventType==="ContextManifestPublishedV1").length,1);assert.deepEqual(f.store.artifacts.readReferenced(first.artifactDigest),Buffer.from(f.request.manifestBytes));}finally{close(f);}});
+
+test("orphan content-addressed bytes are invisible until SQL publication and reference",()=>{const f=fixture();try{const record=f.store.artifacts.publish(f.request.manifestBytes,"application/vnd.horseness.context-manifest+json");assert.throws(()=>f.store.artifacts.readReferenced(record.digest),/unknown artifact reference/);assert.equal(f.store.replay("w","run","r").some(event=>event.envelope.eventType==="ContextManifestPublishedV1"),false);}finally{close(f);}});
+
+test("missing and corrupt referenced context manifests fail closed after restart",()=>{for(const corrupt of [false,true]){const f=fixture();try{const result=f.store.publishContextManifestAtomic(f.request),path=join(f.artifacts,"objects",result.artifactDigest.slice(0,2),result.artifactDigest.slice(2));f.store.close();if(corrupt)writeFileSync(path,"corrupt");else rmSync(path);const reopened=new SQLiteAuthority(f.database,f.artifacts);assert.throws(()=>reopened.artifacts.readReferenced(result.artifactDigest),corrupt?/corrupt/:/missing/);reopened.close();}finally{rmSync(f.root,{recursive:true,force:true});}}});
+
+for(const point of ["artifact.open.after","artifact.write.after","artifact.file-fsync.after","artifact.rename.after","artifact.dir-fsync.after","artifact.sql-reference.after","transaction.write.after","transaction.commit.before"] as const)test(`context publication restart/retry at ${point}`,()=>{let armed=false,hit=false;const f=fixture(current=>{if(armed&&!hit&&current===point){hit=true;throw new CrashInjectedError(current);}});try{armed=true;assert.throws(()=>f.store.publishContextManifestAtomic(f.request),CrashInjectedError);f.store.close();const reopened=new SQLiteAuthority(f.database,f.artifacts);const retry=reopened.publishContextManifestAtomic(f.request);assert.equal(reopened.replay("w","run","r").filter(event=>event.envelope.eventType==="ContextManifestPublishedV1").length,1);assert.deepEqual(reopened.artifacts.readReferenced(retry.artifactDigest),Buffer.from(f.request.manifestBytes));reopened.close();}finally{rmSync(f.root,{recursive:true,force:true});}});
+
+test("noncanonical, mismatched, and altered retries are rejected",()=>{const f=fixture();try{const text=Buffer.from(f.request.manifestBytes).toString("utf8");assert.throws(()=>f.store.publishContextManifestAtomic({...f.request,manifestBytes:Buffer.from(`${text}\n`)}),/not canonical/);const first=f.store.publishContextManifestAtomic(f.request);assert.equal(existsSync(join(f.artifacts,"objects",first.artifactDigest.slice(0,2),first.artifactDigest.slice(2))),true);assert.throws(()=>f.store.publishContextManifestAtomic({...f.request,contextManifestCoreDigest:"different"}),/digest mismatch/);assert.equal(createHash("sha256").update(readFileSync(join(f.artifacts,"objects",first.artifactDigest.slice(0,2),first.artifactDigest.slice(2)))).digest("hex"),first.artifactDigest);}finally{close(f);}});

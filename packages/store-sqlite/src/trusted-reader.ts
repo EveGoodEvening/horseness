@@ -60,6 +60,29 @@ export class TrustedAuthorityReader {
     validateKnownProjection(copy);
     return copy;
   }
+
+  exactRunSnapshot(workspaceId: string, runId: string, sequence: number, envelopeHash: string, projectionName: string, projectionVersion = "1"): SnapshotRecord {
+    requireReader(this);
+    if (workspaceId !== this.session.workspaceId) throw new StoreIntegrityError("trusted authority reader workspace/session mismatch");
+    const events = this.authority.replay(workspaceId, "run", runId);
+    const event = events.find((item) => item.envelope.sequence === sequence);
+    if (!event || event.envelopeHash !== envelopeHash) throw new StoreConflictError(`trusted projection cursor is substituted: ${projectionName}`);
+    const row = this.authority.db.prepare("SELECT envelope_hash,state_json FROM snapshots WHERE workspace_id=? AND stream_kind='run' AND stream_id=? AND sequence=? AND projection_name=? AND projection_version=?").get(workspaceId, runId, sequence, projectionName, projectionVersion) as { envelope_hash: string; state_json: string } | undefined;
+    const snapshot: SnapshotRecord | undefined = row === undefined ? undefined : { workspaceId, streamKind: "run", streamId: runId, sequence, envelopeHash: row.envelope_hash, projectionName, projectionVersion, state: JSON.parse(row.state_json) as JsonValue };
+    if (!snapshot || snapshot.envelopeHash !== envelopeHash) throw new StoreConflictError(`trusted projection is missing or stale: ${projectionName}`);
+    const copy = Object.freeze({ ...snapshot, state: structuredClone(snapshot.state) as JsonValue });
+    validateKnownProjection(copy);
+    return copy;
+  }
+
+  readEventBoundArtifact(workspaceId: string, eventId: string, digest: string): Uint8Array {
+    requireReader(this);
+    if (workspaceId !== this.session.workspaceId) throw new StoreIntegrityError("trusted authority reader workspace/session mismatch");
+    const event = this.authority.db.prepare("SELECT 1 FROM events WHERE workspace_id=? AND event_id=?").get(workspaceId, eventId);
+    const reference = this.authority.db.prepare("SELECT 1 FROM artifact_refs WHERE workspace_id=? AND owner_kind='event' AND owner_id=? AND digest=?").get(workspaceId, eventId, digest);
+    if (!event || !reference) throw new StoreIntegrityError("artifact is not bound to an authenticated workspace event");
+    return new Uint8Array(this.authority.artifacts.readReferenced(digest));
+  }
 }
 
 /** @internal Not exported from the package; only the authenticated authority open boundary calls this. */
@@ -89,7 +112,7 @@ function cursorField(state: Record<string, JsonValue>, name: string): void {
 /** Closed, versioned registry. Callers cannot install validators or turn validation into a no-op. */
 function validateKnownProjection(snapshot: Readonly<SnapshotRecord>): void {
   const state = objectState(snapshot), name = snapshot.projectionName;
-  if (name === "fork-source" || name === "fork-authorization") {
+  if (name === "fork-source" || name === "fork-authorization" || name === "context-sources" || name === "context-authorization") {
     if (state.schemaVersion !== "1") throw new StoreIntegrityError("invalid fork authority schema");
     stringField(state, "workspaceId"); stringField(state, "runId"); cursorField(state, "observationCursor");
     return;

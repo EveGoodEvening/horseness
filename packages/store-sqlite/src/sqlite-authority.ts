@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
-import { canonicalJson, domainDigest, parseDomainEventPayloadV1, parseObservationCursorV1, verifyEventChain, type AbsentRunGenesisCursorV1, type DomainEventPayloadV1, type HashedEventEnvelopeV1, type JsonValue, type RunCreatedV1, type RunEventPayloadV1, type WorkspaceEventPayloadV1 } from "@horseness/domain";
+import { canonicalJson, contextManifestCoreDigest, domainDigest, parseDomainEventPayloadV1, parseObservationCursorV1, sealEventEnvelope, verifyEventChain, type AbsentRunGenesisCursorV1, type ContextManifestRecordV1, type DomainEventPayloadV1, type HashedEventEnvelopeV1, type JsonValue, type RunCreatedV1, type RunEventPayloadV1, type WorkspaceEventPayloadV1 } from "@horseness/domain";
 import { ArtifactStore } from "./artifact-store.js";
 import { noCrash, type CrashInjector } from "./crash.js";
 import { inspectMigrationLedger, migrate } from "./migrations.js";
@@ -24,6 +24,12 @@ const authorityCredentialBrand:unique symbol=Symbol("authorityCredential");
 export interface AuthorityCredentialV1 { readonly schemaVersion:"1"; readonly authorityId:string; readonly workspaceId:string; readonly databasePath:string; readonly artifactRoot:string; readonly proof:string; readonly [authorityCredentialBrand]:true }
 export interface AuthenticatedWorkspaceOpenV1 { workspaceId:string; sessionId:string; credential:AuthorityCredentialV1 }
 export interface PublishAndAppendRequest extends AtomicAppendRequest { artifacts:readonly ArtifactPublication[]; requiredArtifactDigests?:readonly string[]; projections?:readonly AtomicProjectionUpdate[]; snapshots?:readonly AtomicSnapshotUpdate[] }
+export interface ContextManifestPublicationRequestV1 {
+  workspaceId:string; runId:string; attemptId:string; generation:number; manifestBytes:Uint8Array;
+  contextManifestCoreDigest:string; attemptContextBindingDigest:string; renderedOutputDigest:string;
+  principalId:string; commandId:string;
+}
+export interface ContextManifestPublicationResultV1 extends AppendResult { artifactDigest:string; byteLength:number; eventId:string }
 export class StoreConflictError extends Error { constructor(message:string){super(message);this.name="StoreConflictError";} }
 export class StoreIntegrityError extends Error { constructor(message:string){super(message);this.name="StoreIntegrityError";} }
 const now=():string=>new Date().toISOString();
@@ -159,6 +165,38 @@ export class SQLiteAuthority {
   private authenticatedRows(workspaceId:string,streamKind:EventStream,streamId:string):{raw:string;event:StoredEvent}[]{const head=this.db.prepare("SELECT head_sequence,head_hash FROM streams WHERE workspace_id=? AND stream_kind=? AND stream_id=?").get(workspaceId,streamKind,streamId) as {head_sequence:number;head_hash:string|null}|undefined;const rows=this.db.prepare("SELECT sequence,envelope_hash,prior_envelope_hash,envelope_json FROM events WHERE workspace_id=? AND stream_kind=? AND stream_id=? ORDER BY sequence").all(workspaceId,streamKind,streamId) as {sequence:number;envelope_hash:string;prior_envelope_hash:string|null;envelope_json:string}[];if(head===undefined){if(rows.length!==0)throw new StoreIntegrityError("events exist without stream head");return[];}try{const authenticated=rows.map(row=>{const event=JSON.parse(row.envelope_json) as StoredEvent;const envelope=event.envelope;if(envelope.workspaceId!==workspaceId||envelope.streamKind!==streamKind||envelope.streamId!==streamId||envelope.sequence!==row.sequence||event.envelopeHash!==row.envelope_hash||envelope.priorEnvelopeHash!==row.prior_envelope_hash)throw new StoreIntegrityError("event row does not match envelope");return{raw:row.envelope_json,event};});if(authenticated.length===0||authenticated[0]?.event.envelope.sequence!==1||authenticated[0].event.envelope.priorEnvelopeHash!==null)throw new StoreIntegrityError("invalid stream genesis");verifyEventChain(authenticated.map(item=>item.event));const last=authenticated.at(-1)?.event;if(last===undefined||head.head_sequence!==last.envelope.sequence||head.head_hash!==last.envelopeHash)throw new StoreIntegrityError("stored stream head mismatch");return authenticated;}catch(error){if(error instanceof StoreIntegrityError)throw error;throw new StoreIntegrityError(`event chain authentication failed: ${error instanceof Error?error.message:String(error)}`);}}
   replay(workspaceId:string,streamKind:EventStream,streamId:string,fromSequence=1):StoredEvent[]{if(!Number.isSafeInteger(fromSequence)||fromSequence<1)throw new StoreIntegrityError("invalid replay sequence");return this.authenticatedRows(workspaceId,streamKind,streamId).filter(item=>item.event.envelope.sequence>=fromSequence).map(item=>item.event);}
   replayRaw(workspaceId:string,streamKind:EventStream,streamId:string,fromSequence=1):readonly string[]{if(!Number.isSafeInteger(fromSequence)||fromSequence<1)throw new StoreIntegrityError("invalid replay sequence");return this.authenticatedRows(workspaceId,streamKind,streamId).filter(item=>item.event.envelope.sequence>=fromSequence).map(item=>item.raw);}
+  publishContextManifestAtomic(request:ContextManifestPublicationRequestV1):ContextManifestPublicationResultV1 {
+    if(!request.workspaceId||!request.runId||!request.attemptId||!request.principalId||!request.commandId||!Number.isSafeInteger(request.generation)||request.generation<1)throw new StoreIntegrityError("invalid context manifest publication identity");
+    let manifest:ContextManifestRecordV1;
+    try{
+      const text=Buffer.from(request.manifestBytes).toString("utf8");
+      manifest=JSON.parse(text) as ContextManifestRecordV1;
+      if(canonicalJson(manifest as unknown as JsonValue)!==text)throw new StoreIntegrityError("context manifest bytes are not canonical");
+      if(manifest.contextManifestCoreDigest!==request.contextManifestCoreDigest||contextManifestCoreDigest(manifest.core)!==request.contextManifestCoreDigest)throw new StoreIntegrityError("context manifest core digest mismatch");
+      if(manifest.attemptContextBindingDigest!==request.attemptContextBindingDigest)throw new StoreIntegrityError("context binding digest mismatch");
+      if(manifest.core.workspaceId!==request.workspaceId||manifest.core.runId!==request.runId||manifest.core.attemptId!==request.attemptId||manifest.core.generation!==request.generation)throw new StoreIntegrityError("context manifest publication identity mismatch");
+      if(manifest.core.renderedOutputDigest!==request.renderedOutputDigest)throw new StoreIntegrityError("rendered context digest mismatch");
+    }catch(error){if(error instanceof StoreIntegrityError)throw error;throw new StoreIntegrityError(`invalid context manifest publication: ${error instanceof Error?error.message:String(error)}`);}
+    const artifactDigest=digest(Buffer.from(request.manifestBytes));
+    const prior=this.db.prepare("SELECT result_json FROM command_dedup WHERE workspace_id=? AND scope_kind='run' AND scope_id=? AND command_id=?").get(request.workspaceId,request.runId,request.commandId) as {result_json:string}|undefined;
+    if(prior){
+      const owner=this.db.prepare("SELECT event_id,envelope_json FROM events WHERE workspace_id=? AND stream_kind='run' AND stream_id=? AND command_id=?").get(request.workspaceId,request.runId,request.commandId) as {event_id:string;envelope_json:string}|undefined;
+      if(!owner)throw new StoreIntegrityError("context publication dedup exists without event");
+      const stored=JSON.parse(owner.envelope_json) as HashedEventEnvelopeV1<DomainEventPayloadV1>;
+      if(stored.envelope.eventType!=="ContextManifestPublishedV1"||stored.envelope.payload.eventType!=="ContextManifestPublishedV1"||stored.envelope.payload.contextManifestCoreDigest!==request.contextManifestCoreDigest)throw new StoreConflictError("command id reused with different context publication");
+      const reference=this.db.prepare("SELECT 1 FROM artifact_refs WHERE workspace_id=? AND owner_kind='event' AND owner_id=? AND digest=?").get(request.workspaceId,owner.event_id,artifactDigest);
+      if(reference===undefined)throw new StoreIntegrityError("context publication dedup exists without artifact reference");
+      this.artifacts.readReferenced(artifactDigest);
+      return {...(JSON.parse(prior.result_json) as AppendResult),deduplicated:true,artifactDigest,byteLength:request.manifestBytes.byteLength,eventId:owner.event_id};
+    }
+    const rows=this.authenticatedRows(request.workspaceId,"run",request.runId),head=rows.at(-1)?.event;
+    if(head===undefined)throw new StoreIntegrityError("context manifest publication requires an existing run");
+    const eventId=domainDigest("horseness.context-manifest-publication-event-id.v1",{commandId:request.commandId,workspaceId:request.workspaceId,runId:request.runId,contextManifestCoreDigest:request.contextManifestCoreDigest} as JsonValue);
+    const payload={eventType:"ContextManifestPublishedV1" as const,workspaceId:request.workspaceId,runId:request.runId,contextManifestCoreDigest:request.contextManifestCoreDigest};
+    const event=sealEventEnvelope({schemaVersion:"1",streamKind:"run",workspaceId:request.workspaceId,streamId:request.runId,sequence:head.envelope.sequence+1,priorEnvelopeHash:head.envelopeHash,eventId,eventType:payload.eventType,payload,principalId:request.principalId,causationId:request.commandId,correlationId:request.attemptId,idempotencyKey:request.commandId});
+    const result=this.publishAndAppendAtomic({commandId:request.commandId,run:{streamKind:"run",workspaceId:request.workspaceId,streamId:request.runId,expectedSequence:head.envelope.sequence,expectedEnvelopeHash:head.envelopeHash,events:[event]},artifacts:[{data:request.manifestBytes,mediaType:"application/vnd.horseness.context-manifest+json",references:[{ownerKind:"event",ownerId:eventId}]}],requiredArtifactDigests:[artifactDigest]});
+    return {...result,artifactDigest,byteLength:request.manifestBytes.byteLength,eventId};
+  }
   latestSnapshot(workspaceId:string,streamKind:EventStream,streamId:string,projectionName:string,projectionVersion:string):SnapshotRecord|null{const row=this.db.prepare("SELECT sequence,envelope_hash,state_json FROM snapshots WHERE workspace_id=? AND stream_kind=? AND stream_id=? AND projection_name=? AND projection_version=? ORDER BY sequence DESC LIMIT 1").get(workspaceId,streamKind,streamId,projectionName,projectionVersion) as {sequence:number;envelope_hash:string;state_json:string}|undefined;return row?{workspaceId,streamKind,streamId,projectionName,projectionVersion,sequence:row.sequence,envelopeHash:row.envelope_hash,state:JSON.parse(row.state_json) as JsonValue}:null;}
   setProjectionMetadata(name:string,version:string,workspaceId:string,streamKind:EventStream,streamId:string,lastSequence:number,lastEnvelopeHash:string|null):void{this.db.prepare("INSERT INTO projection_metadata(projection_name,projection_version,workspace_id,stream_kind,stream_id,last_sequence,last_envelope_hash,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(projection_name,projection_version,workspace_id,stream_kind,stream_id) DO UPDATE SET last_sequence=excluded.last_sequence,last_envelope_hash=excluded.last_envelope_hash,updated_at=excluded.updated_at").run(name,version,workspaceId,streamKind,streamId,lastSequence,lastEnvelopeHash,now());}
   publishAndAppendAtomic(request:PublishAndAppendRequest):AppendResult {

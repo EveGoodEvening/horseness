@@ -8,6 +8,8 @@ export {
   type AppendRequest,
   type AppendResult,
   type AtomicAppendRequest,
+  type ContextManifestPublicationRequestV1,
+  type ContextManifestPublicationResultV1,
   type AuthenticatedWorkspaceOpenV1,
   type AuthorityCredentialV1,
   createOrLoadAuthorityCredential,
