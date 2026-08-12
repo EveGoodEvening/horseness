@@ -1,4 +1,5 @@
 import {
+  canonicalJson,
   DomainError,
   domainDigest,
   reduceDispatch,
@@ -6,6 +7,7 @@ import {
   type AttemptGenerationStateV1,
   type AttemptReceiptEnvelopeV1,
   type AttemptTerminalState,
+  type HashedEventEnvelopeV1,
   type JsonValue,
   type TaskResolution,
 } from "@horseness/domain";
@@ -38,12 +40,23 @@ export interface AttemptReceiptProjectionV1 {
   readonly findings: readonly string[];
 }
 
-export interface AuthenticatedReceiptInputV1 {
+export interface ReceiptEventV1 {
   readonly eventSequence: number;
   readonly eventDigest: string;
-  readonly authenticated: true;
   readonly authenticatedPrincipalId: string;
-  readonly authorizedGrantDigest: string;
+  readonly receipt: AttemptReceiptEnvelopeV1;
+}
+
+export interface ReceiptStreamReplayProofV1 {
+  readonly workspaceId: string;
+  readonly runId: string;
+  readonly headSequence: number;
+  readonly headEnvelopeHash: string;
+  readonly replayDigest: string;
+  readonly replay: readonly HashedEventEnvelopeV1<unknown>[];
+}
+
+export interface AttemptAuthorityInputV1 {
   readonly binding: {
     readonly attemptId: string;
     readonly generation: number;
@@ -57,7 +70,68 @@ export interface AuthenticatedReceiptInputV1 {
     readonly allowedProducerGrantDigest: string;
   };
   readonly providerHandle?: string;
-  readonly receipt: AttemptReceiptEnvelopeV1;
+  readonly grant: { readonly principalId: string; readonly grantDigest: string; readonly revoked: boolean };
+  readonly dispatch: { readonly attemptId: string; readonly generation: number; readonly providerId: string; readonly providerOperationId: string; readonly providerIdempotencyKeyDigest: string; readonly providerHandle?: string };
+}
+
+export interface AttemptAuthorityReplayProofV1 extends ReceiptStreamReplayProofV1 {
+  readonly bindingEventSequence: number;
+  readonly grantEventSequence: number;
+  readonly dispatchEventSequence: number;
+}
+
+declare const verifiedReceiptEventBrand: unique symbol;
+declare const verifiedAttemptAuthorityBrand: unique symbol;
+export type VerifiedReceiptEventV1 = ReceiptEventV1 & { readonly [verifiedReceiptEventBrand]: true };
+export type VerifiedAttemptAuthorityV1 = AttemptAuthorityInputV1 & { readonly [verifiedAttemptAuthorityBrand]: true };
+
+const verifiedReceiptEvents = new WeakSet<object>();
+const verifiedAttemptAuthorities = new WeakSet<object>();
+const receiptIdentities = new WeakMap<object, object>();
+const authorityIdentities = new WeakMap<object, object>();
+const identities = new Map<string, object>();
+const identityFor = (attemptId: string, generation: number): object => {
+  const key = `${attemptId}\u0000${generation}`;
+  const prior = identities.get(key);
+  if (prior) return prior;
+  const identity = Object.freeze({}); identities.set(key, identity); return identity;
+};
+const fail = (code: string): never => { throw new DomainError(code); };
+const replayDigest = (replay: readonly HashedEventEnvelopeV1<unknown>[]): string => domainDigest("horseness.receipt-authority-replay.v1", replay as unknown as JsonValue);
+
+export function verifyReceiptEvent(event: ReceiptEventV1, proof: ReceiptStreamReplayProofV1): VerifiedReceiptEventV1 {
+  verifyAttemptReceipt(event.receipt);
+  let prior: string | null = null;
+  let sequence = 1;
+  for (const item of proof.replay) {
+    if (item.envelope.schemaVersion !== "1" || item.envelope.streamKind !== "run" || item.envelope.workspaceId !== proof.workspaceId || item.envelope.streamId !== proof.runId || item.envelope.sequence !== sequence || item.envelope.priorEnvelopeHash !== prior || item.envelope.payloadHash !== domainDigest("horseness.event-payload.v1", item.envelope.payload as JsonValue) || item.envelopeHash !== domainDigest("horseness.event-envelope.v1", item.envelope as unknown as JsonValue)) fail("UNAUTHENTICATED_RECEIPT_EVENT");
+    prior = item.envelopeHash; sequence += 1;
+  }
+  const head = proof.replay.at(-1);
+  const replayed = proof.replay.find((item) => item.envelope.sequence === event.eventSequence);
+  if (!head || proof.headSequence !== head.envelope.sequence || proof.headEnvelopeHash !== head.envelopeHash || proof.replayDigest !== replayDigest(proof.replay) || !replayed || replayed.envelopeHash !== event.eventDigest || replayed.envelope.principalId !== event.authenticatedPrincipalId || canonicalJson(replayed.envelope.payload) !== canonicalJson(event.receipt) || event.receipt.workspaceId !== proof.workspaceId || event.receipt.runId !== proof.runId) fail("UNAUTHENTICATED_RECEIPT_EVENT");
+  const verified = Object.freeze({ ...event }) as VerifiedReceiptEventV1;
+  verifiedReceiptEvents.add(verified); receiptIdentities.set(verified, identityFor(event.receipt.attemptId, event.receipt.generation));
+  return verified;
+}
+
+export function verifyAttemptAuthority(input: AttemptAuthorityInputV1, proof: AttemptAuthorityReplayProofV1): VerifiedAttemptAuthorityV1 {
+  const { binding, grant, dispatch } = input;
+  if (grant.revoked || grant.principalId !== binding.allowedProducerPrincipalId || grant.grantDigest !== binding.allowedProducerGrantDigest || dispatch.attemptId !== binding.attemptId || dispatch.generation !== binding.generation || dispatch.providerId !== binding.providerId || dispatch.providerOperationId !== binding.providerOperationId || dispatch.providerIdempotencyKeyDigest !== binding.providerIdempotencyKeyDigest || dispatch.providerHandle !== input.providerHandle) fail("RECEIPT_AUTHORITY_INVALID");
+  let prior: string | null = null;
+  let sequence = 1;
+  for (const item of proof.replay) {
+    if (item.envelope.schemaVersion !== "1" || item.envelope.streamKind !== "run" || item.envelope.workspaceId !== proof.workspaceId || item.envelope.streamId !== proof.runId || item.envelope.sequence !== sequence || item.envelope.priorEnvelopeHash !== prior || item.envelope.payloadHash !== domainDigest("horseness.event-payload.v1", item.envelope.payload as JsonValue) || item.envelopeHash !== domainDigest("horseness.event-envelope.v1", item.envelope as unknown as JsonValue)) fail("RECEIPT_AUTHORITY_UNAUTHENTICATED");
+    prior = item.envelopeHash; sequence += 1;
+  }
+  const head = proof.replay.at(-1);
+  const bindingEvent = proof.replay.find((item) => item.envelope.sequence === proof.bindingEventSequence);
+  const grantEvent = proof.replay.find((item) => item.envelope.sequence === proof.grantEventSequence);
+  const dispatchEvent = proof.replay.find((item) => item.envelope.sequence === proof.dispatchEventSequence);
+  if (!head || head.envelope.sequence !== proof.headSequence || head.envelopeHash !== proof.headEnvelopeHash || proof.replayDigest !== replayDigest(proof.replay) || !bindingEvent || !grantEvent || !dispatchEvent || bindingEvent.envelope.eventType !== "AttemptContextBindingProjectedV1" || grantEvent.envelope.eventType !== "AttemptGrantProjectedV1" || dispatchEvent.envelope.eventType !== "AttemptDispatchProjectedV1" || canonicalJson(bindingEvent.envelope.payload) !== canonicalJson(binding) || canonicalJson(grantEvent.envelope.payload) !== canonicalJson(grant) || canonicalJson(dispatchEvent.envelope.payload) !== canonicalJson(dispatch)) fail("RECEIPT_AUTHORITY_UNAUTHENTICATED");
+  const verified = Object.freeze({ ...input, binding: Object.freeze({ ...binding }), grant: Object.freeze({ ...grant }), dispatch: Object.freeze({ ...dispatch }) }) as VerifiedAttemptAuthorityV1;
+  verifiedAttemptAuthorities.add(verified); authorityIdentities.set(verified, identityFor(binding.attemptId, binding.generation));
+  return verified;
 }
 
 const terminal = (state: AttemptGenerationStateV1["state"]): state is AttemptTerminalState => state === "succeeded" || state === "failed" || state === "cancelled";
@@ -92,28 +166,30 @@ export function recordExplicitTaskCancellation(state: AttemptReceiptProjectionV1
   return resolve({ ...state, taskId, explicitCancellationEventSequence: state.explicitCancellationEventSequence ?? eventSequence }, eventSequence);
 }
 
-function validateAuthority(event: AuthenticatedReceiptInputV1, state: AttemptReceiptProjectionV1): AttemptGenerationStateV1 {
+function validateAuthority(event: VerifiedReceiptEventV1, authority: VerifiedAttemptAuthorityV1, state: AttemptReceiptProjectionV1): AttemptGenerationStateV1 {
+  if (!verifiedReceiptEvents.has(event) || !verifiedAttemptAuthorities.has(authority) || receiptIdentities.get(event) !== authorityIdentities.get(authority)) throw new DomainError("UNAUTHENTICATED_RECEIPT_EVENT");
   verifyAttemptReceipt(event.receipt);
-  const { receipt, binding } = event;
-  if (!event.authenticated || event.eventSequence < 1 || !event.eventDigest) throw new DomainError("UNAUTHENTICATED_RECEIPT_EVENT");
+  const { receipt } = event;
+  const { binding } = authority;
+  if (event.eventSequence < 1 || !event.eventDigest) throw new DomainError("UNAUTHENTICATED_RECEIPT_EVENT");
   if (receipt.attemptId !== state.attemptId || receipt.attemptId !== binding.attemptId || receipt.generation !== binding.generation) throw new DomainError("RECEIPT_MISMATCH");
   const generation = state.generations.get(receipt.generation);
   if (!generation) throw new DomainError("UNKNOWN_ATTEMPT_GENERATION");
   if (generation.bindingDigest !== binding.digest || receipt.attemptContextBindingDigest !== binding.digest || receipt.contextManifestCoreDigest !== binding.contextManifestCoreDigest || receipt.forkPinDigest !== binding.forkPinDigest) throw new DomainError("RECEIPT_BINDING_MISMATCH");
-  if (receipt.producerPrincipalId !== event.authenticatedPrincipalId || receipt.producerPrincipalId !== binding.allowedProducerPrincipalId || receipt.producerGrantDigest !== event.authorizedGrantDigest || receipt.producerGrantDigest !== binding.allowedProducerGrantDigest) throw new DomainError("RECEIPT_GRANT_MISMATCH");
+  if (receipt.producerPrincipalId !== event.authenticatedPrincipalId || receipt.producerPrincipalId !== binding.allowedProducerPrincipalId || receipt.producerGrantDigest !== authority.grant.grantDigest || receipt.producerGrantDigest !== binding.allowedProducerGrantDigest) throw new DomainError("RECEIPT_GRANT_MISMATCH");
   if (receipt.providerId !== binding.providerId || receipt.providerOperationId !== binding.providerOperationId || receipt.providerIdempotencyKeyDigest !== binding.providerIdempotencyKeyDigest || generation.idempotencyKeyDigest !== binding.providerIdempotencyKeyDigest) throw new DomainError("RECEIPT_OPERATION_MISMATCH");
   return generation;
 }
 
-export function projectAuthenticatedReceipt(state: AttemptReceiptProjectionV1, event: AuthenticatedReceiptInputV1): AttemptReceiptProjectionV1 {
-  let generation = validateAuthority(event, state);
+export function projectAuthenticatedReceipt(state: AttemptReceiptProjectionV1, event: VerifiedReceiptEventV1, authority: VerifiedAttemptAuthorityV1): AttemptReceiptProjectionV1 {
+  let generation = validateAuthority(event, authority, state);
   const prior = state.outcomes.get(event.receipt.generation);
   if (prior) {
     const code = prior.receiptDigest === event.receipt.receiptDigest ? "DUPLICATE_RECEIPT" : "RECEIPT_TERMINAL_CONFLICT";
     return { ...state, findings: findings([...state.findings, code]) };
   }
   if (state.resolution) return { ...state, findings: findings([...state.findings, "LATE_GENERATION_RECEIPT"]) };
-  generation = reduceDispatch(generation, { type: "terminal-receipt", outcome: event.receipt.outcome, eventSequence: event.eventSequence, ...(event.providerHandle === undefined ? {} : { handle: event.providerHandle }) });
+  generation = reduceDispatch(generation, { type: "terminal-receipt", outcome: event.receipt.outcome, eventSequence: event.eventSequence, ...(authority.providerHandle === undefined ? {} : { handle: authority.providerHandle }) });
   if (!terminal(generation.state) || generation.terminalEventSequence !== event.eventSequence) {
     return { ...state, generations: new Map(state.generations).set(generation.generation, generation), findings: findings([...state.findings, ...generation.findingCodes]) };
   }

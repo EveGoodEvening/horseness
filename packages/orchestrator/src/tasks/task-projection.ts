@@ -48,6 +48,7 @@ export interface VerifiedStreamChainHeadProofV1 {
 }
 declare const verifiedAuthorityEventBrand:unique symbol;
 export type VerifiedAuthorityEventV1=DurableAuthorityEventV1&{readonly [verifiedAuthorityEventBrand]:true};
+const verifiedAuthorityEvents=new WeakSet<object>();
 
 export type AuthorityTruthV1 = "allowed" | "denied" | "unknown";
 export type TaskAuthorityComponentKindV1="contract"|"policy"|"grant-revocation"|"quota"|"attempt-outcome";
@@ -67,6 +68,8 @@ export interface TaskAuthorityComponentSnapshotV1 {
   projectionProof:{schemaVersion:"1";projectionName:string;projectionVersion:"1";snapshotDigest:string;replayDigest:string};
 }
 const authenticatedTaskAuthority:unique symbol=Symbol("authenticatedTaskAuthority");
+const authenticatedTaskAuthorityComponents=new WeakSet<object>();
+const authenticatedTaskAuthorityProjections=new WeakSet<object>();
 export interface TaskAuthorityProjectionV1 {
   schemaVersion:"1";
   observationCursor:CompositeCursorV1;
@@ -105,6 +108,11 @@ export function activateTask(state:TaskProjectionV1,taskId:string):TaskProjectio
 export function authorityReplayDigest(replay:readonly HashedEventEnvelopeV1<unknown>[]):string {
   return domainDigest("horseness.authority-replay.v1",replay as unknown as JsonValue);
 }
+function immutableClone<T>(value:T):T {
+  const clone=structuredClone(value);
+  const freeze=(current:unknown):void=>{if(current===null||typeof current!=="object"||Object.isFrozen(current))return;for(const nested of Object.values(current))freeze(nested);Object.freeze(current)};
+  freeze(clone);return clone;
+}
 export function verifyAuthorityEvent(event:DurableAuthorityEventV1,proof:VerifiedStreamChainHeadProofV1):VerifiedAuthorityEventV1 {
   const {envelope,resultCursor}=event;
   let prior:string|null=null;
@@ -117,7 +125,7 @@ export function verifyAuthorityEvent(event:DurableAuthorityEventV1,proof:Verifie
   if(envelope.eventType!==envelope.payload.eventType||envelope.payload.workspaceId!==resultCursor.workspaceId||envelope.payload.runId!==resultCursor.runId)fail("PREDICATE_EVENT_UNAUTHENTICATED");
   if(envelope.payloadHash!==domainDigest("horseness.event-payload.v1",envelope.payload as unknown as JsonValue)||event.envelopeHash!==domainDigest("horseness.event-envelope.v1",envelope as unknown as JsonValue))fail("PREDICATE_EVENT_UNAUTHENTICATED");
   const allowed=proof.authorizedProducers?.[envelope.eventType];if(allowed!==undefined&&!allowed.includes(envelope.principalId))fail("PREDICATE_EVENT_UNAUTHENTICATED");
-  return event as VerifiedAuthorityEventV1;
+  const verified=immutableClone(event) as VerifiedAuthorityEventV1;verifiedAuthorityEvents.add(verified);return verified;
 }
 function predicateFrom(event:VerifiedAuthorityEventV1):CompletionPredicateV1 {
   const payload=event.envelope.payload;
@@ -129,6 +137,7 @@ function predicateFrom(event:VerifiedAuthorityEventV1):CompletionPredicateV1 {
   }
 }
 export function projectDurablePredicate(state:TaskProjectionV1,event:VerifiedAuthorityEventV1):TaskProjectionV1 {
+  if(!verifiedAuthorityEvents.has(event))fail("PREDICATE_EVENT_UNVERIFIED");
   const predicate=predicateFrom(event),taskId=event.envelope.payload.taskId,current=requireTask(state,taskId,"ILLEGAL_TASK_TRANSITION");if(current.lifecycle!=="active")fail("ILLEGAL_TASK_TRANSITION");
   const identity=completionPredicateIdentity(predicate);if(!predicateIds(current.contract.completionPolicy).includes(identity))fail("PREDICATE_NOT_IN_CONTRACT");
   const next=clone(state),ids=new Set(current.durablePredicateIds);ids.add(identity);next.tasks.set(taskId,{...cloneTask(current),durablePredicateIds:ids});return next;
@@ -140,14 +149,18 @@ export function resolveProjectedTask(state:TaskProjectionV1,input:{taskId:string
 const projectionName=(kind:TaskAuthorityComponentKindV1):string=>`task-authority/${kind}`;
 function componentDigest(snapshot:TaskAuthorityComponentSnapshotV1):string {const {projectionProof:_proof,...core}=snapshot;return domainDigest("horseness.task-authority-component.v1",core as unknown as JsonValue)}
 function compositeDigest(input:{schemaVersion:"1";observationCursor:CompositeCursorV1;taskId:string;components:readonly TaskAuthorityComponentSnapshotV1[]}):string {return domainDigest("horseness.task-authority-composite.v1",{schemaVersion:input.schemaVersion,observationCursor:input.observationCursor,taskId:input.taskId,componentDigests:input.components.map(component=>component.projectionProof.snapshotDigest)} as unknown as JsonValue)}
-export function authenticateTaskAuthorityProjection(input:Omit<TaskAuthorityProjectionV1,typeof authenticatedTaskAuthority>):TaskAuthorityProjectionV1 {
+export function projectTaskAuthorityComponent(event:VerifiedAuthorityEventV1,input:{taskId:string;value:TaskAuthorityComponentValueV1;authoritativeHead:{sequence:number;envelopeHash:string}}):TaskAuthorityComponentSnapshotV1 {
+  if(!verifiedAuthorityEvents.has(event))fail("AUTHORITY_EVENT_UNVERIFIED");if(!input.taskId||input.authoritativeHead.sequence!==event.resultCursor.runSequence||input.authoritativeHead.envelopeHash!==event.resultCursor.runEnvelopeHash)fail("AUTHORITY_HEAD_SUBSTITUTED");
+  const core={schemaVersion:"1" as const,workspaceId:event.resultCursor.workspaceId,runId:event.resultCursor.runId,taskId:input.taskId,observationCursor:event.resultCursor,value:input.value};const projectionNameValue=projectionName(input.value.kind),snapshotDigest=domainDigest("horseness.task-authority-component.v1",core as unknown as JsonValue);const component:TaskAuthorityComponentSnapshotV1={...core,projectionProof:{schemaVersion:"1",projectionName:projectionNameValue,projectionVersion:"1",snapshotDigest,replayDigest:domainDigest("horseness.task-authority-replay-proof.v1",{projectionName:projectionNameValue,projectionVersion:"1",observationCursor:event.resultCursor,snapshotDigest} as unknown as JsonValue)}};authenticatedTaskAuthorityComponents.add(component);return component;
+}
+export function assembleTaskAuthorityProjection(input:Omit<TaskAuthorityProjectionV1,typeof authenticatedTaskAuthority>):TaskAuthorityProjectionV1 {
   if(input.schemaVersion!=="1"||!input.taskId||input.components.length!==5)fail("AUTHORITY_PROOF_INVALID");
   const kinds=new Set<TaskAuthorityComponentKindV1>();
-  for(const component of input.components){const kind=component.value.kind;kinds.add(kind);if(component.schemaVersion!=="1"||component.workspaceId!==input.observationCursor.workspaceId||component.runId!==input.observationCursor.runId||component.taskId!==input.taskId||canonicalJson(component.observationCursor)!==canonicalJson(input.observationCursor))fail("AUTHORITY_CURSOR_SUBSTITUTED");const proof=component.projectionProof;if(proof.schemaVersion!=="1"||proof.projectionVersion!=="1"||proof.projectionName!==projectionName(kind)||!proof.snapshotDigest||!proof.replayDigest||proof.snapshotDigest!==componentDigest(component)||proof.replayDigest!==domainDigest("horseness.task-authority-replay-proof.v1",{projectionName:proof.projectionName,projectionVersion:proof.projectionVersion,observationCursor:component.observationCursor,snapshotDigest:proof.snapshotDigest} as unknown as JsonValue))fail("AUTHORITY_PROOF_INVALID")}
-  if(kinds.size!==5||input.compositeDigest!==compositeDigest(input))fail("AUTHORITY_PROOF_INVALID");return {...input,[authenticatedTaskAuthority]:true};
+  for(const component of input.components){if(!authenticatedTaskAuthorityComponents.has(component))fail("AUTHORITY_PROOF_INVALID");const kind=component.value.kind;kinds.add(kind);if(component.schemaVersion!=="1"||component.workspaceId!==input.observationCursor.workspaceId||component.runId!==input.observationCursor.runId||component.taskId!==input.taskId||canonicalJson(component.observationCursor)!==canonicalJson(input.observationCursor))fail("AUTHORITY_CURSOR_SUBSTITUTED");const proof=component.projectionProof;if(proof.schemaVersion!=="1"||proof.projectionVersion!=="1"||proof.projectionName!==projectionName(kind)||!proof.snapshotDigest||!proof.replayDigest||proof.snapshotDigest!==componentDigest(component)||proof.replayDigest!==domainDigest("horseness.task-authority-replay-proof.v1",{projectionName:proof.projectionName,projectionVersion:proof.projectionVersion,observationCursor:component.observationCursor,snapshotDigest:proof.snapshotDigest} as unknown as JsonValue))fail("AUTHORITY_PROOF_INVALID")}
+  if(kinds.size!==5||input.compositeDigest!==compositeDigest(input))fail("AUTHORITY_PROOF_INVALID");const projection={...input,[authenticatedTaskAuthority]:true as const};authenticatedTaskAuthorityProjections.add(projection);return projection;
 }
 function authorityAggregate(authority:TaskAuthorityProjectionV1,cursor:CompositeCursorV1,taskId:string):{reasons:string[];contractValid:boolean;attempt:"none"|"live"|"unknown_outcome"} {
-  if(authority[authenticatedTaskAuthority]!==true)fail("AUTHORITY_PROOF_INVALID");if(authority.taskId!==taskId||canonicalJson(authority.observationCursor)!==canonicalJson(cursor))fail("AUTHORITY_CURSOR_SUBSTITUTED");authenticateTaskAuthorityProjection(authority);
+  if(authority[authenticatedTaskAuthority]!==true||!authenticatedTaskAuthorityProjections.has(authority))fail("AUTHORITY_PROOF_INVALID");if(authority.taskId!==taskId||canonicalJson(authority.observationCursor)!==canonicalJson(cursor))fail("AUTHORITY_CURSOR_SUBSTITUTED");
   const values=new Map(authority.components.map(component=>[component.value.kind,component.value]));const contract=values.get("contract") as Extract<TaskAuthorityComponentValueV1,{kind:"contract"}>,policy=values.get("policy") as Extract<TaskAuthorityComponentValueV1,{kind:"policy"}>,grant=values.get("grant-revocation") as Extract<TaskAuthorityComponentValueV1,{kind:"grant-revocation"}>,quota=values.get("quota") as Extract<TaskAuthorityComponentValueV1,{kind:"quota"}>,attempt=values.get("attempt-outcome") as Extract<TaskAuthorityComponentValueV1,{kind:"attempt-outcome"}>;
   const reasons:string[]=[];if(!contract.valid)reasons.push("CONTRACT_INVALID");if(policy.state==="denied")reasons.push("POLICY_DENIED");if(policy.state==="unknown")reasons.push("POLICY_UNKNOWN");if(grant.grantState==="denied")reasons.push("GRANT_DENIED");if(grant.grantState==="unknown")reasons.push("GRANT_UNKNOWN");if(grant.revocationState==="revoked")reasons.push("GRANT_REVOKED");if(grant.revocationState==="unknown")reasons.push("REVOCATION_UNKNOWN");if(quota.state==="exhausted")reasons.push("QUOTA_EXHAUSTED");if(quota.state==="unknown")reasons.push("QUOTA_UNKNOWN");if(attempt.state==="live")reasons.push("ATTEMPT_LIVE");if(attempt.state==="unknown_outcome")reasons.push("ATTEMPT_OUTCOME_UNKNOWN");return {reasons,contractValid:contract.valid,attempt:attempt.state};
 }
