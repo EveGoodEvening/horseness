@@ -1,11 +1,10 @@
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { noCrash, type CrashInjector } from "./crash.js";
 
 export interface ArtifactRecord { digest: string; byteLength: number; relativePath: string; mediaType: string | null }
-export interface GarbageCollectionResult { removedDigests: string[]; removedBytes: number }
 export class ArtifactIntegrityError extends Error { constructor(message: string) { super(message); this.name="ArtifactIntegrityError"; } }
 const sha256=(data:Uint8Array):string=>createHash("sha256").update(data).digest("hex");
 
@@ -48,6 +47,5 @@ export class ArtifactStore {
   removeReference(workspaceId:string,ownerKind:string,ownerId:string,digest:string):void { this.db.prepare("DELETE FROM artifact_refs WHERE workspace_id=? AND owner_kind=? AND owner_id=? AND digest=?").run(workspaceId,ownerKind,ownerId,digest); }
   pin(pinId:string,digest:string):void { this.readReferenced(digest); this.db.prepare("INSERT OR IGNORE INTO artifact_pins(pin_id,digest,created_at) VALUES(?,?,?)").run(pinId,digest,new Date().toISOString()); }
   unpin(pinId:string,digest:string):void { this.db.prepare("DELETE FROM artifact_pins WHERE pin_id=? AND digest=?").run(pinId,digest); }
-  collectOrphans():GarbageCollectionResult { const rows=this.db.prepare("SELECT digest,byte_length FROM artifacts WHERE NOT EXISTS(SELECT 1 FROM artifact_refs r WHERE r.digest=artifacts.digest) AND NOT EXISTS(SELECT 1 FROM artifact_pins p WHERE p.digest=artifacts.digest) ORDER BY digest").all() as unknown as {digest:string;byte_length:number}[]; let removedBytes=0; this.db.exec("BEGIN IMMEDIATE"); try{for(const row of rows){const path=this.pathFor(row.digest); if(existsSync(path)){const size=statSync(path).size; rmSync(path); removedBytes+=size;} this.db.prepare("DELETE FROM artifacts WHERE digest=?").run(row.digest);} this.db.exec("COMMIT");}catch(error){if(this.db.isTransaction)this.db.exec("ROLLBACK");throw error;} return {removedDigests:rows.map(r=>r.digest),removedBytes}; }
   recoverStaging():void { for(const entry of readdirSync(this.staging)){if(entry.endsWith(".tmp"))rmSync(join(this.staging,entry),{force:true});} }
 }

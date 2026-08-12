@@ -1,4 +1,4 @@
-export { ArtifactStore, ArtifactIntegrityError, type ArtifactRecord, type GarbageCollectionResult } from "./artifact-store.js";
+export { ArtifactStore, ArtifactIntegrityError, type ArtifactRecord } from "./artifact-store.js";
 export { CrashInjectedError, type CrashInjector, type CrashPoint } from "./crash.js";
 export { MIGRATION_0001, migrate } from "./migrations.js";
 export {

@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { createWorkspaceGenesis, NO_POLICY_DIGEST } from "@horseness/domain";
 import { SQLiteAuthority, type CrashPoint } from "../src/index.js";
+import * as storeSqlite from "../src/index.js";
 
 const file=fileURLToPath(import.meta.url);
 const bytes=Buffer.from("durable evidence");
@@ -32,6 +33,16 @@ function verifyReopen(root:string):void{
 }
 
 
+test("destructive artifact garbage collection is unavailable before the C06 tombstone protocol",()=>{
+  assert.equal("collectOrphans" in storeSqlite,false);
+  assert.equal("collectOrphans" in SQLiteAuthority.prototype,false);
+  const root=mkdtempSync(join(tmpdir(),"horseness-no-gc-"));
+  try{
+    const store=new SQLiteAuthority(join(root,"db.sqlite"),join(root,"artifacts"));
+    assert.equal("collectOrphans" in store.artifacts,false);
+    store.close();
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
 for(const point of [...artifactPoints.filter(point=>point!=="artifact.dir-fsync.before"&&point!=="artifact.dir-fsync.after"),...transactionPoints])test(`abrupt power loss at ${point}`,()=>{const root=mkdtempSync(join(tmpdir(),"horseness-power-loss-"));try{const child=spawnSync(process.execPath,["--import","tsx",file],{env:{...process.env,HORSENESS_CRASH_CHILD:"1",HORSENESS_CRASH_ROOT:root,HORSENESS_CRASH_POINT:point},stdio:"ignore"});assert.equal(child.signal,"SIGKILL");assert.equal(readFileSync(join(root,"hit"),"utf8"),`${point}:1`);assert.equal(existsSync(join(root,"completed")),false,"crash child unexpectedly completed");verifyReopen(root);}finally{rmSync(root,{recursive:true,force:true});}});
 for(const point of ["artifact.dir-fsync.before","artifact.dir-fsync.after"] as const)for(let occurrence=1;occurrence<=4;occurrence++)test(`abrupt power loss at ${point} occurrence ${occurrence}`,()=>{const root=mkdtempSync(join(tmpdir(),"horseness-power-loss-"));try{const child=spawnSync(process.execPath,["--import","tsx",file],{env:{...process.env,HORSENESS_CRASH_CHILD:"1",HORSENESS_CRASH_ROOT:root,HORSENESS_CRASH_POINT:point,HORSENESS_CRASH_OCCURRENCE:String(occurrence)},stdio:"ignore"});assert.equal(child.signal,"SIGKILL");assert.equal(readFileSync(join(root,"hit"),"utf8"),`${point}:${occurrence}`);assert.equal(existsSync(join(root,"completed")),false,"crash child unexpectedly completed");verifyReopen(root);}finally{rmSync(root,{recursive:true,force:true});}});
 
