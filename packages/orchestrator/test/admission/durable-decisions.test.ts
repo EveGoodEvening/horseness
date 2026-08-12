@@ -31,7 +31,7 @@ test("reviewed release persists acceptance only after a delta acceptance",()=>{
 
 test("release review outcomes remain durable and are not rewritten as acceptance",()=>{
   for(const outcome of ["rejected","quarantined","approval_required"] as const){
-    const state=decide(submit(base(),outcome),outcome,outcome,`release-${outcome}`);
+    const state=decide(decide(submit(base(),outcome),outcome,"quarantined","initial-quarantine"),outcome,outcome,`release-${outcome}`);
     assert.equal(state.proposals[outcome]?.status,outcome);
     assert.equal(state.proposals[outcome]?.provenanceDigest,`provenance-release-${outcome}`);
   }

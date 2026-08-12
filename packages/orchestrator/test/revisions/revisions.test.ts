@@ -19,18 +19,17 @@ test("workspace admission replay advances authority projections but never policy
   assert.equal(projected.activePolicyDigest,"policy"); assert.equal(Object.keys(projected.admissions).length,states.length); assert.deepEqual(projected.quotas.quota?.consumedDecisionEventIds,["decision-accepted"]); assert.equal(projected.quotas.quota?.observedDecisionEventIds.length,states.length);
 });
 
-test("workspace admission continuations are closed and terminal decisions are immutable",()=>{
+test("workspace admission continuations share the release reevaluation matrix and keep terminal decisions immutable",()=>{
   const genesis=reduceWorkspaceState(null,{eventType:"WorkspaceCreatedV1",sequence:1,workspaceId:"w",authorityPrincipalId:"authority",initialGrantDigest:"grant",authorityConsumptionMarker:"used",activePolicyDigest:"policy"});
-  const pending=["approval_required","quarantined"] as const;
-  const terminal=["accepted","rejected"] as const;
-  for(const from of pending) for(const to of terminal){
+  const allowed={approval_required:["accepted","rejected"],quarantined:["quarantined","approval_required","accepted","rejected"]} as const;
+  for(const [from,targets] of Object.entries(allowed) as Array<[keyof typeof allowed,readonly (typeof allowed)[keyof typeof allowed][number][]]>) for(const to of targets){
     const first=reduceWorkspaceState(genesis,{eventType:"WorkspaceAdmissionRecordedV1",sequence:2,workspaceId:"w",proposalDigest:`${from}-${to}`,decisionEventId:`${from}-1-${to}`,state:from,quotaId:"quota",quotaDigest:"quota-v1",consumed:"no"});
     const continued=reduceWorkspaceState(first,{eventType:"WorkspaceAdmissionRecordedV1",sequence:3,workspaceId:"w",proposalDigest:`${from}-${to}`,decisionEventId:`${from}-2-${to}`,state:to,quotaId:"quota",quotaDigest:"quota-v1",consumed:to==="accepted"?"yes":"no"});
     assert.equal(continued.admissions[`${from}-${to}`]?.state,to); assert.equal(continued.admissions[`${from}-${to}`]?.history.length,2);
   }
   const all=["accepted","rejected","conflicted","quarantined","approval_required"] as const;
   for(const from of all) for(const to of all){
-    if((from==="approval_required"||from==="quarantined")&&(to==="accepted"||to==="rejected")) continue;
+    if((allowed as Partial<Record<typeof from,readonly typeof to[]>>)[from]?.includes(to)) continue;
     const first=reduceWorkspaceState(genesis,{eventType:"WorkspaceAdmissionRecordedV1",sequence:2,workspaceId:"w",proposalDigest:`${from}-${to}`,decisionEventId:`${from}-1-${to}`,state:from,quotaId:"quota",quotaDigest:"quota-v1",consumed:from==="accepted"?"yes":"no"});
     assert.throws(()=>reduceWorkspaceState(first,{eventType:"WorkspaceAdmissionRecordedV1",sequence:3,workspaceId:"w",proposalDigest:`${from}-${to}`,decisionEventId:`${from}-2-${to}`,state:to,quotaId:"quota",quotaDigest:"quota-v1",consumed:to==="accepted"?"yes":"no"}),/ILLEGAL_ADMISSION_TRANSITION/);
   }

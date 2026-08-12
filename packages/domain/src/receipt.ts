@@ -58,6 +58,18 @@ export function reduceCanonicalDocument(state: CanonicalDocument | null, event: 
 }
 
 export type WorkspaceAdmissionDecisionStateV1 = "accepted" | "rejected" | "conflicted" | "quarantined" | "approval_required";
+export type AdmissionTransitionStateV1 = "submitted" | WorkspaceAdmissionDecisionStateV1;
+const ADMISSION_TRANSITIONS: Readonly<Record<AdmissionTransitionStateV1, readonly WorkspaceAdmissionDecisionStateV1[]>> = {
+  submitted: ["accepted", "rejected", "conflicted", "quarantined", "approval_required"],
+  quarantined: ["quarantined", "approval_required", "accepted", "rejected"],
+  approval_required: ["accepted", "rejected"],
+  accepted: [],
+  rejected: [],
+  conflicted: [],
+};
+export function validateAdmissionTransition(from: AdmissionTransitionStateV1, to: WorkspaceAdmissionDecisionStateV1): void {
+  if (!ADMISSION_TRANSITIONS[from].includes(to)) throw new DomainError("ILLEGAL_ADMISSION_TRANSITION");
+}
 export interface WorkspaceAdmissionDecisionV1 { decisionEventId: string; state: WorkspaceAdmissionDecisionStateV1; consumed: "yes" | "no" }
 export interface WorkspaceAdmissionProjectionV1 { proposalDigest: string; decisionEventId: string; state: WorkspaceAdmissionDecisionStateV1; quotaId: string; quotaDigest: string; consumed: "yes" | "no"; history: readonly WorkspaceAdmissionDecisionV1[] }
 export interface WorkspaceQuotaProjectionV1 { quotaDigest: string; consumedDecisionEventIds: readonly string[]; observedDecisionEventIds: readonly string[] }
@@ -87,8 +99,9 @@ export function reduceWorkspaceState(state: WorkspaceState | null, event: Worksp
       const prior = state.admissions[event.proposalDigest];
       if (prior !== undefined) {
         if (prior.quotaId !== event.quotaId || prior.quotaDigest !== event.quotaDigest) throw new DomainError("ADMISSION_IDENTITY_CONFLICT");
-        const validContinuation = (prior.state === "approval_required" || prior.state === "quarantined") && (event.state === "accepted" || event.state === "rejected");
-        if (!validContinuation) throw new DomainError("ILLEGAL_ADMISSION_TRANSITION");
+        validateAdmissionTransition(prior.state, event.state);
+      } else {
+        validateAdmissionTransition("submitted", event.state);
       }
       const quota = state.quotas[event.quotaId];
       if (quota !== undefined && quota.quotaDigest !== event.quotaDigest) throw new DomainError("QUOTA_IDENTITY_CONFLICT");
@@ -162,8 +175,8 @@ export function reduceOperationalState(state: RunOperationalState | null, event:
       const existing = next.proposals[event.proposalId];
       if (existing === undefined || existing.proposalDigest !== event.proposalDigest) throw new DomainError(existing === undefined ? "PROPOSAL_NOT_SUBMITTED" : "PROPOSAL_IDENTITY_CONFLICT");
       const completesAcceptedDelta = existing.status === "accepted" && event.state === "accepted";
-      const resolvesPending = ["approval_required","quarantined"].includes(existing.status) && ["accepted","rejected"].includes(event.state);
-      if (existing.provenanceDigest !== undefined && !completesAcceptedDelta && !resolvesPending) throw new DomainError("DUPLICATE_PROPOSAL_TRANSITION");
+      if (existing.provenanceDigest !== undefined && !completesAcceptedDelta && (existing.status === "accepted" || existing.status === "rejected" || existing.status === "conflicted")) throw new DomainError("DUPLICATE_PROPOSAL_TRANSITION");
+      if (!completesAcceptedDelta) validateAdmissionTransition(existing.status, event.state);
       return { ...next, proposals: { ...next.proposals, [event.proposalId]: { proposalDigest:event.proposalDigest, status:event.state, provenanceDigest:event.provenanceDigest, artifactDigest:event.artifactDigest } } };
     }
     case "AttemptReceiptRecordedV1": {

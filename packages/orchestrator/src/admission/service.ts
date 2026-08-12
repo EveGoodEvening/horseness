@@ -6,6 +6,7 @@ import {
   domainDigest,
   sealEventEnvelope,
   verifyAttemptReceipt,
+  validateAdmissionTransition,
   verifyForkPin,
   verifyProposal,
   type ApprovalBindingV1,
@@ -170,6 +171,7 @@ export class AdmissionService {
     let priorState:AdmissionTerminalState|undefined;
     for(const item of [...this.authority.replay(core.workspaceId,"run",core.runId)].reverse()){const payload=item.envelope.payload;if(typeof payload==="object"&&payload!==null&&"proposalId" in payload&&payload.proposalId===request.proposal.proposalId&&"state" in payload&&typeof payload.state==="string"&&["accepted","rejected","conflicted","quarantined","approval_required"].includes(payload.state)){priorState=payload.state as AdmissionTerminalState;break;}}
     const state:AdmissionTerminalState=request.action==="reject"&&priorState==="approval_required"?"rejected":evaluation.result;
+    validateAdmissionTransition(priorState ?? "submitted", state);
     const resultingRevision=state==="accepted"?revision.revision+1:revision.revision; const resultingHash=state==="accepted"&&delta.outcome==="accepted"?delta.stateHash:revision.stateHash;
     const provenance:AdmissionProvenanceV1={schemaVersion:"1",proposalId:request.proposal.proposalId,proposalDigest:request.proposal.proposalDigest,decision:state,evaluation,observationCursor:observed,priorRevision:revision.revision,priorStateHash:revision.stateHash,resultingRevision,resultingStateHash:resultingHash,receiptDigests:[...core.receiptDigests].sort(),forkPinDigest:core.forkPinDigest,scopeDigest:core.deltaAuthorityScopeDigest,predecessorProposalDigest:core.predecessorProposalDigest};
     if(state==="accepted"&&delta.outcome!=="accepted")fail("STALE_BASE");
