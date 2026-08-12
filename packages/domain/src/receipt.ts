@@ -57,22 +57,62 @@ export function reduceCanonicalDocument(state: CanonicalDocument | null, event: 
   }
 }
 
-export interface WorkspaceState { workspaceId: string; authorityPrincipalId: string; initialGrantDigest: string; authorityConsumptionMarker: string; activePolicyDigest: string; contextEpoch: number; lastEventSequence: number }
+export interface WorkspaceAdmissionProjectionV1 { proposalDigest: string; decisionEventId: string; quotaId: string; quotaDigest: string; consumed: "yes" | "no" }
+export interface WorkspaceQuotaProjectionV1 { quotaDigest: string; consumedDecisionEventIds: readonly string[]; observedDecisionEventIds: readonly string[] }
+export interface WorkspaceState { workspaceId: string; authorityPrincipalId: string; initialGrantDigest: string; authorityConsumptionMarker: string; activePolicyDigest: string; admissions: Readonly<Record<string, WorkspaceAdmissionProjectionV1>>; quotas: Readonly<Record<string, WorkspaceQuotaProjectionV1>>; contextEpoch: number; lastEventSequence: number }
 export type WorkspaceOperationalEvent =
   | { eventType: "WorkspaceCreatedV1"; sequence: number; workspaceId: string; authorityPrincipalId: string; initialGrantDigest: string; authorityConsumptionMarker: string; activePolicyDigest: string }
-  | { eventType: "PolicyReferenceChangedV1"; sequence: number; workspaceId: string; activePolicyDigest: string };
+  | { eventType: "PolicyReferenceChangedV1"; sequence: number; workspaceId: string; activePolicyDigest: string }
+  | { eventType: "WorkspaceAdmissionRecordedV1"; sequence: number; workspaceId: string; proposalDigest: string; decisionEventId: string; quotaId: string; quotaDigest: string; consumed: "yes" | "no" };
 export function reduceWorkspaceState(state: WorkspaceState | null, event: WorkspaceOperationalEvent): WorkspaceState {
   switch (event.eventType) {
     case "WorkspaceCreatedV1":
       if (state !== null || event.sequence !== 1) throw new DomainError("INVALID_GENESIS");
-      return { workspaceId: event.workspaceId, authorityPrincipalId: event.authorityPrincipalId, initialGrantDigest: event.initialGrantDigest, authorityConsumptionMarker: event.authorityConsumptionMarker, activePolicyDigest: event.activePolicyDigest, contextEpoch: 0, lastEventSequence: 1 };
+      return { workspaceId: event.workspaceId, authorityPrincipalId: event.authorityPrincipalId, initialGrantDigest: event.initialGrantDigest, authorityConsumptionMarker: event.authorityConsumptionMarker, activePolicyDigest: event.activePolicyDigest, admissions: {}, quotas: {}, contextEpoch: 0, lastEventSequence: 1 };
     case "PolicyReferenceChangedV1":
       if (state === null) throw new DomainError("INVALID_GENESIS");
       if (event.workspaceId !== state.workspaceId) throw new DomainError("AGGREGATE_IDENTITY_MISMATCH");
       if (event.sequence !== state.lastEventSequence + 1) throw new DomainError("EVENT_SEQUENCE_INVALID");
       return { ...state, activePolicyDigest: event.activePolicyDigest, contextEpoch: state.contextEpoch + 1, lastEventSequence: event.sequence };
+    case "WorkspaceAdmissionRecordedV1": {
+      if (state === null) throw new DomainError("INVALID_GENESIS");
+      if (event.workspaceId !== state.workspaceId) throw new DomainError("AGGREGATE_IDENTITY_MISMATCH");
+      if (event.sequence !== state.lastEventSequence + 1) throw new DomainError("EVENT_SEQUENCE_INVALID");
+      if (event.consumed !== "yes" && event.consumed !== "no") throw new DomainError("MALFORMED_EVENT");
+      if (state.admissions[event.proposalDigest] !== undefined || Object.values(state.admissions).some((item) => item.decisionEventId === event.decisionEventId)) throw new DomainError("DUPLICATE_ADMISSION_TRANSITION");
+      const quota = state.quotas[event.quotaId];
+      if (quota !== undefined && quota.quotaDigest !== event.quotaDigest) throw new DomainError("QUOTA_IDENTITY_CONFLICT");
+      const observedDecisionEventIds = [...(quota?.observedDecisionEventIds ?? []), event.decisionEventId];
+      const consumedDecisionEventIds = event.consumed === "yes" ? [...(quota?.consumedDecisionEventIds ?? []), event.decisionEventId] : [...(quota?.consumedDecisionEventIds ?? [])];
+      return { ...state, admissions: { ...state.admissions, [event.proposalDigest]: { proposalDigest: event.proposalDigest, decisionEventId: event.decisionEventId, quotaId: event.quotaId, quotaDigest: event.quotaDigest, consumed: event.consumed } }, quotas: { ...state.quotas, [event.quotaId]: { quotaDigest: event.quotaDigest, consumedDecisionEventIds, observedDecisionEventIds } }, contextEpoch: state.contextEpoch + 1, lastEventSequence: event.sequence };
+    }
     default: throw new DomainError("UNSUPPORTED_EVENT_TYPE");
   }
+}
+
+export function deterministicWorkspaceReplay(events: readonly HashedEventEnvelopeV1<unknown>[]): WorkspaceState {
+  verifyEventChain(events);
+  const first = events[0];
+  if (first === undefined || first.envelope.streamKind !== "workspace") throw new DomainError("INVALID_GENESIS");
+  let state: WorkspaceState | null = null;
+  for (const item of events) {
+    const envelope = item.envelope;
+    if (envelope.streamKind !== "workspace" || envelope.streamId !== envelope.workspaceId) throw new DomainError("EVENT_IDENTITY_INVALID");
+    const payload = record(envelope.payload);
+    if (text(payload.workspaceId) !== envelope.workspaceId) throw new DomainError("MALFORMED_EVENT");
+    const common = { sequence: envelope.sequence, workspaceId: envelope.workspaceId };
+    switch (envelope.eventType) {
+      case "WorkspaceCreatedV1": state = reduceWorkspaceState(state, { eventType: "WorkspaceCreatedV1", ...common, authorityPrincipalId: text(payload.authorityPrincipalId), initialGrantDigest: text(payload.initialGrantDigest), authorityConsumptionMarker: text(payload.authorityConsumptionMarker), activePolicyDigest: text(payload.activePolicyDigest) }); break;
+      case "PolicyReferenceChangedV1": state = reduceWorkspaceState(state, { eventType: "PolicyReferenceChangedV1", ...common, activePolicyDigest: text(payload.activePolicyDigest) }); break;
+      case "WorkspaceAdmissionRecordedV1": {
+        const consumed = text(payload.consumed); if (consumed !== "yes" && consumed !== "no") throw new DomainError("MALFORMED_EVENT");
+        state = reduceWorkspaceState(state, { eventType: "WorkspaceAdmissionRecordedV1", ...common, proposalDigest: text(payload.proposalDigest), decisionEventId: text(payload.decisionEventId), quotaId: text(payload.quotaId), quotaDigest: text(payload.quotaDigest), consumed }); break;
+      }
+      default: throw new DomainError("UNSUPPORTED_EVENT_TYPE");
+    }
+  }
+  if (state === null) throw new DomainError("INVALID_GENESIS");
+  return state;
 }
 
 export interface RunOperationalState { workspaceId: string; runId: string; eventCount: number; proposals: Readonly<Record<string, { status: "submitted" | "accepted" | "rejected" | "conflicted" | "quarantined" | "approval_required"; proposalDigest: string; provenanceDigest?: string; artifactDigest?: string }>>; receipts: Readonly<Record<string, { receiptDigest: string; outcome: "succeeded" | "failed" | "cancelled" }>>; taskStates: Readonly<Record<string, "succeeded" | "failed" | "cancelled">>; contextEpoch: number; lastEventSequence: number }

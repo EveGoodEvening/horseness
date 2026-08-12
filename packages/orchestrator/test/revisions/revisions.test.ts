@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { reduceCanonicalDocument, domainDigest } from "@horseness/domain";
+import { reduceCanonicalDocument, reduceWorkspaceState, domainDigest } from "@horseness/domain";
 
 test("genesis precedes the first acceptance and only DeltaAccepted changes canonical revision",()=>{
   assert.throws(()=>reduceCanonicalDocument(null,{eventType:"DeltaAcceptedV1",sequence:1,workspaceId:"w",runId:"r",proposalId:"p",priorStateHash:"missing",resultingStateHash:"missing",resultingDocument:{a:2}}),/EVENT_SEQUENCE_INVALID/);
@@ -9,6 +9,14 @@ test("genesis precedes the first acceptance and only DeltaAccepted changes canon
   const document={a:2};
   const next=reduceCanonicalDocument(initial,{eventType:"DeltaAcceptedV1",sequence:4,workspaceId:"w",runId:"r",proposalId:"p",priorStateHash:initial.stateHash,resultingStateHash:domainDigest("horseness.canonical-document.v1",document),resultingDocument:document});
   assert.equal(next.revision,1);assert.deepEqual(next.document,document);
+});
+
+test("workspace admission replay advances authority projections but never policy",()=>{
+  const workspace=reduceWorkspaceState(null,{eventType:"WorkspaceCreatedV1",sequence:1,workspaceId:"w",authorityPrincipalId:"authority",initialGrantDigest:"grant",authorityConsumptionMarker:"used",activePolicyDigest:"policy"});
+  const states=["accepted","rejected","conflicted","quarantined","approval_required"] as const;
+  let projected=workspace;
+  for(let index=0;index<states.length;index+=1){const state=states[index]!;projected=reduceWorkspaceState(projected,{eventType:"WorkspaceAdmissionRecordedV1",sequence:index+2,workspaceId:"w",proposalDigest:`proposal-${state}`,decisionEventId:`decision-${state}`,quotaId:"quota",quotaDigest:"quota-v1",consumed:state==="accepted"?"yes":"no"});}
+  assert.equal(projected.activePolicyDigest,"policy"); assert.equal(Object.keys(projected.admissions).length,states.length); assert.deepEqual(projected.quotas.quota?.consumedDecisionEventIds,["decision-accepted"]); assert.equal(projected.quotas.quota?.observedDecisionEventIds.length,states.length);
 });
 
 test("canonical replay binds sequence, aggregate identity, prior hash, and resulting document hash",()=>{

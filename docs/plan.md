@@ -51,7 +51,7 @@ Durable product defects found during a chunk are recorded in that chunk ledger w
 **Accept:** store typecheck/full tests plus migrations/recovery/import/retention; raw-before-upcast, dangling-reference rejection, isolated import, reversible/major-gated downgrade. **Checkpoint:** `feat(store): add verified recovery import and retention`.
 
 ### C07 — Canonical admission application service
-**Depends:** C06. **Owns:** orchestrator admission/policy/authorization/revisions source and tests, manifest/lock/changeset/ledger/integration.
+**Depends:** C06. **Owns:** orchestrator admission/policy/authorization/revisions source and tests, manifest/lock/changeset/ledger/integration, plus the narrow additive domain extension recorded below for admission decision events and reducers.
 **Accept:** orchestrator typecheck/full tests; atomic workspace+run evaluation/accept; concurrent CAS; evidence substitution/path escape/stale base/version mismatch; approval clock/revocation; genesis-before-first-accept; artifact reference crash windows. **Checkpoint:** `feat(orchestrator): apply sealed evidence admission`.
 
 ### C08 — Task, dependency, fork, receipt projections
@@ -159,7 +159,7 @@ Only these bounded path sets replace all earlier shorthand:
 | C04 | `packages/policy/**`, `docs/policy.md`, `docs/compatibility.md` |
 | C05 | `packages/store-sqlite/**`, `docs/migrations.md` |
 | C06 | `packages/store-sqlite/src/{migrations,recovery,backup,restore,import,retention}/**`, `packages/store-sqlite/test/{migrations,recovery,backup,restore,import,retention}/**`, `tests/fixtures/{databases,imports}/**`, `docs/{migrations.md,operations/storage.md}` |
-| C07 | `packages/orchestrator/src/{admission,authorization,revisions}/**`, `packages/orchestrator/test/{admission,authorization,revisions}/**` |
+| C07 | `packages/orchestrator/src/{admission,authorization,revisions}/**`, `packages/orchestrator/test/{admission,authorization,revisions}/**`; narrow additive domain extension only: `packages/domain/src/events.ts`, `packages/domain/src/receipt.ts`, and `packages/domain/test/domain.test.ts` |
 | C08 | `packages/orchestrator/src/{tasks,forks,receipts,projections}/**`, `packages/orchestrator/test/{tasks,forks,receipts,projections}/**` |
 | C09 | `packages/orchestrator/src/context/**`, `packages/orchestrator/test/context/**`, `docs/context.md` |
 | C10 | `packages/orchestrator/src/{scheduler,attempts,leases,dispatch,recovery}/**`, `packages/orchestrator/test/{scheduler,attempts,leases,dispatch,recovery}/**` |
@@ -348,6 +348,8 @@ C02 additionally owns `docs/vectors/{cursors,fork-pin,dependency-join,delta-auth
 The C02 implementation exposed the verifier from `@horseness/domain`, but the frozen repository-root command also requires shared-root integration. C02 therefore owns the single root `package.json` script `"vectors:verify": "pnpm --filter @horseness/domain run vectors:verify"`; this is an ownership correction only and does not broaden C02's root-manifest authority.
 
 C03's two frozen repository-root gates require shared-root forwarding scripts before they can execute. C03 therefore owns only the root `package.json` entries `"protocol:conformance": "pnpm --filter @horseness/protocol run protocol:conformance"` and `"generated:check": "pnpm --filter @horseness/protocol run generated:check"`; this serialized upfront ownership correction does not authorize any other root-manifest change. The C03 tracker claim records `docs/plan.md` as correction-only ownership, and implementation must preserve this exact scope.
+
+C07 review discovered that an atomically reconstructable admission authority projection requires the closed C02 domain contract to gain the admission decision event payloads and deterministic operational/workspace reducer handling consumed by the orchestrator. C07 is therefore authorized to make narrow additive edits only to `packages/domain/src/events.ts` and `packages/domain/src/receipt.ts`, with focused coverage only in the existing `packages/domain/test/domain.test.ts`. This correction does not reopen or replace C02, alter existing C02 event meanings, or grant C07 ownership of any other domain source, test, vector, manifest, or compatibility file. The domain contract and C02 acceptance remained green after the additive extension. The source commits preceded this planning correction; review accepted that ordering as a retained-history exception, and C07 must record the correction before completion.
 
 ### Exact C20 and C24 workspace-bound invocations
 
