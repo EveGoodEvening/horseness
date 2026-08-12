@@ -89,7 +89,7 @@ const plainAuthority = (generationNumber = 1): AttemptAuthorityInputV1 => ({
   },
 });
 
-function storedCapabilities(generationNumber = 1, outcome: "succeeded" | "failed" = "succeeded") {
+export function storedCapabilities(generationNumber = 1, outcome: "succeeded" | "failed" = "succeeded") {
   const root = mkdtempSync(join(tmpdir(), "horseness-receipt-projection-"));
   const databasePath = join(root, "authority.sqlite");
   const artifactRoot = join(root, "artifacts");

@@ -40,6 +40,9 @@ export interface DurableAuthorityEventV1 { envelope:EventEnvelopeV1<DurablePredi
 declare const verifiedAuthorityEventBrand:unique symbol;
 export type VerifiedAuthorityEventV1=DurableAuthorityEventV1&{readonly [verifiedAuthorityEventBrand]:true};
 const verifiedAuthorityEvents=new WeakSet<object>();
+export function isVerifiedAuthorityEventV1(value:unknown):value is VerifiedAuthorityEventV1 {
+  return typeof value==="object"&&value!==null&&verifiedAuthorityEvents.has(value);
+}
 
 export interface StoredTaskResolvedCapabilityV1 {
   readonly workspaceId:string;
@@ -122,7 +125,12 @@ export interface TaskAuthorityProjectionV1 {
   compositeDigest:string;
   readonly [authenticatedTaskAuthority]:true;
 }
-export interface JoinEvaluationV1 { taskId:string; schedulability:Schedulability; cancellationPropagated:boolean; reasonCodes:string[]; authoritySnapshotIdentities:string[]; snapshot:{core:DependencyJoinSnapshotCoreV1;digest:string;id:string} }
+declare const joinEvaluationBrand:unique symbol;
+export interface JoinEvaluationV1 { readonly [joinEvaluationBrand]:true; taskId:string; schedulability:Schedulability; cancellationPropagated:boolean; reasonCodes:string[]; authoritySnapshotIdentities:string[]; dependencyReleasePredicates:readonly {sourceTaskId:string;predicateIdentity:string}[]; snapshot:{core:DependencyJoinSnapshotCoreV1;digest:string;id:string} }
+const joinEvaluations=new WeakSet<object>();
+export function isJoinEvaluationV1(value:unknown):value is JoinEvaluationV1 {
+  return typeof value==="object"&&value!==null&&joinEvaluations.has(value);
+}
 
 const cloneTask=(task:DurableTaskStateV1):DurableTaskStateV1=>({...task,durablePredicateIds:new Set(task.durablePredicateIds)});
 const clone=(state:TaskProjectionV1):{tasks:Map<string,DurableTaskStateV1>;edges:Map<string,DependencyEdgeV1>}=>({tasks:new Map([...state.tasks].map(([id,task])=>[id,cloneTask(task)])),edges:new Map(state.edges)});
@@ -212,5 +220,5 @@ export function evaluateTaskJoin(state:TaskProjectionV1,input:{taskId:string;cur
   const task=requireTask(state,input.taskId);const edges=[...state.edges.values()].filter(edge=>edge.dependentTaskId===input.taskId).sort((a,b)=>a.edgeId.localeCompare(b.edgeId));const outcomes=new Map<string,DependencyOutcomeV1&{resolution:TaskResolution}>();let unknown=false,unsatisfied=false,cancellationPropagated=false;
   for(const edge of edges){const source=state.tasks.get(edge.sourceTaskId)!;const released=source.durablePredicateIds.has(edge.releasePredicate);if(!source.resolution||!source.resolutionEventSequence||!source.resolutionDigest||!released){unknown=true;continue}const outcome={edgeId:edge.edgeId,edgeType:edge.edgeType,sourceTaskId:edge.sourceTaskId,taskResolutionEventSequence:source.resolutionEventSequence,taskResolutionDigest:source.resolutionDigest,winningGeneration:source.winningGeneration,resolution:source.resolution};outcomes.set(edge.edgeId,outcome);const satisfied=edge.edgeType==="requires_terminal"||edge.edgeType==="requires_success"&&source.resolution==="succeeded"||edge.edgeType==="requires_outcome"&&edge.allowedOutcomes?.includes(source.resolution);if(!satisfied)unsatisfied=true;if(source.resolution==="cancelled"&&edge.propagateCancellation)cancellationPropagated=true}
   const aggregate=authorityAggregate(input.authority,input.cursor,input.taskId),reasons=aggregate.reasons;if(unknown)reasons.push("DEPENDENCY_UNKNOWN");if(unsatisfied)reasons.push("DEPENDENCY_UNSATISFIED");if(cancellationPropagated)reasons.push("CANCELLATION_PROPAGATED");const terminal=["succeeded","failed","cancelled"].includes(task.lifecycle);let schedulability:Schedulability;if(terminal)schedulability="terminal";else if(task.lifecycle==="draft"||!aggregate.contractValid||cancellationPropagated)schedulability="ineligible";else if(aggregate.attempt==="unknown_outcome")schedulability="unknown_outcome";else if(aggregate.attempt==="live")schedulability="running";else if(unknown||unsatisfied||reasons.some(reason=>["POLICY_DENIED","POLICY_UNKNOWN","GRANT_DENIED","GRANT_UNKNOWN","GRANT_REVOKED","REVOCATION_UNKNOWN","QUOTA_EXHAUSTED","QUOTA_UNKNOWN"].includes(reason)))schedulability="blocked";else schedulability="ready";
-  const reasonCodes=[...new Set(reasons)].sort();const dependencies=[...outcomes.values()].map(({resolution:_resolution,...outcome})=>outcome);const snapshot=sealDependencyJoinSnapshot({schemaVersion:"1",runId:input.cursor.runId,taskId:input.taskId,taskContractDigest:task.contract.contractDigest,joinEvaluationId:`join:${input.taskId}:${input.cursor.workspaceSequence}:${input.cursor.runSequence}`,joinObservationCursor:input.cursor,dependencies,schedulability,reasonCodes});const authoritySnapshotIdentities=input.authority.components.map(component=>component.projectionProof.snapshotDigest);return {taskId:input.taskId,schedulability,cancellationPropagated,reasonCodes,authoritySnapshotIdentities,snapshot};
+  const reasonCodes=[...new Set(reasons)].sort();const dependencies=[...outcomes.values()].map(({resolution:_resolution,...outcome})=>outcome);const snapshot=sealDependencyJoinSnapshot({schemaVersion:"1",runId:input.cursor.runId,taskId:input.taskId,taskContractDigest:task.contract.contractDigest,joinEvaluationId:`join:${input.taskId}:${input.cursor.workspaceSequence}:${input.cursor.runSequence}`,joinObservationCursor:input.cursor,dependencies,schedulability,reasonCodes});const authoritySnapshotIdentities=input.authority.components.map(component=>component.projectionProof.snapshotDigest);const dependencyReleasePredicates=edges.map(edge=>({sourceTaskId:edge.sourceTaskId,predicateIdentity:edge.releasePredicate}));const evaluation=deepFreeze({taskId:input.taskId,schedulability,cancellationPropagated,reasonCodes,authoritySnapshotIdentities,dependencyReleasePredicates,snapshot}) as unknown as JoinEvaluationV1;joinEvaluations.add(evaluation);return evaluation;
 }
