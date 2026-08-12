@@ -12,8 +12,18 @@ export class ArtifactStore {
   readonly root: string; readonly objects: string; readonly staging: string;
   constructor(root:string, private readonly db:DatabaseSync, private readonly crash:CrashInjector=noCrash) {
     this.root=resolve(root); this.objects=join(this.root,"objects"); this.staging=join(this.root,"stage");
-    this.crash("artifact.mkdir.before"); mkdirSync(this.objects,{recursive:true}); mkdirSync(this.staging,{recursive:true}); this.crash("artifact.mkdir.after");
+    this.crash("artifact.mkdir.before"); this.createDirectoryHierarchyDurably(this.root); mkdirSync(this.objects,{recursive:true}); mkdirSync(this.staging,{recursive:true}); this.syncDirectory(this.root); this.crash("artifact.mkdir.after");
     this.recoverStaging();
+  }
+  private createDirectoryHierarchyDurably(path:string):void {
+    const missing:string[]=[]; let cursor=path;
+    while(!existsSync(cursor)){
+      missing.push(cursor); const parent=dirname(cursor);
+      if(parent===cursor)throw new ArtifactIntegrityError(`cannot create artifact directory hierarchy: ${path}`);
+      cursor=parent;
+    }
+    if(missing.length===0){this.syncDirectory(dirname(path));return;}
+    for(let index=missing.length-1;index>=0;index--){const directory=missing[index]!;mkdirSync(directory);this.syncDirectory(dirname(directory));}
   }
   private pathFor(digest:string):string { if(!/^[a-f0-9]{64}$/.test(digest)) throw new ArtifactIntegrityError("invalid artifact digest"); return join(this.objects,digest.slice(0,2),digest.slice(2)); }
   private ensureWithin(path:string):void { const rel=relative(this.root,path); if(rel.startsWith(`..${sep}`)||rel==="..") throw new ArtifactIntegrityError("artifact path escape"); }
@@ -21,8 +31,8 @@ export class ArtifactStore {
   publish(data:Uint8Array|string, mediaType:string|null=null):ArtifactRecord {
     const bytes=typeof data==="string"?Buffer.from(data):Buffer.from(data); const digest=sha256(bytes); const destination=this.pathFor(digest); this.ensureWithin(destination);
     if(!existsSync(destination)) {
-      const parent=dirname(destination); const parentExisted=existsSync(parent); this.crash("artifact.mkdir.before"); mkdirSync(parent,{recursive:true}); this.crash("artifact.mkdir.after");
-      if(!parentExisted)this.syncDirectory(this.objects);
+      const parent=dirname(destination); this.crash("artifact.mkdir.before"); mkdirSync(parent,{recursive:true}); this.crash("artifact.mkdir.after");
+      this.syncDirectory(this.objects);
       const temporary=join(this.staging,`${digest}.${String(process.pid)}.${String(Date.now())}.tmp`); this.crash("artifact.open.before"); const fd=openSync(temporary,"wx",0o600); this.crash("artifact.open.after");
       let closed=false;
       try {
@@ -34,7 +44,7 @@ export class ArtifactStore {
         this.syncDirectory(parent);
         this.syncDirectory(this.staging);
       } catch(error){ if(!closed){try{closeSync(fd);}catch(closeError){void closeError;}} if(existsSync(temporary))rmSync(temporary,{force:true}); throw error; }
-    }
+    } else { this.syncDirectory(this.objects); this.syncDirectory(dirname(destination)); }
     const actual=this.readVerifiedBytes(digest); if(actual.length!==bytes.length) throw new ArtifactIntegrityError("published artifact length mismatch");
     return {digest,byteLength:bytes.length,relativePath:relative(this.root,destination),mediaType};
   }
