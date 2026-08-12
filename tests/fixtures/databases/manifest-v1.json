@@ -1,0 +1,1 @@
+{"kind":"HorsenessBackupManifestV1","schemaVersion":1,"authoritySchemaVersion":2,"createdAt":"2026-01-01T00:00:00.000Z","database":{"file":"authority.sqlite","digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","bytes":4096},"artifacts":[]}

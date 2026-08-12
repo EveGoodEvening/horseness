@@ -15,3 +15,9 @@ Both decoded and raw replay authenticate before returning data. Authentication p
 Artifacts are staged with mode `0600`, fully written, file-fsynced, atomically renamed into their SHA-256 object path, and parent-directory-fsynced before a SQL reference may be registered. Reads verify the digest and recorded length. Missing, corrupt, or unknown referenced objects fail closed. References and pins protect objects from orphan collection; startup removes abandoned staging files.
 
 This migration has no downgrade. Backup, restore, import, upgrade, and retention procedures are introduced by C06; until then, preserve the database and artifact directory as one authority unit.
+
+## SQLite migration 0002 — recovery and retention
+
+Migration 0002 adds durable retention intents and artifact tombstones. The upgrader authenticates raw event bytes and their complete chains, stream heads, SQLite integrity and all artifact references before executing any upcast or schema mutation. It rejects unknown newer versions and conflicting migration identities.
+
+The version-2 schema is backward-compatible only while its retention ledger is empty. `requireLosslessDowngrade` enforces that invariant; populated retention history or an unknown target requires an explicit major-version migration rather than silently discarding data. Backup manifests record the authority schema version, and isolated imports require exact schema equality.

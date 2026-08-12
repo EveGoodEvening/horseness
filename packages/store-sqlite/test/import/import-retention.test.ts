@@ -1,0 +1,16 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { SQLiteAuthority } from "../../src/sqlite-authority.js";
+import { createBackup } from "../../src/backup/index.js";
+import { importBackup } from "../../src/import/index.js";
+import { upgradeAuthority } from "../../src/migrations/index.js";
+import { planRetention, resumeRetention } from "../../src/retention/index.js";
+
+const authority=(root:string,name:string)=>{const database=join(root,`${name}.sqlite`),artifacts=join(root,`${name}-artifacts`);new SQLiteAuthority(database,artifacts).close();const db=new DatabaseSync(database);upgradeAuthority(db,artifacts);return{database,artifacts,db};};
+test("import validates in isolation and rejects schema conflicts",()=>{const root=mkdtempSync(join(tmpdir(),"horseness-import-test-"));const source=authority(root,"source"),backup=join(root,"backup");createBackup(source.db,source.artifacts,backup);source.db.close();const target=authority(root,"target");assert.deepEqual(importBackup(target.db,target.artifacts,backup).workspaces,[]);target.db.prepare("INSERT INTO schema_migrations VALUES(3,'future',?)").run(new Date().toISOString());assert.throws(()=>importBackup(target.db,target.artifacts,backup),/schema\/version mismatch/);target.db.close();rmSync(root,{recursive:true,force:true});});
+test("corrupt isolated import cannot mutate destination",()=>{const root=mkdtempSync(join(tmpdir(),"horseness-import-corrupt-"));const source=authority(root,"source"),backup=join(root,"backup");createBackup(source.db,source.artifacts,backup);source.db.close();const file=join(backup,"authority.sqlite"),bytes=readFileSync(file);writeFileSync(file,Buffer.concat([bytes,Buffer.from("bad")]));const target=authority(root,"target");assert.throws(()=>importBackup(target.db,target.artifacts,backup),/digest mismatch/);assert.equal((target.db.prepare("SELECT count(*) AS count FROM streams").get() as {count:number}).count,0);target.db.close();rmSync(root,{recursive:true,force:true});});
+test("retention uses durable intents and tombstones",()=>{const root=mkdtempSync(join(tmpdir(),"horseness-retention-"));const database=join(root,"a.sqlite"),artifacts=join(root,"artifacts");const authorityStore=new SQLiteAuthority(database,artifacts);const record=authorityStore.artifacts.publishAndRegister("garbage");authorityStore.close();let db=new DatabaseSync(database);upgradeAuthority(db,artifacts);const intent=planRetention(db,"workspace-a",record.digest,"intent-a");assert.equal(intent.state,"pending");rmSync(join(artifacts,record.relativePath));db.close();db=new DatabaseSync(database);upgradeAuthority(db,artifacts);assert.equal(resumeRetention(db,artifacts),1);assert.equal(resumeRetention(db,artifacts),0);assert.equal((db.prepare("SELECT state FROM retention_intents WHERE intent_id='intent-a'").get() as {state:string}).state,"deleted");assert.equal((db.prepare("SELECT count(*) AS count FROM artifact_tombstones").get() as {count:number}).count,1);db.close();rmSync(root,{recursive:true,force:true});});
