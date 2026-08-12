@@ -12,7 +12,7 @@ import {
   type AttemptGenerationStateV1,
   type AttemptReceiptRecordedV1,
 } from "@horseness/domain";
-import { SQLiteAuthority } from "@horseness/store-sqlite";
+import { SQLiteAuthority, createOrLoadAuthorityCredential } from "@horseness/store-sqlite";
 import * as orchestrator from "../../src/index.js";
 import {
   emptyReceiptProjection,
@@ -91,7 +91,6 @@ const plainAuthority = (generationNumber = 1): AttemptAuthorityInputV1 => ({
 
 function storedCapabilities(generationNumber = 1, outcome: "succeeded" | "failed" = "succeeded") {
   const root = mkdtempSync(join(tmpdir(), "horseness-receipt-projection-"));
-  const reducers = ["receipt-event", "receipt-authority", "receipt-retry-decision", "receipt-cancellation"].map((projectionName) => ({ projectionName, projectionVersion: "1", match: "exact" as const, validate: () => undefined }));
   const databasePath = join(root, "authority.sqlite");
   const artifactRoot = join(root, "artifacts");
   const bootstrap = SQLiteAuthority.open(databasePath, artifactRoot);
@@ -111,7 +110,7 @@ function storedCapabilities(generationNumber = 1, outcome: "succeeded" | "failed
   const run = createRunGenesis({ observationCursor, initialDocument: {}, principalId: "coordinator", commandId: "run" });
   bootstrap.appendAtomic({ commandId: "run", runGenesis: { observationCursor, event: run.event } });
   bootstrap.close();
-  const { authority, reader } = SQLiteAuthority.openAuthenticatedWorkspace(databasePath, artifactRoot, { workspaceId: "w", sessionId: `receipt-${generationNumber}-${outcome}-${root}`, snapshotReducers: reducers });
+  const { authority, reader } = SQLiteAuthority.openAuthenticatedWorkspace(databasePath, artifactRoot, { workspaceId: "w", sessionId: `receipt-${generationNumber}-${outcome}-${root}`, credential:createOrLoadAuthorityCredential(databasePath,artifactRoot,"w") });
 
   const original = receipt(generationNumber);
   const value = outcome === "succeeded" ? original : sealAttemptReceipt({

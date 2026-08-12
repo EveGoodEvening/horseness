@@ -1,23 +1,14 @@
-import type { CompositeCursorV1, JsonValue } from "@horseness/domain";
+import { assertObservationCursorV1, type CompositeCursorV1, type JsonValue } from "@horseness/domain";
 import type { SQLiteAuthority, SnapshotRecord, StoredEvent } from "./sqlite-authority.js";
 import { StoreConflictError, StoreIntegrityError } from "./sqlite-authority.js";
 
 const trustedReaders = new WeakSet<object>();
 const readerIssuer = Object.freeze({});
 
-export type TrustedSnapshotValidator = (snapshot: Readonly<SnapshotRecord>) => void;
-export interface TrustedSnapshotReducerRegistrationV1 {
-  readonly projectionName: string;
-  readonly projectionVersion: string;
-  readonly match: "exact" | "prefix";
-  readonly validate: TrustedSnapshotValidator;
-}
-
 export interface AuthenticatedWorkspaceSessionV1 {
   readonly schemaVersion: "1";
   readonly workspaceId: string;
   readonly sessionId: string;
-  readonly snapshotReducers: readonly TrustedSnapshotReducerRegistrationV1[];
 }
 
 export interface AuthenticatedAuthorityViewV1 {
@@ -65,10 +56,8 @@ export class TrustedAuthorityReader {
     const snapshot = this.authority.latestSnapshot(workspaceId, "run", runId, projectionName, projectionVersion);
     if (!snapshot) throw new StoreIntegrityError(`trusted projection is missing: ${projectionName}`);
     if (snapshot.sequence !== view.cursor.runSequence || snapshot.envelopeHash !== view.cursor.runEnvelopeHash) throw new StoreConflictError(`trusted projection is stale: ${projectionName}`);
-    const registration = this.session.snapshotReducers.find(candidate => candidate.projectionVersion === projectionVersion && (candidate.match === "exact" ? candidate.projectionName === projectionName : projectionName.startsWith(candidate.projectionName)));
-    if (registration === undefined) throw new StoreIntegrityError(`trusted projection reducer is not registered: ${projectionName}@${projectionVersion}`);
     const copy = Object.freeze({ ...snapshot, state: structuredClone(snapshot.state) as JsonValue });
-    registration.validate(copy);
+    validateKnownProjection(copy);
     return copy;
   }
 }
@@ -80,4 +69,45 @@ export function issueTrustedAuthorityReader(authority: SQLiteAuthority, session:
 
 function requireReader(reader: TrustedAuthorityReader): void {
   if (!trustedReaders.has(reader)) throw new StoreIntegrityError("untrusted authority reader");
+}
+
+function objectState(snapshot: Readonly<SnapshotRecord>): Record<string, JsonValue> {
+  if (snapshot.projectionVersion !== "1" || snapshot.state === null || typeof snapshot.state !== "object" || Array.isArray(snapshot.state)) throw new StoreIntegrityError(`invalid trusted projection state: ${snapshot.projectionName}@${snapshot.projectionVersion}`);
+  return snapshot.state as Record<string, JsonValue>;
+}
+
+function stringField(state: Record<string, JsonValue>, name: string): string {
+  const value = state[name];
+  if (typeof value !== "string" || value.length === 0) throw new StoreIntegrityError(`invalid trusted projection field: ${name}`);
+  return value;
+}
+
+function cursorField(state: Record<string, JsonValue>, name: string): void {
+  try { assertObservationCursorV1(state[name]); } catch { throw new StoreIntegrityError(`invalid trusted projection cursor: ${name}`); }
+}
+
+/** Closed, versioned registry. Callers cannot install validators or turn validation into a no-op. */
+function validateKnownProjection(snapshot: Readonly<SnapshotRecord>): void {
+  const state = objectState(snapshot), name = snapshot.projectionName;
+  if (name === "fork-source" || name === "fork-authorization") {
+    if (state.schemaVersion !== "1") throw new StoreIntegrityError("invalid fork authority schema");
+    stringField(state, "workspaceId"); stringField(state, "runId"); cursorField(state, "observationCursor");
+    return;
+  }
+  if (["receipt-event", "receipt-authority", "receipt-retry-decision", "receipt-cancellation"].includes(name)) {
+    if (name !== "receipt-authority") { const sequence = state.eventSequence; if (!Number.isSafeInteger(sequence) || (sequence as number) < 1) throw new StoreIntegrityError("invalid receipt projection sequence"); }
+    return;
+  }
+  if (name.startsWith("durable-authority-event/")) {
+    if (state.envelope === null || typeof state.envelope !== "object" || state.resultCursor === null || typeof state.resultCursor !== "object") throw new StoreIntegrityError("invalid durable authority projection");
+    cursorField(state, "resultCursor"); stringField(state, "envelopeHash"); return;
+  }
+  if (name.startsWith("task-resolution/")) {
+    stringField(state, "workspaceId"); stringField(state, "runId"); stringField(state, "taskId"); stringField(state, "eventDigest");
+    if (!Number.isSafeInteger(state.eventSequence) || (state.eventSequence as number) < 1) throw new StoreIntegrityError("invalid task resolution sequence"); return;
+  }
+  if (name.startsWith("task-authority/")) {
+    stringField(state, "taskId"); stringField(state, "kind"); return;
+  }
+  throw new StoreIntegrityError(`trusted projection family is not registered: ${name}@${snapshot.projectionVersion}`);
 }

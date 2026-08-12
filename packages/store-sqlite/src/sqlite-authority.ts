@@ -1,12 +1,14 @@
 import { DatabaseSync } from "node:sqlite";
-import { resolve } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { dirname, join, resolve } from "node:path";
 import { canonicalJson, domainDigest, parseDomainEventPayloadV1, parseObservationCursorV1, verifyEventChain, type AbsentRunGenesisCursorV1, type DomainEventPayloadV1, type HashedEventEnvelopeV1, type JsonValue, type RunCreatedV1, type RunEventPayloadV1, type WorkspaceEventPayloadV1 } from "@horseness/domain";
 import { ArtifactStore } from "./artifact-store.js";
 import { noCrash, type CrashInjector } from "./crash.js";
 import { inspectMigrationLedger, migrate } from "./migrations.js";
 import { upgradeAuthority } from "./migrations/index.js";
 import { recoverInterruptedRestore } from "./restore/index.js";
-import { issueTrustedAuthorityReader, type TrustedAuthorityReader, type AuthenticatedWorkspaceSessionV1, type TrustedSnapshotReducerRegistrationV1 } from "./trusted-reader.js";
+import { issueTrustedAuthorityReader, type TrustedAuthorityReader, type AuthenticatedWorkspaceSessionV1 } from "./trusted-reader.js";
 
 export type EventStream="workspace"|"run";
 export type StoredEvent=HashedEventEnvelopeV1<DomainEventPayloadV1>;
@@ -18,16 +20,40 @@ export interface SnapshotRecord { workspaceId:string; streamKind:EventStream; st
 export interface ArtifactPublication { data:Uint8Array|string; mediaType?:string|null; references?:readonly {ownerKind:string;ownerId:string;allowExistingEvent?:true}[]; pins?:readonly {pinId:string}[] }
 export interface AtomicProjectionUpdate { workspaceId:string; name:string; version:string; streamKind:EventStream; streamId:string; lastSequence:number; lastEnvelopeHash:string|null }
 export interface AtomicSnapshotUpdate extends SnapshotRecord {}
-export interface AuthenticatedWorkspaceOpenV1 { workspaceId:string; sessionId:string; snapshotReducers:readonly TrustedSnapshotReducerRegistrationV1[] }
+const authorityCredentialBrand:unique symbol=Symbol("authorityCredential");
+export interface AuthorityCredentialV1 { readonly schemaVersion:"1"; readonly authorityId:string; readonly workspaceId:string; readonly databasePath:string; readonly artifactRoot:string; readonly proof:string; readonly [authorityCredentialBrand]:true }
+export interface AuthenticatedWorkspaceOpenV1 { workspaceId:string; sessionId:string; credential:AuthorityCredentialV1 }
 export interface PublishAndAppendRequest extends AtomicAppendRequest { artifacts:readonly ArtifactPublication[]; requiredArtifactDigests?:readonly string[]; projections?:readonly AtomicProjectionUpdate[]; snapshots?:readonly AtomicSnapshotUpdate[] }
 export class StoreConflictError extends Error { constructor(message:string){super(message);this.name="StoreConflictError";} }
 export class StoreIntegrityError extends Error { constructor(message:string){super(message);this.name="StoreIntegrityError";} }
 const now=():string=>new Date().toISOString();
 const activeWorkspaceSessions=new Map<string,{sessionId:string;authority:WeakRef<SQLiteAuthority>}>();
+const issuedCredentials=new WeakSet<object>();
+const MANIFEST=".horseness-authority.v1.json",SECRET=".horseness-authority.v1.key";
+type AuthorityManifestV1={schemaVersion:"1";authorityId:string;workspaceId:string;databasePath:string;artifactRoot:string;secretDigest:string};
+const digest=(value:string|Buffer):string=>createHash("sha256").update(value).digest("hex");
+function canonicalExisting(path:string):string {const absolute=resolve(path);return existsSync(absolute)?realpathSync(absolute):absolute;}
+function credentialProof(manifest:AuthorityManifestV1,secret:Buffer):string{return digest(Buffer.concat([Buffer.from(canonicalJson(manifest as unknown as JsonValue)),Buffer.from([0]),secret]));}
+
+export function createOrLoadAuthorityCredential(databasePath:string,artifactRoot:string,workspaceId:string):AuthorityCredentialV1 {
+  if(!workspaceId)throw new StoreIntegrityError("invalid authority credential workspace");
+  const db=canonicalExisting(databasePath),artifacts=canonicalExisting(artifactRoot);mkdirSync(dirname(db),{recursive:true,mode:0o700});mkdirSync(artifacts,{recursive:true,mode:0o700});
+  const manifestPath=join(artifacts,MANIFEST),secretPath=join(artifacts,SECRET);let manifest:AuthorityManifestV1,secret:Buffer;
+  if(existsSync(manifestPath)||existsSync(secretPath)){
+    if(!existsSync(manifestPath)||!existsSync(secretPath))throw new StoreIntegrityError("incomplete authority credential");
+    manifest=JSON.parse(readFileSync(manifestPath,"utf8")) as AuthorityManifestV1;secret=readFileSync(secretPath);
+  }else{
+    secret=randomBytes(32);manifest={schemaVersion:"1",authorityId:randomUUID(),workspaceId,databasePath:db,artifactRoot:artifacts,secretDigest:digest(secret)};
+    writeFileSync(secretPath,secret,{flag:"wx",mode:0o600});writeFileSync(manifestPath,`${canonicalJson(manifest as unknown as JsonValue)}\n`,{flag:"wx",mode:0o600});chmodSync(secretPath,0o600);chmodSync(manifestPath,0o600);
+  }
+  if(manifest.schemaVersion!=="1"||!manifest.authorityId||manifest.workspaceId!==workspaceId||manifest.databasePath!==db||manifest.artifactRoot!==artifacts||secret.length!==32||!timingSafeEqual(Buffer.from(manifest.secretDigest),Buffer.from(digest(secret))))throw new StoreIntegrityError("authority credential binding mismatch");
+  const credential=Object.freeze({schemaVersion:"1" as const,authorityId:manifest.authorityId,workspaceId,databasePath:db,artifactRoot:artifacts,proof:credentialProof(manifest,secret),[authorityCredentialBrand]:true as const});issuedCredentials.add(credential);return credential;
+}
 
 export class SQLiteAuthority {
   readonly db:DatabaseSync; readonly artifacts:ArtifactStore;
   private readonly authorityIdentity:string;
+  private trustedAuthorityId:string|null=null;
   private trustedSession:AuthenticatedWorkspaceSessionV1|null=null;
   constructor(databasePath:string,artifactRoot:string,private readonly crash:CrashInjector=noCrash,verifiedOpen=false){
     this.authorityIdentity=resolve(databasePath);
@@ -47,22 +73,23 @@ export class SQLiteAuthority {
   }
   static openAuthenticatedWorkspace(databasePath:string,artifactRoot:string,binding:AuthenticatedWorkspaceOpenV1,crash:CrashInjector=noCrash):{authority:SQLiteAuthority;reader:TrustedAuthorityReader}{
     if(binding.workspaceId.length===0||binding.sessionId.length===0)throw new StoreIntegrityError("invalid authenticated workspace session identity");
+    if(!issuedCredentials.has(binding.credential)||binding.credential.workspaceId!==binding.workspaceId||binding.credential.databasePath!==canonicalExisting(databasePath)||binding.credential.artifactRoot!==canonicalExisting(artifactRoot))throw new StoreIntegrityError("authority credential is not valid for requested workspace and paths");
     const authority=SQLiteAuthority.open(databasePath,artifactRoot,crash);
     try{
       const workspaceRows=authority.replay(binding.workspaceId,"workspace",binding.workspaceId);
       if(workspaceRows.length===0)throw new StoreIntegrityError("authenticated workspace does not exist in authority");
-      const sessionKey=`${authority.authorityIdentity}\u0000${binding.workspaceId}`;
+      const sessionKey=`${binding.credential.authorityId}\u0000${binding.workspaceId}`;
       const existing=activeWorkspaceSessions.get(sessionKey), live=existing?.authority.deref();
       if(live!==undefined&&live!==authority)throw new StoreConflictError("workspace already belongs to another active authority session");
       if(existing!==undefined&&existing.sessionId!==binding.sessionId)throw new StoreConflictError("workspace authority session identity mismatch");
-      if(binding.snapshotReducers.some(registration=>registration.projectionName.length===0||registration.projectionVersion.length===0))throw new StoreIntegrityError("invalid trusted snapshot reducer registration");
-      const session=Object.freeze({schemaVersion:"1" as const,workspaceId:binding.workspaceId,sessionId:binding.sessionId,snapshotReducers:Object.freeze(binding.snapshotReducers.map(registration=>Object.freeze({...registration})))});
+      const session=Object.freeze({schemaVersion:"1" as const,workspaceId:binding.workspaceId,sessionId:binding.sessionId});
+      authority.trustedAuthorityId=binding.credential.authorityId;
       authority.trustedSession=session;
       activeWorkspaceSessions.set(sessionKey,{sessionId:binding.sessionId,authority:new WeakRef(authority)});
       return {authority,reader:issueTrustedAuthorityReader(authority,session)};
     }catch(error){authority.close();throw error;}
   }
-  close():void{if(this.trustedSession!==null){const sessionKey=`${this.authorityIdentity}\u0000${this.trustedSession.workspaceId}`;const current=activeWorkspaceSessions.get(sessionKey);if(current?.authority.deref()===this)activeWorkspaceSessions.delete(sessionKey);this.trustedSession=null;}this.db.close();}
+  close():void{if(this.trustedSession!==null){const sessionKey=`${this.trustedAuthorityId??this.authorityIdentity}\u0000${this.trustedSession.workspaceId}`;const current=activeWorkspaceSessions.get(sessionKey);if(current?.authority.deref()===this)activeWorkspaceSessions.delete(sessionKey);this.trustedSession=null;this.trustedAuthorityId=null;}this.db.close();}
   migrationVersions():number[]{return (this.db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as {version:number}[]).map(r=>r.version);}
   private validateAppend<T extends DomainEventPayloadV1>(request:AppendRequest<T>):void {
     if(request.events.length===0)throw new StoreIntegrityError("empty append");
