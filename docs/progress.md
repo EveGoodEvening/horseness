@@ -4,9 +4,9 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 
 ## Global status
 
-- **Planning state:** C00, C01, C02, C03, C04, C05, C06, and C07 are complete; C08 is in progress; F001/F002 are closed; R001/R002 are complete
-- **Active claims:** C08 from integrated base `935c02e`; tracker claim transaction pending integration before source edits
-- **Next eligible:** none while C08 is active; C09 remains dependency-ineligible
+- **Planning state:** C00, C01, C02, C03, C04, C05, C06, C07, and C08 are complete; F001/F002 are closed; R001/R002 are complete
+- **Active claims:** none
+- **Next eligible:** C09 is the sole dependency-ready chunk
 - **Active blockers:** none
 - **Last integrated receipt:** immutable C01 `docs/checkpoints/C01/final/1.json`, envelope digest `17ddd75b49e35d3bf6f432c8c6acca30b4a66512229453aca4fc63e7f427ea7d`, indexed at A01 commit `223023330cb000b759d8a8b2419514638c1aa179`; receipt/index bytes must not be overwritten
 - **Release readiness:** not started
@@ -31,8 +31,8 @@ For C02 onward: commit the two tracker files to claim a dependency-ready chunk; 
 | C05 | SQLite 0001/artifacts | C04 | complete; claim `6259949`; implementation `13e765e`; review fixes `0adcd98`, `f7acb74`, `ef4a921`, `6f587c8`; relevant tracker commit `bd44a2b`; final candidate `6f587c8`; Node 22 gates green: typecheck exit 0, migration 9/9, crash matrix 43/43; two definitive reviews clean |
 | C06 | Recovery/import/retention | C05 | complete; claim `f469bd7`; implementation `c85f741`; review fixes `0f95464`, `0814993`, `4ee725f`, `bbec9e8`, `c022c4c`, `6d898b5`; final candidate `6d898b5`; Node 22 gates green: typecheck exit 0, full test 58/58, recovery 30/30, import-retention 10/10; final in-scope blocker/high review clean |
 | C07 | Admission service | C06 | complete; claim `eefbd9e`; implementation `6999bea`; review fixes `a247df9`, `9ad86da`, `bd4a105`, `da49adc`, `b3fd849`; ownership correction integrated at `9ad86da`; final candidate `b3fd849`; completion `935c02e`; Node 22 gates green: orchestrator typecheck exit 0, admission 19/19; supplemental domain typecheck exit 0 and tests 41/41; clean final review |
-| C08 | Task/fork projections | C07 | in-progress; claimed from integrated base `935c02e`; tracker claim transaction must precede source edits; three ordered gates frozen in `docs/progress/C08.md` |
-| C09 | Context reconstruction | C08 | not-started; dependency-ineligible while C08 is in progress |
+| C08 | Task/fork projections | C07 | complete; claim `d6bfd42`; implementation `171b86d`; review fixes `f7721d5`, `241a977`, `219f740`, `3c87b2a`, `2a3c873`; final candidate `2a3c873`; Node 22 gates green: orchestrator typecheck exit 0, task/fork/receipt 16/16, model 6/6; supplemental store typecheck exit 0 and tests 61/61; clean final review |
+| C09 | Context reconstruction | C08 | not-started; sole next dependency-ready chunk |
 | C10 | Scheduler/dispatch | C09 | not-started |
 | C11 | Four-host feasibility | C10 | not-started |
 | C12 | SDK/adapter kit | C11 | not-started |
@@ -64,8 +64,8 @@ C06 is complete. Tracker claim commit `f469bd7` preceded source edits; implement
 
 C07 is complete. Tracker claim commit `eefbd9e` preceded source edits; implementation commit `6999bea` and review-fix commits `a247df9`, `9ad86da`, `bd4a105`, `da49adc`, and `b3fd849` are integrated, with final candidate `b3fd849` and completion commit `935c02e`. Commit `9ad86da` recorded the reviewed narrow ownership correction for additive domain event, receipt, reducer, and focused test coverage after review discovered the need; the retained-history exception did not broaden ownership beyond the recorded paths. Both literal C07 gates ran in order under Node 22 with exact environment `CI=1 TZ=UTC LANG=C NODE_OPTIONS=--unhandled-rejections=strict`: orchestrator typecheck exit 0 and `test:admission` 19/19. Supplemental domain verification reported typecheck exit 0 and 41/41 tests. The final blocker/high review was clean, and all C07 checklist items are checked.
 
-C08 is claimed from integrated base `935c02e`. This tracker transaction must be committed before any C08 source edit. Exact ownership is limited to orchestrator task, fork, receipt, and projection source/tests; the orchestrator public index and package manifest; the lockfile; `.changeset/C08-orchestrator-projections.md`; and the two C08 tracker files, as enumerated in `docs/progress/C08.md`. Its three literal gates are orchestrator typecheck, `test:tasks-forks-receipts`, and `test:model`, in that order under the frozen Node 22 environment. C09 remains ineligible until C08 completes.
+C08 is complete. Tracker claim commit `d6bfd42` preceded source edits; implementation commit `171b86d` and review-fix commits `f7721d5`, `241a977`, `219f740`, `3c87b2a`, and `2a3c873` are integrated, with final candidate `2a3c873`. All three literal C08 gates ran in order under Node 22 with exact environment `CI=1 TZ=UTC LANG=C NODE_OPTIONS=--unhandled-rejections=strict`: orchestrator typecheck exit 0, `test:tasks-forks-receipts` 16/16, and `test:model` 6/6. Supplemental trusted-authority verification reported store typecheck exit 0 and 61/61 store tests. The final blocker/high review was clean, all C08 checklist items are checked, no blockers remain, and C09 is the sole next dependency-ready chunk.
 
 ## Planning review status
 
-The bootstrap workflow blocker remains closed. C02, C03, C04, C05, C06, and C07 are complete with all accepted in-scope review findings resolved and exact acceptance evidence recorded. C07 completed at final candidate `b3fd849` after claim `eefbd9e`, implementation `6999bea`, review fixes `a247df9`, `9ad86da`, `bd4a105`, `da49adc`, and `b3fd849`, and completion commit `935c02e`; ownership correction commit `9ad86da` records the reviewed narrow additive domain extension and retained-history context. Its exact Node 22 gates passed with orchestrator typecheck exit 0 and admission tests 19/19; supplemental domain typecheck exited 0 and domain tests passed 41/41. The final review was clean. C08 is now the sole active claimed chunk, C09 is dependency-ineligible, and no recursive development-attestation work is required.
+The bootstrap workflow blocker remains closed. C02 through C08 are complete with all accepted in-scope review findings resolved and exact acceptance evidence recorded. C08 completed at final candidate `2a3c873` after claim `d6bfd42`, implementation `171b86d`, and review fixes `f7721d5`, `241a977`, `219f740`, `3c87b2a`, and `2a3c873`. Its exact Node 22 gates passed with orchestrator typecheck exit 0, task/fork/receipt tests 16/16, and model tests 6/6; supplemental store typecheck exited 0 and store tests passed 61/61. The final review was clean, no blocker is active, and C09 is the sole next dependency-ready chunk.
