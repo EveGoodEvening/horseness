@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
-import { canonicalJson, contextManifestCoreDigest, domainDigest, parseDomainEventPayloadV1, parseObservationCursorV1, sealEventEnvelope, verifyEventChain, type AbsentRunGenesisCursorV1, type ContextManifestRecordV1, type DomainEventPayloadV1, type HashedEventEnvelopeV1, type JsonValue, type RunCreatedV1, type RunEventPayloadV1, type WorkspaceEventPayloadV1 } from "@horseness/domain";
+import { attemptContextBindingDigest, canonicalJson, contextManifestCoreDigest, domainDigest, parseDomainEventPayloadV1, parseObservationCursorV1, sealEventEnvelope, verifyEventChain, type AbsentRunGenesisCursorV1, type AttemptContextBindingV1, type ContextManifestRecordV1, type DomainEventPayloadV1, type HashedEventEnvelopeV1, type JsonValue, type RunCreatedV1, type RunEventPayloadV1, type WorkspaceEventPayloadV1 } from "@horseness/domain";
 import { ArtifactStore } from "./artifact-store.js";
 import { noCrash, type CrashInjector } from "./crash.js";
 import { inspectMigrationLedger, migrate } from "./migrations.js";
@@ -26,7 +26,7 @@ export interface AuthenticatedWorkspaceOpenV1 { workspaceId:string; sessionId:st
 export interface PublishAndAppendRequest extends AtomicAppendRequest { artifacts:readonly ArtifactPublication[]; requiredArtifactDigests?:readonly string[]; projections?:readonly AtomicProjectionUpdate[]; snapshots?:readonly AtomicSnapshotUpdate[] }
 export interface ContextManifestPublicationRequestV1 {
   workspaceId:string; runId:string; attemptId:string; generation:number; manifestBytes:Uint8Array;
-  contextManifestCoreDigest:string; attemptContextBindingDigest:string; renderedOutputDigest:string;
+  contextManifestCoreDigest:string; attemptContextBindingDigest:string; binding:AttemptContextBindingV1; renderedOutputDigest:string;
   principalId:string; commandId:string;
 }
 export interface ContextManifestPublicationResultV1 extends AppendResult { artifactDigest:string; byteLength:number; eventId:string }
@@ -173,8 +173,10 @@ export class SQLiteAuthority {
       manifest=JSON.parse(text) as ContextManifestRecordV1;
       if(canonicalJson(manifest as unknown as JsonValue)!==text)throw new StoreIntegrityError("context manifest bytes are not canonical");
       if(manifest.contextManifestCoreDigest!==request.contextManifestCoreDigest||contextManifestCoreDigest(manifest.core)!==request.contextManifestCoreDigest)throw new StoreIntegrityError("context manifest core digest mismatch");
-      if(manifest.attemptContextBindingDigest!==request.attemptContextBindingDigest)throw new StoreIntegrityError("context binding digest mismatch");
+      if(request.binding.schemaVersion!=="1"||request.binding.expectedReceiptSchemaVersion!=="1"||!request.binding.attemptId||!request.binding.forkPinDigest||!request.binding.contextManifestCoreDigest||!request.binding.providerIdempotencyKey||!request.binding.allowedProducerPrincipalId||!request.binding.allowedProducerGrantDigest||!Number.isSafeInteger(request.binding.generation)||request.binding.generation<1)throw new StoreIntegrityError("invalid context binding identity");
+      if(manifest.attemptContextBindingDigest!==request.attemptContextBindingDigest||attemptContextBindingDigest(request.binding)!==request.attemptContextBindingDigest)throw new StoreIntegrityError("context binding digest mismatch");
       if(manifest.core.workspaceId!==request.workspaceId||manifest.core.runId!==request.runId||manifest.core.attemptId!==request.attemptId||manifest.core.generation!==request.generation)throw new StoreIntegrityError("context manifest publication identity mismatch");
+      if(request.binding.contextManifestCoreDigest!==manifest.contextManifestCoreDigest||request.binding.attemptId!==manifest.core.attemptId||request.binding.generation!==manifest.core.generation||request.binding.forkPinDigest!==manifest.core.forkPinDigest||canonicalJson(request.binding.sourceObservationCursor as unknown as JsonValue)!==canonicalJson(manifest.core.sourceObservationCursor as unknown as JsonValue)||canonicalJson(request.binding.sourceContextVersion as unknown as JsonValue)!==canonicalJson(manifest.core.sourceContextVersion as unknown as JsonValue)||canonicalJson(request.binding.authorizationObservationCursor as unknown as JsonValue)!==canonicalJson(manifest.core.authorizationObservationCursor as unknown as JsonValue)||canonicalJson(request.binding.authorizationContextVersion as unknown as JsonValue)!==canonicalJson(manifest.core.authorizationContextVersion as unknown as JsonValue))throw new StoreIntegrityError("context manifest and binding mismatch");
       if(manifest.core.renderedOutputDigest!==request.renderedOutputDigest)throw new StoreIntegrityError("rendered context digest mismatch");
     }catch(error){if(error instanceof StoreIntegrityError)throw error;throw new StoreIntegrityError(`invalid context manifest publication: ${error instanceof Error?error.message:String(error)}`);}
     const artifactDigest=digest(Buffer.from(request.manifestBytes));
