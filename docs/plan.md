@@ -160,7 +160,7 @@ Only these bounded path sets replace all earlier shorthand:
 | C05 | `packages/store-sqlite/**`, `docs/migrations.md` |
 | C06 | `packages/store-sqlite/src/{migrations,recovery,backup,restore,import,retention}/**`, `packages/store-sqlite/test/{migrations,recovery,backup,restore,import,retention}/**`, `tests/fixtures/{databases,imports}/**`, `docs/{migrations.md,operations/storage.md}` |
 | C07 | `packages/orchestrator/src/{admission,authorization,revisions}/**`, `packages/orchestrator/test/{admission,authorization,revisions}/**`; narrow additive domain extension only: `packages/domain/src/events.ts`, `packages/domain/src/receipt.ts`, and `packages/domain/test/domain.test.ts` |
-| C08 | `packages/orchestrator/src/{tasks,forks,receipts,projections}/**`, `packages/orchestrator/test/{tasks,forks,receipts,projections}/**` |
+| C08 | `packages/orchestrator/src/{tasks,forks,receipts,projections}/**`, `packages/orchestrator/test/{tasks,forks,receipts,projections}/**`; narrow reviewed ownership correction: additive C08 surface exports only in `packages/orchestrator/src/index.ts` so downstream C09 imports the package root |
 | C09 | `packages/orchestrator/src/context/**`, `packages/orchestrator/test/context/**`, `docs/context.md` |
 | C10 | `packages/orchestrator/src/{scheduler,attempts,leases,dispatch,recovery}/**`, `packages/orchestrator/test/{scheduler,attempts,leases,dispatch,recovery}/**` |
 | C11 | `tests/fixtures/hosts/**`, `tests/host-feasibility/**`, `scripts/host-feasibility/**`, `config/hosts/capability-matrix.v1.json`, `docs/{compatibility.md,integrations/feasibility.md}`, `package.json`, `pnpm-lock.yaml` |
