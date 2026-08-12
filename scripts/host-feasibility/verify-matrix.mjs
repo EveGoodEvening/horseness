@@ -12,10 +12,12 @@ for (const host of HOSTS) {
   assertManifest(manifest);
   const row = matrix.hosts[host];
   if (!row || row.fixture !== `tests/fixtures/hosts/${host}/manifest.v1.json` || row.validator !== `scripts/host-feasibility/${host}/validate.mjs`) throw new Error(`${host}: matrix path mismatch`);
-  if (row.native.version !== manifest.native.version || row.native.distributionDigest !== manifest.native.distributionDigest) throw new Error(`${host}: native pin mismatch`);
-  if (row.officialValidator.version !== manifest.officialValidator.version || row.officialValidator.distributionDigest !== manifest.officialValidator.distributionDigest) throw new Error(`${host}: validator pin mismatch`);
+  for (const field of ["identity", "version", "registryUrl", "packageIntegrity", "archiveSha256", "cacheKey"]) if (row.artifact?.[field] !== manifest.artifact[field]) throw new Error(`${host}: independently pinned artifact ${field} mismatch`);
+  if (row.artifact?.executable?.path !== manifest.artifact.executable.path || row.artifact?.executable?.sha256 !== manifest.artifact.executable.sha256) throw new Error(`${host}: executable pin mismatch`);
+  if (row.officialValidation?.kind !== manifest.officialValidation.kind) throw new Error(`${host}: official validation kind mismatch`);
+  if (JSON.stringify(row.officialValidation) !== JSON.stringify(manifest.officialValidation)) throw new Error(`${host}: official validation provenance mismatch`);
   for (const capability of CAPABILITIES) if (typeof row.capabilities[capability] !== "boolean") throw new Error(`${host}: missing capability ${capability}`);
-  for (const capability of manifest.capabilities.required) if (!row.capabilities[capability]) throw new Error(`${host}: required capability unsupported`);
+  for (const capability of manifest.requiredCapabilities) if (!row.capabilities[capability]) throw new Error(`${host}: required capability was not observed`);
 }
 if (matrix.deterministicProvider.network !== "disabled" || matrix.deterministicProvider.credentials !== "disabled") throw new Error("matrix provider is not hermetic");
 if (matrix.credentialedLivePolicy.absentCredential !== "skip-local-fail-publication" || matrix.credentialedLivePolicy.configuredCredentialFailure !== "fail") throw new Error("live policy mismatch");

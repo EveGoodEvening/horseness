@@ -1,32 +1,41 @@
 {
   "schemaVersion": "HostFixtureManifestV1",
   "host": "pi",
-  "native": {
-    "binary": "artifacts/pi-native.mjs",
+  "artifact": {
+    "identity": "npm:@mariozechner/pi-coding-agent@0.73.1",
     "version": "0.73.1",
-    "distributionIdentity": "npm:@mariozechner/pi-coding-agent@0.73.1#dist/cli.js",
-    "distributionDigest": "sha256:ab93d8ab31f61078171c7949ba25abad3fd341615040a999e64a5bcc44e86e42",
-    "mode": "native"
+    "registryUrl": "https://registry.npmjs.org/",
+    "packageIntegrity": "sha512-gXQh3SaZmWTfVMc4Ao5+LGbVeKvzyO7tolok0nLsZgq9nGjZx/EEU3NM8C+qUnB4Nvs2rswG5qOVgLzQkq0fHQ==",
+    "archiveSha256": "sha256:7bf5d492670c04fd7c599dee7e6eaabff964084affd216766107e6741df7a2e1",
+    "cacheKey": "pi-coding-agent-0.73.1",
+    "executable": { "path": "dist/cli.js", "sha256": "sha256:e959f463b06ddd15ed882783ac02f39ecaeef950ef967da86380f39dda6595fa" }
   },
-  "officialValidator": {
-    "command": "artifacts/pi-official-validator.mjs",
-    "version": "0.73.1",
-    "distributionIdentity": "npm:@mariozechner/pi-coding-agent@0.73.1#native-extension-contract",
-    "distributionDigest": "sha256:942d6f16db4964daf6c60abd93dd0e62543f1099e1165c6b295bc21ea714b648"
+  "officialValidation": {
+    "kind": "same-distribution-interface",
+    "provenance": {
+      "artifactIdentity": "npm:@mariozechner/pi-coding-agent@0.73.1",
+      "interfacePath": "dist/core/extensions/loader.js",
+      "interfaceSha256": "sha256:0ffd7839e5626779e4e4d20cd55e647a7a9234a293025c6f1f361e7107e62a6b"
+    },
+    "command": ["node", "dist/core/extensions/loader.js", "loadExtensions"]
   },
-  "capabilities": {
-    "required": ["nativeArtifactLoad", "contextInjection", "deterministicProviderAttempt", "receiptBinding", "restartReconcile", "resume", "forkSwitch", "uninstall"],
-    "supported": ["nativeArtifactLoad", "contextInjection", "deterministicProviderAttempt", "receiptBinding", "restartReconcile", "resume", "forkSwitch", "uninstall"]
+  "requiredCapabilities": ["nativeArtifactLoad", "contextInjection", "deterministicProviderAttempt", "receiptBinding", "restartReconcile", "resume", "forkSwitch", "uninstall"],
+  "sandbox": {
+    "protocolVersion": "HostSandboxLifecycleV1",
+    "lifecycle": ["acquire", "verify-provenance", "install", "discover", "load", "inject-context", "attempt", "collect-receipt", "restart", "reconcile", "resume", "fork-switch", "uninstall", "audit-outputs"],
+    "workRoot": "pi-native-sandbox",
+    "network": "disabled",
+    "credentials": "disabled",
+    "allowedOutputs": ["state.json"]
   },
-  "resume": {"supported": true, "bindingPreserved": true, "operationReattached": true},
   "provider": {
     "identity": "horseness-local-pi-v1",
     "requestFixture": "provider-request.json",
     "responseFixture": "provider-response.json",
     "clock": "2026-01-01T00:00:00Z",
-    "budget": 4096,
+    "budget": { "maxInputBytes": 4096, "maxOutputBytes": 4096 },
     "network": "disabled",
     "credentials": "disabled"
   },
-  "livePolicy": {"credentialReference": "HORSENESS_PI_CREDENTIAL_REF", "publicationRequired": false, "timeoutMs": 30000, "budget": 4096}
+  "livePolicy": { "credentialReference": "HORSENESS_PI_CREDENTIAL_REF", "publicationRequired": false, "timeoutMs": 30000, "budget": { "maxInputBytes": 4096, "maxOutputBytes": 4096 } }
 }

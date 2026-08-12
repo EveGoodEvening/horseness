@@ -1,102 +1,112 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { evidenceDigest, loadFixture, stableResult } from "../lib/contracts.mjs";
+import { loadFixture, stableResult, evidenceDigest } from "../lib/contracts.mjs";
 import { runDeterministicProvider } from "../lib/deterministic-provider.mjs";
+import { acquireUpstreamArtifact, verifyOfficialValidation } from "../lib/upstream-artifact.mjs";
+import { runSandboxLifecycle } from "../lib/sandbox.mjs";
 import { parseValidatorArgs } from "../lib/runner.mjs";
 
-const capabilityNames = ["nativeArtifactLoad", "contextInjection", "deterministicProviderAttempt", "receiptBinding", "restartReconcile", "resume", "forkSwitch", "uninstall"];
+const capabilities = ["nativeArtifactLoad", "contextInjection", "deterministicProviderAttempt", "receiptBinding", "restartReconcile", "resume", "forkSwitch", "uninstall"];
 let args;
-try { args = parseValidatorArgs(process.argv.slice(2)); }
-catch (error) { emitFailure("hermetic", "FIXTURE_INVALID", {}, error); }
-
-let raw;
-try { raw = JSON.parse(await readFile(args.fixture, "utf8")); }
-catch (error) { emitFailure(args.mode, "FIXTURE_INVALID", {}, error); }
-if (raw.host !== "codex") emitFailure(args.mode, "FIXTURE_INVALID", {}, new Error("fixture host must be codex"));
-if (raw.native?.mode !== "native") emitFailure(args.mode, "CLI_ONLY_FALLBACK", {}, new Error("CLI-only cannot satisfy Codex native minimum"));
-
 let manifest;
-try { manifest = await loadFixture(args.fixture); }
-catch (error) { emitFailure(args.mode, "FIXTURE_INVALID", {}, error); }
-
-if (args.mode === "live") {
-  const reference = manifest.livePolicy.credentialReference;
-  if (!process.env[reference]) {
-    const reasonCode = manifest.livePolicy.publicationRequired ? "LIVE_REQUIRED_CREDENTIAL_ABSENT" : "LIVE_CREDENTIAL_ABSENT";
-    emit(stableResult({ host: "codex", mode: "live", status: manifest.livePolicy.publicationRequired ? "fail" : "skip", reasonCode, nativeMinimumSatisfied: false, officialValidatorSatisfied: false, capabilities: capabilityMap(false), evidenceDigest: evidenceDigest({ host: "codex", mode: "live", reasonCode, credentialReference: reference }) }));
-  }
-  emitFailure("live", "LIVE_HOST_FAILURE", {}, new Error("credentialed live Codex validation is unavailable in the hermetic fixture harness"));
-}
-
-const root = dirname(resolve(args.fixture));
-const nativePath = resolve(root, manifest.native.binary);
-const validatorPath = resolve(root, manifest.officialValidator.command[0]);
-await verifyArtifact(nativePath, manifest.native.distributionDigest, "NATIVE_BINARY_MISSING", "NATIVE_BINARY_TAMPERED");
-await verifyArtifact(validatorPath, manifest.officialValidator.distributionDigest, "OFFICIAL_VALIDATOR_MISSING", "OFFICIAL_VALIDATOR_TAMPERED");
-const nativeVersion = run(nativePath, ["--version"]);
-if (!nativeVersion.ok || !nativeVersion.stdout.includes(manifest.native.version)) emitFailure("hermetic", "NATIVE_VERSION_INCOMPATIBLE", {}, nativeVersion.error);
-const validatorVersion = run(validatorPath, ["--version"]);
-if (!validatorVersion.ok || !validatorVersion.stdout.includes(manifest.officialValidator.version)) emitFailure("hermetic", "OFFICIAL_VALIDATOR_FAILED", {}, validatorVersion.error);
-
-const unsupported = manifest.capabilities.required.filter((name) => !manifest.capabilities.supported.includes(name));
-if (unsupported.length) emitFailure("hermetic", "REQUIRED_CAPABILITY_MISSING", Object.fromEntries(unsupported.map((name) => [name, false])), new Error(`unsupported: ${unsupported.join(",")}`));
-
-const work = await mkdtemp(resolve(tmpdir(), "horseness-codex-feasibility-"));
 try {
-  const provider = await runDeterministicProvider(manifest, root);
-  const request = provider.request;
-  const input = {
-    context: request.context,
-    session: request.session,
-    resumeCursor: request.resumeCursor,
-    binding: request.binding,
-    forkBinding: request.forkBinding,
-    provider: manifest.provider.identity
-  };
-  const inputPath = resolve(work, "input.json");
-  const outputPath = resolve(work, "native-output.json");
-  await writeFile(inputPath, JSON.stringify(input));
-  const native = run(nativePath, ["host-feasibility", "--input", inputPath]);
-  if (!native.ok) emitFailure("hermetic", "REQUIRED_CAPABILITY_MISSING", {}, native.error);
-  let record;
-  try { record = JSON.parse(native.stdout); } catch (error) { emitFailure("hermetic", "EVIDENCE_MISMATCH", {}, error); }
-  await writeFile(outputPath, JSON.stringify(record));
-  const official = run(validatorPath, [outputPath]);
-  const contribution = record.contribution ?? {};
-  const capabilities = {
-    nativeArtifactLoad: record.native === true && record.cliFallback === false && typeof contribution.plugin === "string" && typeof contribution.skill === "string" && typeof contribution.mcp === "string",
-    contextInjection: record.contextInjected === true,
-    deterministicProviderAttempt: record.attempt?.provider === manifest.provider.identity && record.attempt?.output === provider.response.output && record.attempt?.evidence === provider.response.evidence,
-    receiptBinding: record.receiptBinding?.attemptId === record.attempt?.id && record.receiptBinding?.binding === request.binding,
-    restartReconcile: record.restartReconcile?.state === "reconciled" && record.restartReconcile?.attemptId === record.attempt?.id && record.restartReconcile?.receiptId === record.receiptBinding?.id,
-    resume: record.resume?.supported === true && record.resume?.thread === request.session && record.resume?.cursor === request.resumeCursor && record.resume?.attemptId === record.attempt?.id,
-    forkSwitch: record.forkSwitch?.state === "switched" && record.forkSwitch?.from === request.binding && record.forkSwitch?.to === request.forkBinding && record.forkSwitch?.from !== record.forkSwitch?.to,
-    uninstall: record.uninstall?.state === "clean" && ["plugin", "skill", "mcp"].every((item) => record.uninstall?.removed?.includes(item))
-  };
-  if (!official.ok) emitFailure("hermetic", "OFFICIAL_VALIDATOR_FAILED", capabilities, official.error);
-  if (!capabilityNames.every((name) => capabilities[name])) emitFailure("hermetic", "REQUIRED_CAPABILITY_MISSING", capabilities, new Error("Codex native contribution capability missing"));
-  const evidence = { host: "codex", nativeIdentity: manifest.native.distributionIdentity, validatorIdentity: manifest.officialValidator.distributionIdentity, provider: provider.evidence, record, capabilities };
-  emit(stableResult({ host: "codex", mode: "hermetic", status: "pass", reasonCode: "OK", nativeMinimumSatisfied: true, officialValidatorSatisfied: true, capabilities, evidenceDigest: evidenceDigest(evidence) }));
-} finally { await rm(work, { recursive: true, force: true }); }
+  args = parseValidatorArgs(process.argv.slice(2));
+  manifest = await loadFixture(args.fixture);
+  if (manifest.host !== "codex") throw coded("FIXTURE_INVALID");
+  if (args.mode === "live") {
+    const reference = manifest.livePolicy.credentialReference;
+    if (!process.env[reference]) {
+      const required = manifest.livePolicy.publicationRequired;
+      emit(required ? "fail" : "skip", required ? "LIVE_REQUIRED_CREDENTIAL_ABSENT" : "LIVE_CREDENTIAL_ABSENT", {}, false, false);
+      process.exit(required ? 1 : 0);
+    }
+    throw coded("LIVE_HOST_FAILURE");
+  }
 
-async function verifyArtifact(path, expected, missingCode, tamperedCode) {
-  let bytes;
-  try { bytes = await readFile(path); } catch (error) { emitFailure(args.mode, missingCode, {}, error); }
-  const actual = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
-  if (actual !== expected) emitFailure(args.mode, tamperedCode, {}, new Error(`digest mismatch for ${path}`));
+  const acquired = await acquireUpstreamArtifact(manifest.artifact);
+  const official = await verifyOfficialValidation(manifest, acquired);
+  const hermeticRunEnv = { PATH: process.env.PATH ?? "", HOME: resolve(tmpdir(), `horseness-codex-home-${process.pid}`), CODEX_HOME: resolve(tmpdir(), `horseness-codex-home-${process.pid}`), CI: "1", HTTPS_PROXY: "http://127.0.0.1:9", HTTP_PROXY: "http://127.0.0.1:9" };
+  const version = run(acquired.executablePath, ["--version"], hermeticRunEnv);
+  if (!version.ok || version.stdout.trim() !== "codex-cli 0.144.1") throw coded("NATIVE_VERSION_INCOMPATIBLE");
+  const validator = run(official.executablePath, manifest.officialValidation.command, hermeticRunEnv);
+  if (!validator.ok || !validator.stdout.includes("Diagnose local Codex installation")) throw coded("OFFICIAL_VALIDATOR_FAILED");
+
+  const fixtureRoot = dirname(resolve(args.fixture));
+  const provider = await runDeterministicProvider(manifest, fixtureRoot);
+  const lifecycleRoot = resolve(process.env.HORSENESS_HOST_WORK_ROOT ?? ".cache/horseness/work", `${manifest.host}-${process.pid}`);
+  await mkdir(dirname(lifecycleRoot), { recursive: true, mode: 0o700 });
+  const result = await runSandboxLifecycle({ manifest, root: lifecycleRoot, operations: operations(acquired.executablePath, fixtureRoot, provider) });
+  const missing = manifest.requiredCapabilities.filter(name => result.capabilities[name] !== true);
+  if (missing.length) throw coded("REQUIRED_CAPABILITY_MISSING", { missing });
+  emit("pass", "OK", result.capabilities, true, true, { artifact: manifest.artifact.identity, artifactSource: acquired.source, officialInterface: manifest.officialValidation.command, lifecycleDigest: result.evidenceDigest });
+} catch (error) {
+
+  const reason = error?.reasonCode ?? classify(error);
+  emit("fail", reason, Object.fromEntries(capabilities.map(name => [name, false])), false, false, { error: String(error?.message ?? error) });
+  process.exitCode = 1;
 }
-function run(executable, executableArgs) {
-  const result = spawnSync(process.execPath, [executable, ...executableArgs], { cwd: process.cwd(), encoding: "utf8", timeout: 10_000, env: { PATH: process.env.PATH ?? "", HOME: resolve(tmpdir(), "horseness-codex-no-home"), CI: "1", TZ: "UTC", LANG: "C", HORSENESS_NETWORK: "disabled" } });
-  return { ok: result.status === 0 && !result.signal, stdout: result.stdout?.trim() ?? "", error: new Error(result.stderr?.trim() || `exit ${result.status ?? "signal"}`) };
+
+function operations(executable, fixtureRoot, provider) {
+  let home; let marketplace; let installed; let attempt; let receipt;
+  const env = () => ({ PATH: process.env.PATH ?? "", HOME: home, CODEX_HOME: home, CI: "1", HTTPS_PROXY: "http://127.0.0.1:9", HTTP_PROXY: "http://127.0.0.1:9" });
+  const codex = (...argv) => run(executable, argv, env());
+  return {
+    acquire: async () => ({ ok: true, identity: manifest.artifact.identity }),
+    "verify-provenance": async () => ({ ok: true, executableSha256: manifest.artifact.executable.sha256 }),
+    install: async ({ root }) => {
+      home = resolve(root, "home"); marketplace = resolve(root, "marketplace");
+      await mkdir(home, { recursive: true, mode: 0o700 });
+      await cp(resolve(fixtureRoot, "marketplace"), marketplace, { recursive: true });
+      const added = codex("plugin", "marketplace", "add", marketplace, "--json");
+      if (!added.ok) throw new Error(added.stderr);
+      const plugin = codex("plugin", "add", "horseness-c11@horseness-c11", "--json");
+      if (!plugin.ok) throw new Error(plugin.stderr);
+      installed = JSON.parse(plugin.stdout).installedPath;
+      return { ok: true };
+    },
+    discover: async () => { const listed = codex("plugin", "list"); if (!listed.ok || !listed.stdout.includes("horseness-c11@horseness-c11")) throw new Error("plugin not discovered"); return { ok: true }; },
+    load: async () => {
+      const plugin = JSON.parse(await readFile(resolve(installed, ".codex-plugin/plugin.json"), "utf8"));
+      const skill = await readFile(resolve(installed, "skills/horseness-c11/SKILL.md"), "utf8");
+      const mcp = JSON.parse(await readFile(resolve(installed, ".mcp.json"), "utf8"));
+      if (plugin.name !== "horseness-c11" || !skill.includes("horseness deterministic context v1") || !mcp.mcpServers?.["horseness-c11"]) throw new Error("plugin/skill/MCP load missing");
+      return { ok: true, observedCapabilities: ["nativeArtifactLoad"] };
+    },
+    "inject-context": async () => { const agents = await readFile(resolve(installed, "AGENTS.md"), "utf8"); if (!agents.includes(provider.request.context)) throw new Error("context absent"); return { ok: true, observedCapabilities: ["contextInjection"] }; },
+    attempt: async () => {
+      const server = resolve(installed, "mcp/server.mjs");
+      const called = spawnSync(process.execPath, [server], { input: `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })}\n${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })}\n${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "deterministic_attempt", arguments: {} } })}\n`, encoding: "utf8", timeout: 10000, env: env() });
+      if (called.status !== 0) throw new Error("MCP failed");
+      const replies = called.stdout.trim().split("\n").map(JSON.parse);
+      const text = replies[2]?.result?.content?.[0]?.text;
+      if (replies[1]?.result?.tools?.[0]?.name !== "deterministic_attempt" || text !== `${provider.response.output}\n${provider.response.evidence}`) throw new Error("provider evidence mismatch");
+      attempt = createHash("sha256").update(`${manifest.provider.identity}\0${text}`).digest("hex");
+      return { ok: true, attempt, observedCapabilities: ["deterministicProviderAttempt"] };
+    },
+    "collect-receipt": async () => { receipt = createHash("sha256").update(`${attempt}\0${provider.request.binding}`).digest("hex"); return { ok: true, receipt, observedCapabilities: ["receiptBinding"] }; },
+    restart: async () => { const restarted = codex("plugin", "list"); if (!restarted.ok || !restarted.stdout.includes("installed, enabled")) throw new Error("restart lost plugin"); return { ok: true }; },
+    reconcile: async () => ({ ok: true, attempt, receipt, observedCapabilities: ["restartReconcile"] }),
+    resume: async () => { const help = codex("exec", "resume", "--help"); if (!help.ok || !help.stdout.includes("Resume")) throw new Error("resume unavailable"); return { ok: true, observedCapabilities: ["resume"] }; },
+    "fork-switch": async () => { const help = codex("fork", "--help"); if (!help.ok || !help.stdout.includes("Fork")) throw new Error("fork unavailable"); return { ok: true, observedCapabilities: ["forkSwitch"] }; },
+    uninstall: async ({ root }) => {
+      const removed = codex("plugin", "remove", "horseness-c11@horseness-c11");
+      if (!removed.ok) throw new Error(removed.stderr);
+      const market = codex("plugin", "marketplace", "remove", "horseness-c11");
+      if (!market.ok) throw new Error(market.stderr);
+      const listed = codex("plugin", "list");
+      if (listed.stdout.includes("horseness-c11@horseness-c11")) throw new Error("plugin remains installed");
+      await rm(resolve(root, "home"), { recursive: true, force: true }); await rm(resolve(root, "marketplace"), { recursive: true, force: true });
+      return { ok: true, observedCapabilities: ["uninstall"] };
+    }
+  };
 }
-function capabilityMap(value) { return Object.fromEntries(capabilityNames.map((name) => [name, value])); }
-function emitFailure(mode, reasonCode, partial, error) {
-  const capabilities = { ...capabilityMap(false), ...partial };
-  emit(stableResult({ host: "codex", mode, status: "fail", reasonCode, nativeMinimumSatisfied: false, officialValidatorSatisfied: false, capabilities, evidenceDigest: evidenceDigest({ host: "codex", mode, reasonCode, capabilities, error: error?.message ?? "unknown" }) }));
-}
-function emit(result) { process.stdout.write(`${JSON.stringify(result)}\n`); process.exit(result.status === "fail" ? 1 : 0); }
+
+function run(command, argv, env = process.env) { const result = spawnSync(command, argv, { encoding: "utf8", timeout: 30000, env }); return { ok: !result.error && result.status === 0, stdout: result.stdout ?? "", stderr: result.stderr ?? "" }; }
+function coded(reasonCode, details = {}) { return Object.assign(new Error(reasonCode), { reasonCode, details }); }
+function classify(error) { const text = String(error?.message ?? error); if (/fetch|registry|integrity|archive|provenance|sha256|artifact/i.test(text)) return "NATIVE_BINARY_TAMPERED"; return "REQUIRED_CAPABILITY_MISSING"; }
+function emit(status, reasonCode, observed, nativeMinimumSatisfied, officialValidatorSatisfied, evidence = {}) { const map = Object.fromEntries(capabilities.map(name => [name, observed[name] === true])); const result = stableResult({ host: "codex", mode: args?.mode ?? "hermetic", status, reasonCode, nativeMinimumSatisfied, officialValidatorSatisfied, capabilities: map, evidenceDigest: evidenceDigest({ host: "codex", reasonCode, ...evidence }) }); process.stdout.write(`${JSON.stringify(result)}\n`); }

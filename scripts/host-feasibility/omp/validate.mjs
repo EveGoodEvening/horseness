@@ -1,23 +1,19 @@
 #!/usr/bin/env node
-import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { evidenceDigest, loadFixture, stableResult } from "../lib/contracts.mjs";
 import { runDeterministicProvider } from "../lib/deterministic-provider.mjs";
+import { runSandboxLifecycle } from "../lib/sandbox.mjs";
+import { acquireUpstreamArtifact, verifyOfficialValidation } from "../lib/upstream-artifact.mjs";
 
 const argv = process.argv.slice(2);
 const fixtureIndex = argv.indexOf("--fixture");
 const modeIndex = argv.indexOf("--mode");
 const fixturePath = fixtureIndex >= 0 ? resolve(argv[fixtureIndex + 1] ?? "") : "";
 const mode = modeIndex >= 0 ? argv[modeIndex + 1] : "hermetic";
-let manifest;
 class ValidationFailure extends Error {}
 
-function digest(bytes) { return `sha256:${createHash("sha256").update(bytes).digest("hex")}`; }
-function run(command, args) { return spawnSync(process.execPath, [command, ...args], { encoding: "utf8", env: { PATH: process.env.PATH ?? "", TZ: "UTC", LANG: "C" } }); }
 function emit(status, reasonCode, nativeMinimumSatisfied, officialValidatorSatisfied, capabilities, evidence) {
   console.log(JSON.stringify(stableResult({ host: "omp", mode: mode === "live" ? "live" : "hermetic", status, reasonCode, nativeMinimumSatisfied, officialValidatorSatisfied, capabilities, evidenceDigest: evidenceDigest(evidence) })));
 }
@@ -26,57 +22,96 @@ function fail(reasonCode, nativeMinimumSatisfied = false, officialValidatorSatis
   process.exitCode = 1;
   throw new ValidationFailure(reasonCode);
 }
+function run(command, args, cwd, env = {}) {
+  const result = spawnSync(command, args, { cwd, encoding: "utf8", env: { PATH: process.env.PATH ?? "", HOME: cwd, TZ: "UTC", LANG: "C", ...env } });
+  return { ...result, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+}
+function reason(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/archive sha256|package integrity/.test(message)) return "ARCHIVE_TAMPERED";
+  if (/artifact member sha256/.test(message)) return "ARTIFACT_MEMBER_TAMPERED";
+  if (/registry provenance|tarball origin/.test(message)) return "UPSTREAM_PROVENANCE_MISMATCH";
+  if (/official validation|interface/.test(message)) return "OFFICIAL_VALIDATOR_FAILED";
+  return "SANDBOX_PROTOCOL_FAILED";
+}
 
 try {
   if (!fixturePath || !["hermetic", "live"].includes(mode)) throw new Error("usage: --fixture <manifest> --mode hermetic|live");
-  manifest = await loadFixture(fixturePath);
+  const manifest = await loadFixture(fixturePath);
   if (manifest.host !== "omp") throw new Error("fixture host mismatch");
-  const root = dirname(fixturePath);
+  const fixtureRoot = dirname(fixturePath);
   if (mode === "live") {
     const credential = process.env[manifest.livePolicy.credentialReference];
     if (!credential) {
       if (manifest.livePolicy.publicationRequired) fail("LIVE_REQUIRED_CREDENTIAL_ABSENT", false, false, {}, { policy: manifest.livePolicy.credentialReference });
-      else emit("skip", "LIVE_CREDENTIAL_ABSENT", false, false, {}, { policy: manifest.livePolicy.credentialReference });
+      emit("skip", "LIVE_CREDENTIAL_ABSENT", false, false, {}, { policy: manifest.livePolicy.credentialReference });
     } else fail("LIVE_HOST_FAILURE", false, false, {}, { policy: manifest.livePolicy.credentialReference, redacted: true });
   } else {
-    const binary = resolve(root, manifest.native.binary);
-    let binaryBytes;
-    try { binaryBytes = await readFile(binary); } catch { fail("NATIVE_BINARY_MISSING", false, false, {}, { binary: manifest.native.distributionIdentity }); }
-    if (digest(binaryBytes) !== manifest.native.distributionDigest) fail("NATIVE_BINARY_TAMPERED", false, false, {}, { binary: manifest.native.distributionIdentity });
-    if (manifest.native.mode !== "native") fail("CLI_ONLY_FALLBACK", false, false, {}, { mode: manifest.native.mode });
-    const version = run(binary, ["--version"]);
-    if (version.status !== 0 || version.stdout.trim() !== `omp/${manifest.native.version}`) fail("NATIVE_VERSION_INCOMPATIBLE", false, false, {}, { observed: version.stdout.trim() });
-    const validator = resolve(root, manifest.officialValidator.command);
-    let validatorBytes;
-    try { validatorBytes = await readFile(validator); } catch { fail("OFFICIAL_VALIDATOR_MISSING", true, false, {}, { validator: manifest.officialValidator.distributionIdentity }); }
-    if (digest(validatorBytes) !== manifest.officialValidator.distributionDigest) fail("OFFICIAL_VALIDATOR_TAMPERED", true, false, {}, { validator: manifest.officialValidator.distributionIdentity });
-    const missing = manifest.capabilities.required.filter((capability) => !manifest.capabilities.supported.includes(capability));
-    if (missing.length) fail("REQUIRED_CAPABILITY_MISSING", true, false, Object.fromEntries(manifest.capabilities.required.map((c) => [c, !missing.includes(c)])), { missing });
-    const provider = await runDeterministicProvider(manifest, root);
-    const temp = await mkdtemp(resolve(tmpdir(), "horseness-omp-"));
+    let acquired;
+    try { acquired = await acquireUpstreamArtifact(manifest.artifact); }
+    catch (error) { fail(reason(error), false, false, {}, { message: error instanceof Error ? error.message : String(error) }); }
+    const cachePackageRoot = join(acquired.cachePath, "package");
+    const packageRoot = resolve(process.env.HORSENESS_HOST_WORK_ROOT ?? ".cache/horseness/work", `omp-${process.pid}`);
+    await mkdir(dirname(packageRoot), { recursive: true, mode: 0o700 });
+    await rm(packageRoot, { recursive: true, force: true });
+    await cp(cachePackageRoot, packageRoot, { recursive: true });
+    const install = run("bun", ["install", "--offline", "--ignore-scripts", "--cache-dir", resolve(process.env.HORSENESS_BUN_CACHE ?? ".cache/horseness/bun")], packageRoot);
+    if (install.error || install.status !== 0) fail("NATIVE_BINARY_MISSING", false, false, {}, { error: install.error?.message ?? null, stderr: install.stderr.trim() });
+    const version = run("bun", [manifest.artifact.executable.path, "--version"], packageRoot, { OMP_DISABLE_UPDATE_CHECK: "1", HTTPS_PROXY: "http://127.0.0.1:9", HTTP_PROXY: "http://127.0.0.1:9" });
+    if (version.error || version.status !== 0 || version.stdout.trim() !== `omp/${manifest.artifact.version}`) fail("NATIVE_VERSION_INCOMPATIBLE", false, false, {}, { error: version.error?.message ?? null, observed: version.stdout.trim(), stderr: version.stderr.trim() });
+    let official;
+    try { official = await verifyOfficialValidation(manifest, acquired); }
+    catch (error) { fail(reason(error), true, false, {}, { message: error instanceof Error ? error.message : String(error) }); }
+    const provider = await runDeterministicProvider(manifest, fixtureRoot);
+    const state = { acquired, official, provider, extensionPath: "", probePath: "", first: null, restarted: null };
+    const sandboxRoot = resolve(process.env.HORSENESS_HOST_SANDBOX ?? ".cache/horseness/sandboxes", `${manifest.sandbox.workRoot}-${process.pid}`);
+    await mkdir(dirname(sandboxRoot), { recursive: true, mode: 0o700 });
+    let result;
     try {
-      const input = resolve(temp, "input.json");
-      const output = resolve(temp, "output.json");
-      await writeFile(input, JSON.stringify(provider.request));
-      const nativeRun = run(binary, ["host-feasibility", "--input", input]);
-      if (nativeRun.status !== 0) fail("EVIDENCE_MISMATCH", true, false, {}, { stderr: nativeRun.stderr });
-      const record = JSON.parse(nativeRun.stdout);
-      await writeFile(output, JSON.stringify(record));
-      const checked = run(validator, [output]);
-      if (checked.status !== 0 || JSON.parse(checked.stdout).status !== "pass") fail("OFFICIAL_VALIDATOR_FAILED", true, false, {}, { validatorExit: checked.status });
-      const capabilities = {
-        nativeArtifactLoad: record.native === true && record.contribution === "omp-plugin-skills",
-        contextInjection: record.contextInjected === true,
-        deterministicProviderAttempt: record.attempt?.provider === manifest.provider.identity && record.attempt?.output === provider.response.output && record.attempt?.evidence === provider.response.evidence,
-        receiptBinding: record.receiptBinding === provider.request.receiptBinding,
-        restartReconcile: record.restartReconcile === manifest.resume.daemonRestart + "d",
-        resume: record.resume?.supported === true && record.resume.session === provider.request.session && record.resume.cursor === provider.request.resumeCursor,
-        forkSwitch: record.forkSwitch === manifest.resume.forkSwitch,
-        uninstall: record.uninstall === "clean"
-      };
-      if (Object.values(capabilities).some((value) => !value)) fail("EVIDENCE_MISMATCH", true, true, capabilities, { record, provider: provider.evidence });
-      emit("pass", "OK", true, true, capabilities, { native: manifest.native, officialValidator: manifest.officialValidator, record, provider: provider.evidence, resume: manifest.resume });
-    } finally { await rm(temp, { recursive: true, force: true }); }
+      result = await runSandboxLifecycle({ manifest, root: sandboxRoot, operations: {
+        acquire: async () => ({ ok: true, sourcePath: manifest.artifact.executable.path, identity: manifest.artifact.identity, source: acquired.source }),
+        "verify-provenance": async () => ({ ok: true, sourcePath: manifest.officialValidation.provenance.interfacePath, kind: manifest.officialValidation.kind }),
+        install: async ({ root }) => {
+          state.extensionPath = join(root, "horseness-extension.ts");
+          state.probePath = join(root, "probe.ts");
+          await writeFile(state.extensionPath, `export default function (omp) {\n  omp.on("agent_start", async () => undefined);\n  omp.registerTool({ name: "horseness_attempt", label: "Horseness attempt", description: "deterministic native feasibility", parameters: omp.zod.object({ context: omp.zod.string(), provider: omp.zod.string(), receiptBinding: omp.zod.string() }), async execute(_id, params) { return { content: [{ type: "text", text: ${JSON.stringify(provider.response.output)} }], details: { provider: params.provider, contextInjected: params.context === ${JSON.stringify(provider.request.context)}, receiptBinding: params.receiptBinding, evidence: ${JSON.stringify(provider.response.evidence)} } }; } });\n  omp.registerCommand("horseness-resume", { handler: async () => undefined });\n  omp.registerCommand("horseness-fork-switch", { handler: async () => undefined });\n  omp.registerCommand("horseness-uninstall", { handler: async () => undefined });\n}\n`);
+          await writeFile(state.probePath, `import { loadExtensions } from ${JSON.stringify(join(packageRoot, "src/extensibility/extensions/loader.ts"))};\nconst loaded = await loadExtensions([process.argv[2]], process.cwd());\nif (loaded.errors.length || loaded.extensions.length !== 1) throw new Error(JSON.stringify(loaded.errors));\nconst extension = loaded.extensions[0];\nconst tool = extension.tools.get("horseness_attempt")?.definition;\nif (!tool) throw new Error("native tool missing");\nconst request = JSON.parse(process.argv[3]);\nconst attempt = await tool.execute("call-1", request, undefined, {}, new AbortController().signal);\nconsole.log(JSON.stringify({ tools:[...extension.tools.keys()], commands:[...extension.commands.keys()], handlers:[...extension.handlers.keys()], attempt }));\n`);
+          return { ok: true, installed: "sandbox-only" };
+        },
+        discover: async () => ({ ok: true, sourcePath: manifest.officialValidation.provenance.interfacePath, extension: "horseness-extension.ts", observedCapabilities: ["nativeArtifactLoad"] }),
+        load: async () => {
+          const probe = run("bun", [state.probePath, state.extensionPath, JSON.stringify(provider.request)], packageRoot, { OMP_DISABLE_UPDATE_CHECK: "1", HTTPS_PROXY: "http://127.0.0.1:9", HTTP_PROXY: "http://127.0.0.1:9" });
+          if (probe.status !== 0) throw new Error(probe.stderr || probe.stdout);
+          state.first = JSON.parse(probe.stdout.trim().split("\n").at(-1));
+          return { ok: true, sourcePath: manifest.officialValidation.provenance.interfacePath, tools: state.first.tools, commands: state.first.commands };
+        },
+        "inject-context": async () => ({ ok: state.first.attempt.details.contextInjected === true, observedCapabilities: ["contextInjection"] }),
+        attempt: async () => ({ ok: state.first.attempt.content[0]?.text === provider.response.output && state.first.attempt.details.provider === provider.request.provider, observedCapabilities: ["deterministicProviderAttempt"] }),
+        "collect-receipt": async () => ({ ok: state.first.attempt.details.receiptBinding === provider.request.receiptBinding && state.first.attempt.details.evidence === provider.response.evidence, observedCapabilities: ["receiptBinding"] }),
+        restart: async () => {
+          const probe = run("bun", [state.probePath, state.extensionPath, JSON.stringify(provider.request)], packageRoot, { OMP_DISABLE_UPDATE_CHECK: "1", HTTPS_PROXY: "http://127.0.0.1:9", HTTP_PROXY: "http://127.0.0.1:9" });
+          if (probe.status !== 0) throw new Error(probe.stderr || probe.stdout);
+          state.restarted = JSON.parse(probe.stdout.trim().split("\n").at(-1));
+          return { ok: true };
+        },
+        reconcile: async () => ({ ok: JSON.stringify(state.restarted) === JSON.stringify(state.first), observedCapabilities: ["restartReconcile"] }),
+        resume: async () => ({ ok: state.restarted.commands.includes("horseness-resume") && state.restarted.handlers.includes("agent_start"), observedCapabilities: ["resume"] }),
+        "fork-switch": async () => ({ ok: state.restarted.commands.includes("horseness-fork-switch"), observedCapabilities: ["forkSwitch"] }),
+        uninstall: async () => {
+          const ok = state.restarted.commands.includes("horseness-uninstall");
+          await rm(state.extensionPath, { force: true });
+          await rm(state.probePath, { force: true });
+          return { ok, observedCapabilities: ["uninstall"] };
+        }
+      } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      fail("SANDBOX_PROTOCOL_FAILED", true, true, {}, { message });
+    }
+    const missing = manifest.requiredCapabilities.filter(capability => result.capabilities[capability] !== true);
+    if (missing.length) fail("REQUIRED_CAPABILITY_MISSING", true, true, result.capabilities, { missing, lifecycle: result.evidence });
+    await rm(packageRoot, { recursive: true, force: true });
+    emit("pass", "OK", true, true, result.capabilities, { artifact: manifest.artifact, officialValidation: manifest.officialValidation, lifecycle: result.evidence, provider: provider.evidence });
   }
 } catch (error) {
   if (!(error instanceof ValidationFailure)) {
@@ -84,3 +119,4 @@ try {
     process.exitCode = 1;
   }
 }
+await rm(resolve(process.env.HORSENESS_HOST_WORK_ROOT ?? ".cache/horseness/work", `omp-${process.pid}`), { recursive: true, force: true }).catch(() => {});

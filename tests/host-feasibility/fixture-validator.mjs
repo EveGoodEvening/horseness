@@ -16,6 +16,7 @@ const map = {
 const selected = map[scenario];
 if (!selected) throw new Error("unknown test scenario");
 const [status, reasonCode, nativeMinimumSatisfied, officialValidatorSatisfied] = selected;
-const result = stableResult({ host: "pi", mode, status, reasonCode, nativeMinimumSatisfied, officialValidatorSatisfied, capabilities: { scenario }, evidenceDigest: evidenceDigest({ scenario, mode }) });
+const capabilities = Object.fromEntries(["nativeArtifactLoad","contextInjection","deterministicProviderAttempt","receiptBinding","restartReconcile","resume","forkSwitch","uninstall"].map(name => [name, status === "pass"]));
+const result = stableResult({ host: "pi", mode, status, reasonCode, nativeMinimumSatisfied, officialValidatorSatisfied, capabilities, evidenceDigest: evidenceDigest({ scenario, mode }) });
 process.stdout.write(`${JSON.stringify(result)}\n`);
 process.exitCode = status === "fail" ? 1 : 0;

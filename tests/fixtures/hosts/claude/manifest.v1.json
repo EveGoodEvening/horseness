@@ -1,28 +1,35 @@
 {
   "schemaVersion": "HostFixtureManifestV1",
   "host": "claude",
-  "native": {
-    "binary": "native/claude.mjs",
+  "artifact": {
+    "identity": "npm:@anthropic-ai/claude-code-linux-x64@2.1.228",
     "version": "2.1.228",
-    "distributionIdentity": "npm:@anthropic-ai/claude-code@2.1.228",
-    "distributionDigest": "sha256:d6b6eb68c4a973ac29e616b068320c334bae2d3a74ed85a73e42fb975ceee007",
-    "mode": "native"
+    "registryUrl": "https://registry.npmjs.org/",
+    "packageIntegrity": "sha512-LMrLUYW5FY3r8wsQk/U5HWacHmxlEWKxaOgNzmDn1f5FhgKsSAPpioqf2JE5AusRRKXyWvhYM1crOE/CKIqoNQ==",
+    "archiveSha256": "sha256:0c304edad9753e2efeb88ddb76c5a13c06160d67c980b9d849ad65bfadde3fd8",
+    "cacheKey": "claude-code-linux-x64-2.1.228",
+    "executable": {
+      "path": "claude",
+      "sha256": "sha256:d535985e6941a3eb00179ccd7f52ceb0c6623a0305a518ebc4e6514f84a94c99"
+    }
   },
-  "officialValidator": {
-    "command": ["native/claude-plugin-validator.mjs", "plugin", "validate", "./plugin"],
-    "version": "2.1.228",
-    "distributionIdentity": "Claude Code native plugin validate from npm:@anthropic-ai/claude-code@2.1.228",
-    "distributionDigest": "sha256:d6b6eb68c4a973ac29e616b068320c334bae2d3a74ed85a73e42fb975ceee007"
+  "officialValidation": {
+    "kind": "same-distribution-interface",
+    "provenance": {
+      "artifactIdentity": "npm:@anthropic-ai/claude-code-linux-x64@2.1.228",
+      "interfacePath": "claude",
+      "interfaceSha256": "sha256:d535985e6941a3eb00179ccd7f52ceb0c6623a0305a518ebc4e6514f84a94c99"
+    },
+    "command": ["plugin", "validate", "{pluginRoot}"]
   },
-  "capabilities": {
-    "required": ["nativeArtifactLoad", "contextInjection", "deterministicProviderAttempt", "receiptBinding", "restartReconcile", "resume", "forkSwitch", "uninstall"],
-    "supported": ["nativeArtifactLoad", "contextInjection", "deterministicProviderAttempt", "receiptBinding", "restartReconcile", "resume", "forkSwitch", "uninstall"]
-  },
-  "resume": {
-    "daemonRestart": "reconcile-original-binding",
-    "hostRestart": "resume-original-session",
-    "sessionResume": "native-resume-original-binding",
-    "forkSwitch": "new-binding-required"
+  "requiredCapabilities": ["nativeArtifactLoad"],
+  "sandbox": {
+    "protocolVersion": "HostSandboxLifecycleV1",
+    "lifecycle": ["acquire", "verify-provenance", "install", "discover", "load", "inject-context", "attempt", "collect-receipt", "restart", "reconcile", "resume", "fork-switch", "uninstall", "audit-outputs"],
+    "workRoot": ".sandbox/claude",
+    "network": "disabled",
+    "credentials": "disabled",
+    "allowedOutputs": []
   },
   "provider": {
     "identity": "horseness-local-provider-v1",

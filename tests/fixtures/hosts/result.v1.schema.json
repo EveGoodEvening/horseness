@@ -10,10 +10,10 @@
     "host": { "enum": ["pi", "omp", "claude", "codex"] },
     "mode": { "enum": ["hermetic", "live"] },
     "status": { "enum": ["pass", "fail", "skip"] },
-    "reasonCode": { "enum": ["OK", "LIVE_CREDENTIAL_ABSENT", "LIVE_REQUIRED_CREDENTIAL_ABSENT", "LIVE_CREDENTIAL_INVALID", "LIVE_PROVENANCE_MISMATCH", "LIVE_REDACTION_FAILURE", "LIVE_BUDGET_EXCEEDED", "LIVE_TIMEOUT", "LIVE_HOST_FAILURE", "NATIVE_BINARY_MISSING", "NATIVE_BINARY_TAMPERED", "NATIVE_VERSION_INCOMPATIBLE", "OFFICIAL_VALIDATOR_MISSING", "OFFICIAL_VALIDATOR_TAMPERED", "OFFICIAL_VALIDATOR_FAILED", "CLI_ONLY_FALLBACK", "REQUIRED_CAPABILITY_MISSING", "FIXTURE_INVALID", "EVIDENCE_MISMATCH"] },
+    "reasonCode": { "enum": ["OK", "LIVE_CREDENTIAL_ABSENT", "LIVE_REQUIRED_CREDENTIAL_ABSENT", "LIVE_CREDENTIAL_INVALID", "LIVE_PROVENANCE_MISMATCH", "LIVE_REDACTION_FAILURE", "LIVE_BUDGET_EXCEEDED", "LIVE_TIMEOUT", "LIVE_HOST_FAILURE", "NATIVE_BINARY_MISSING", "NATIVE_BINARY_TAMPERED", "NATIVE_VERSION_INCOMPATIBLE", "OFFICIAL_VALIDATOR_MISSING", "OFFICIAL_VALIDATOR_TAMPERED", "OFFICIAL_VALIDATOR_FAILED", "CLI_ONLY_FALLBACK", "REQUIRED_CAPABILITY_MISSING", "CREDENTIAL_REQUIRED", "FIXTURE_INVALID", "EVIDENCE_MISMATCH"] },
     "nativeMinimumSatisfied": { "type": "boolean" },
     "officialValidatorSatisfied": { "type": "boolean" },
-    "capabilities": { "type": "object" },
+    "capabilities": { "type": "object", "additionalProperties": false, "required": ["nativeArtifactLoad", "contextInjection", "deterministicProviderAttempt", "receiptBinding", "restartReconcile", "resume", "forkSwitch", "uninstall"], "properties": { "nativeArtifactLoad":{"type":"boolean"}, "contextInjection":{"type":"boolean"}, "deterministicProviderAttempt":{"type":"boolean"}, "receiptBinding":{"type":"boolean"}, "restartReconcile":{"type":"boolean"}, "resume":{"type":"boolean"}, "forkSwitch":{"type":"boolean"}, "uninstall":{"type":"boolean"} } },
     "evidenceDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
   }
 }

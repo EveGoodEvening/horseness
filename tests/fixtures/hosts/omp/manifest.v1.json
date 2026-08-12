@@ -1,28 +1,35 @@
 {
   "schemaVersion": "HostFixtureManifestV1",
   "host": "omp",
-  "native": {
-    "binary": "native/omp.mjs",
+  "artifact": {
+    "identity": "npm:@oh-my-pi/pi-coding-agent@17.2.15",
     "version": "17.2.15",
-    "distributionIdentity": "npm:@oh-my-pi/pi-coding-agent@17.2.15",
-    "distributionDigest": "sha256:e52b9ee5b34179367bfb6f0a25c226b66280bc700bb1d059274fae53c2cac0ea",
-    "mode": "native"
+    "registryUrl": "https://registry.npmjs.org/",
+    "packageIntegrity": "sha512-ZvJvGkwj9P4PAvCcGQRk0Rkmq/hXYxC97ObcETdcQausmI6r/HqhcbcMtdLNOCv8dgbJ484I1S3R6A8SbgmO8A==",
+    "archiveSha256": "sha256:97da357347de555a0d95d42e9e74bd1aefeafad87127f08b375fe3bd2a579521",
+    "cacheKey": "omp-pi-coding-agent-17.2.15",
+    "executable": {
+      "path": "dist/cli.js",
+      "sha256": "sha256:60a12d6c14d4877efeef9e6cb86de3ba84e39be59e2e43204b09dbdd75386020"
+    }
   },
-  "officialValidator": {
-    "command": "native/validator.mjs",
-    "version": "17.2.15",
-    "distributionIdentity": "omp-official-plugin-doctor@17.2.15",
-    "distributionDigest": "sha256:82063ce996eb84fe15cc35e3aa57d132e7c6dc35b01bcfa720fb42f8c419d604"
+  "officialValidation": {
+    "kind": "same-distribution-interface",
+    "provenance": {
+      "artifactIdentity": "npm:@oh-my-pi/pi-coding-agent@17.2.15",
+      "interfacePath": "src/extensibility/extensions/loader.ts",
+      "interfaceSha256": "sha256:c0076ad052d435ee1075abfa0682e83ad4a075a1415c720bbbdf71d9affcc48f"
+    },
+    "command": ["bun", "src/extensibility/extensions/loader.ts", "loadExtensions"]
   },
-  "capabilities": {
-    "required": ["nativeArtifactLoad", "contextInjection", "deterministicProviderAttempt", "receiptBinding", "restartReconcile", "resume", "forkSwitch", "uninstall"],
-    "supported": ["nativeArtifactLoad", "contextInjection", "deterministicProviderAttempt", "receiptBinding", "restartReconcile", "resume", "forkSwitch", "uninstall"]
-  },
-  "resume": {
-    "daemonRestart": "reconcile",
-    "hostRestart": "resume",
-    "sessionResume": "native",
-    "forkSwitch": "new-binding"
+  "requiredCapabilities": ["nativeArtifactLoad", "contextInjection", "deterministicProviderAttempt", "receiptBinding", "restartReconcile", "resume", "forkSwitch", "uninstall"],
+  "sandbox": {
+    "protocolVersion": "HostSandboxLifecycleV1",
+    "lifecycle": ["acquire", "verify-provenance", "install", "discover", "load", "inject-context", "attempt", "collect-receipt", "restart", "reconcile", "resume", "fork-switch", "uninstall", "audit-outputs"],
+    "workRoot": "omp",
+    "network": "disabled",
+    "credentials": "disabled",
+    "allowedOutputs": []
   },
   "provider": {
     "identity": "horseness-local-deterministic-provider-v1",

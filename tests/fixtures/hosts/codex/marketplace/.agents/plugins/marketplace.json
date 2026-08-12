@@ -1,0 +1,12 @@
+{
+  "name": "horseness-c11",
+  "interface": { "displayName": "Horseness C11" },
+  "plugins": [
+    {
+      "name": "horseness-c11",
+      "source": { "source": "local", "path": "./plugins/horseness-c11" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_USE" },
+      "category": "Developer Tools"
+    }
+  ]
+}

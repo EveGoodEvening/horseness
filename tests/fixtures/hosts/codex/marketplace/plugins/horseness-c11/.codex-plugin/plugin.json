@@ -1,0 +1,13 @@
+{
+  "name": "horseness-c11",
+  "version": "1.0.0",
+  "description": "Hermetic C11 native contribution validation",
+  "author": { "name": "Horseness" },
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Horseness C11",
+    "shortDescription": "Validates native Codex contribution loading",
+    "longDescription": "Hermetic plugin, skill, and MCP contribution used to validate Codex native loading."
+  }
+}

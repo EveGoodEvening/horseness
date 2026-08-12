@@ -4,32 +4,170 @@
     "pi": {
       "fixture": "tests/fixtures/hosts/pi/manifest.v1.json",
       "validator": "scripts/host-feasibility/pi/validate.mjs",
-      "native": { "version": "0.73.1", "distributionDigest": "sha256:ab93d8ab31f61078171c7949ba25abad3fd341615040a999e64a5bcc44e86e42" },
-      "officialValidator": { "version": "0.73.1", "distributionDigest": "sha256:942d6f16db4964daf6c60abd93dd0e62543f1099e1165c6b295bc21ea714b648" },
-      "capabilities": { "nativeArtifactLoad": true, "contextInjection": true, "deterministicProviderAttempt": true, "receiptBinding": true, "restartReconcile": true, "resume": true, "forkSwitch": true, "uninstall": true }
+      "artifact": {
+        "identity": "npm:@mariozechner/pi-coding-agent@0.73.1",
+        "version": "0.73.1",
+        "registryUrl": "https://registry.npmjs.org/",
+        "packageIntegrity": "sha512-gXQh3SaZmWTfVMc4Ao5+LGbVeKvzyO7tolok0nLsZgq9nGjZx/EEU3NM8C+qUnB4Nvs2rswG5qOVgLzQkq0fHQ==",
+        "archiveSha256": "sha256:7bf5d492670c04fd7c599dee7e6eaabff964084affd216766107e6741df7a2e1",
+        "cacheKey": "pi-coding-agent-0.73.1",
+        "executable": {
+          "path": "dist/cli.js",
+          "sha256": "sha256:e959f463b06ddd15ed882783ac02f39ecaeef950ef967da86380f39dda6595fa"
+        }
+      },
+      "officialValidation": {
+        "kind": "same-distribution-interface",
+        "provenance": {
+          "artifactIdentity": "npm:@mariozechner/pi-coding-agent@0.73.1",
+          "interfacePath": "dist/core/extensions/loader.js",
+          "interfaceSha256": "sha256:0ffd7839e5626779e4e4d20cd55e647a7a9234a293025c6f1f361e7107e62a6b"
+        },
+        "command": [
+          "node",
+          "dist/core/extensions/loader.js",
+          "loadExtensions"
+        ]
+      },
+      "capabilities": {
+        "nativeArtifactLoad": true,
+        "contextInjection": true,
+        "deterministicProviderAttempt": true,
+        "receiptBinding": true,
+        "restartReconcile": true,
+        "resume": true,
+        "forkSwitch": true,
+        "uninstall": true
+      }
     },
     "omp": {
       "fixture": "tests/fixtures/hosts/omp/manifest.v1.json",
       "validator": "scripts/host-feasibility/omp/validate.mjs",
-      "native": { "version": "17.2.15", "distributionDigest": "sha256:e52b9ee5b34179367bfb6f0a25c226b66280bc700bb1d059274fae53c2cac0ea" },
-      "officialValidator": { "version": "17.2.15", "distributionDigest": "sha256:82063ce996eb84fe15cc35e3aa57d132e7c6dc35b01bcfa720fb42f8c419d604" },
-      "capabilities": { "nativeArtifactLoad": true, "contextInjection": true, "deterministicProviderAttempt": true, "receiptBinding": true, "restartReconcile": true, "resume": true, "forkSwitch": true, "uninstall": true }
+      "artifact": {
+        "identity": "npm:@oh-my-pi/pi-coding-agent@17.2.15",
+        "version": "17.2.15",
+        "registryUrl": "https://registry.npmjs.org/",
+        "packageIntegrity": "sha512-ZvJvGkwj9P4PAvCcGQRk0Rkmq/hXYxC97ObcETdcQausmI6r/HqhcbcMtdLNOCv8dgbJ484I1S3R6A8SbgmO8A==",
+        "archiveSha256": "sha256:97da357347de555a0d95d42e9e74bd1aefeafad87127f08b375fe3bd2a579521",
+        "cacheKey": "omp-pi-coding-agent-17.2.15",
+        "executable": {
+          "path": "dist/cli.js",
+          "sha256": "sha256:60a12d6c14d4877efeef9e6cb86de3ba84e39be59e2e43204b09dbdd75386020"
+        }
+      },
+      "officialValidation": {
+        "kind": "same-distribution-interface",
+        "provenance": {
+          "artifactIdentity": "npm:@oh-my-pi/pi-coding-agent@17.2.15",
+          "interfacePath": "src/extensibility/extensions/loader.ts",
+          "interfaceSha256": "sha256:c0076ad052d435ee1075abfa0682e83ad4a075a1415c720bbbdf71d9affcc48f"
+        },
+        "command": [
+          "bun",
+          "src/extensibility/extensions/loader.ts",
+          "loadExtensions"
+        ]
+      },
+      "capabilities": {
+        "nativeArtifactLoad": true,
+        "contextInjection": true,
+        "deterministicProviderAttempt": true,
+        "receiptBinding": true,
+        "restartReconcile": true,
+        "resume": true,
+        "forkSwitch": true,
+        "uninstall": true
+      }
     },
     "claude": {
       "fixture": "tests/fixtures/hosts/claude/manifest.v1.json",
       "validator": "scripts/host-feasibility/claude/validate.mjs",
-      "native": { "version": "2.1.228", "distributionDigest": "sha256:d6b6eb68c4a973ac29e616b068320c334bae2d3a74ed85a73e42fb975ceee007" },
-      "officialValidator": { "version": "2.1.228", "distributionDigest": "sha256:d6b6eb68c4a973ac29e616b068320c334bae2d3a74ed85a73e42fb975ceee007" },
-      "capabilities": { "nativeArtifactLoad": true, "contextInjection": true, "deterministicProviderAttempt": true, "receiptBinding": true, "restartReconcile": true, "resume": true, "forkSwitch": true, "uninstall": true }
+      "capabilities": {
+        "nativeArtifactLoad": true,
+        "contextInjection": false,
+        "deterministicProviderAttempt": false,
+        "receiptBinding": false,
+        "restartReconcile": false,
+        "resume": false,
+        "forkSwitch": false,
+        "uninstall": false
+      },
+      "artifact": {
+        "identity": "npm:@anthropic-ai/claude-code-linux-x64@2.1.228",
+        "version": "2.1.228",
+        "registryUrl": "https://registry.npmjs.org/",
+        "packageIntegrity": "sha512-LMrLUYW5FY3r8wsQk/U5HWacHmxlEWKxaOgNzmDn1f5FhgKsSAPpioqf2JE5AusRRKXyWvhYM1crOE/CKIqoNQ==",
+        "archiveSha256": "sha256:0c304edad9753e2efeb88ddb76c5a13c06160d67c980b9d849ad65bfadde3fd8",
+        "cacheKey": "claude-code-linux-x64-2.1.228",
+        "executable": {
+          "path": "claude",
+          "sha256": "sha256:d535985e6941a3eb00179ccd7f52ceb0c6623a0305a518ebc4e6514f84a94c99"
+        }
+      },
+      "officialValidation": {
+        "kind": "same-distribution-interface",
+        "provenance": {
+          "artifactIdentity": "npm:@anthropic-ai/claude-code-linux-x64@2.1.228",
+          "interfacePath": "claude",
+          "interfaceSha256": "sha256:d535985e6941a3eb00179ccd7f52ceb0c6623a0305a518ebc4e6514f84a94c99"
+        },
+        "command": [
+          "plugin",
+          "validate",
+          "{pluginRoot}"
+        ]
+      }
     },
     "codex": {
       "fixture": "tests/fixtures/hosts/codex/manifest.v1.json",
       "validator": "scripts/host-feasibility/codex/validate.mjs",
-      "native": { "version": "0.144.1", "distributionDigest": "sha256:8edbdcb51a6979a26a283299d928f60a306ae94cd6b4b514a5c5e1f29fb918d9" },
-      "officialValidator": { "version": "0.144.1", "distributionDigest": "sha256:9eee3e147603af046f5ed75fa7bd8533058f88d43ff3c6e7228d57dd3e0f801b" },
-      "capabilities": { "nativeArtifactLoad": true, "contextInjection": true, "deterministicProviderAttempt": true, "receiptBinding": true, "restartReconcile": true, "resume": true, "forkSwitch": true, "uninstall": true }
+      "artifact": {
+        "identity": "npm:@openai/codex@0.144.1-linux-x64",
+        "version": "0.144.1-linux-x64",
+        "registryUrl": "https://registry.npmjs.org",
+        "packageIntegrity": "sha512-HNGVI+BulrOaC/0IzBvd6EL62j7LrlbFKibrhw6hZjjCjAeUYzRB2jB4qDzXN1NfqDi6Xrvniof3kwbwab24lg==",
+        "archiveSha256": "sha256:e2a64d421c10aaf0b7e3c0e8bd71b71e497d75823003318b674a278d71add0c7",
+        "cacheKey": "codex-0.144.1-linux-x64",
+        "executable": {
+          "path": "vendor/x86_64-unknown-linux-musl/bin/codex",
+          "sha256": "sha256:a96f944d1a596dbfb7fdd84f482be5c50e34b04bb371126840d873e4ebf26902"
+        }
+      },
+      "officialValidation": {
+        "kind": "same-distribution-interface",
+        "provenance": {
+          "artifactIdentity": "npm:@openai/codex@0.144.1-linux-x64",
+          "interfacePath": "vendor/x86_64-unknown-linux-musl/bin/codex",
+          "interfaceSha256": "sha256:a96f944d1a596dbfb7fdd84f482be5c50e34b04bb371126840d873e4ebf26902"
+        },
+        "command": [
+          "doctor",
+          "--help"
+        ]
+      },
+      "capabilities": {
+        "nativeArtifactLoad": true,
+        "contextInjection": true,
+        "deterministicProviderAttempt": true,
+        "receiptBinding": true,
+        "restartReconcile": true,
+        "resume": true,
+        "forkSwitch": true,
+        "uninstall": true
+      }
     }
   },
-  "credentialedLivePolicy": { "absentCredential": "skip-local-fail-publication", "configuredCredentialFailure": "fail", "secretHandling": "opaque-reference-only" },
-  "deterministicProvider": { "identity": "horseness-local-deterministic-provider-v1", "clock": "2026-01-01T00:00:00Z", "network": "disabled", "credentials": "disabled", "requestFixture": "tests/fixtures/hosts/provider/request.v1.json", "responseFixture": "tests/fixtures/hosts/provider/response.v1.json" }
+  "credentialedLivePolicy": {
+    "absentCredential": "skip-local-fail-publication",
+    "configuredCredentialFailure": "fail",
+    "secretHandling": "opaque-reference-only"
+  },
+  "deterministicProvider": {
+    "identity": "horseness-local-deterministic-provider-v1",
+    "clock": "2026-01-01T00:00:00Z",
+    "network": "disabled",
+    "credentials": "disabled",
+    "requestFixture": "tests/fixtures/hosts/provider/request.v1.json",
+    "responseFixture": "tests/fixtures/hosts/provider/response.v1.json"
+  }
 }
