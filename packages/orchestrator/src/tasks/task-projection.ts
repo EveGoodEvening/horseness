@@ -11,13 +11,13 @@ import {
   type DependencyJoinSnapshotCoreV1,
   type DependencyOutcomeV1,
   type EventEnvelopeV1,
-  type HashedEventEnvelopeV1,
   type JsonValue,
   type Schedulability,
   type TaskCompletionPolicyV1,
   type TaskLifecycle,
   type TaskResolution,
 } from "@horseness/domain";
+import { type TrustedAuthorityReader } from "@horseness/store-sqlite";
 
 export interface TaskContractV1 { taskId: string; contractDigest: string; completionPolicy: TaskCompletionPolicyV1 }
 export interface DurableTaskStateV1 {
@@ -37,18 +37,29 @@ export type DurablePredicatePayloadV1 =
   | { eventType:"ApprovalRecordedV1"; workspaceId:string; runId:string; taskId:string; approvalId:string; scopeDigest:string; evaluationCursor:CompositeCursorV1; expiresAt:string }
   | { eventType:"BindingValidSelectedReceiptV1"; workspaceId:string; runId:string; taskId:string; receiptDigest:string; generation:number; attemptContextBindingDigest:string; bindingValid:true; selected:true; outcome:"succeeded" };
 export interface DurableAuthorityEventV1 { envelope:EventEnvelopeV1<DurablePredicatePayloadV1>; envelopeHash:string; resultCursor:CompositeCursorV1 }
-export interface VerifiedStreamChainHeadProofV1 {
-  readonly workspaceId:string;
-  readonly runId:string;
-  readonly headSequence:number;
-  readonly headEnvelopeHash:string;
-  readonly authorityReplayDigest:string;
-  readonly replay:readonly HashedEventEnvelopeV1<unknown>[];
-  readonly authorizedProducers?:Readonly<Record<string,readonly string[]>>;
-}
 declare const verifiedAuthorityEventBrand:unique symbol;
 export type VerifiedAuthorityEventV1=DurableAuthorityEventV1&{readonly [verifiedAuthorityEventBrand]:true};
 const verifiedAuthorityEvents=new WeakSet<object>();
+
+function deepFreeze<T>(value:T):T {
+  if(typeof value!=="object"||value===null||Object.isFrozen(value))return value;
+  Object.freeze(value);
+  for(const child of Object.values(value))deepFreeze(child);
+  return value;
+}
+
+export function issueStoredAuthorityEvent(reader:TrustedAuthorityReader,input:{workspaceId:string;runId:string;sequence:number;eventType:DurablePredicatePayloadV1["eventType"]}):VerifiedAuthorityEventV1 {
+  if(!Number.isSafeInteger(input.sequence)||input.sequence<1)fail("PREDICATE_EVENT_UNAUTHENTICATED");
+  const view=reader.authenticatedView(input.workspaceId,input.runId);
+  const snapshot=reader.exactRunHeadSnapshot(input.workspaceId,input.runId,`durable-authority-event/${input.eventType}/${input.sequence}`);
+  if(snapshot.state===null||typeof snapshot.state!=="object"||Array.isArray(snapshot.state))fail("PREDICATE_EVENT_UNAUTHENTICATED");
+  const record=snapshot.state as unknown as DurableAuthorityEventV1;
+  if(record.envelope?.payload?.eventType!==input.eventType||record.envelope.sequence!==input.sequence||record.envelope.workspaceId!==input.workspaceId||record.envelope.streamId!==input.runId||record.resultCursor.workspaceId!==input.workspaceId||record.resultCursor.runId!==input.runId||canonicalJson(record.resultCursor)!==canonicalJson(view.cursor))fail("PREDICATE_EVENT_UNAUTHENTICATED");
+  if(record.envelopeHash!==domainDigest("horseness.event-envelope.v1",record.envelope as unknown as JsonValue)||record.envelope.payloadHash!==domainDigest("horseness.event-payload.v1",record.envelope.payload as unknown as JsonValue))fail("PREDICATE_EVENT_UNAUTHENTICATED");
+  const issued=deepFreeze(structuredClone(record)) as VerifiedAuthorityEventV1;
+  verifiedAuthorityEvents.add(issued);
+  return issued;
+}
 
 export type AuthorityTruthV1 = "allowed" | "denied" | "unknown";
 export type TaskAuthorityComponentKindV1="contract"|"policy"|"grant-revocation"|"quota"|"attempt-outcome";
@@ -105,28 +116,6 @@ export function addDependency(state:TaskProjectionV1,edge:DependencyEdgeV1):Task
 }
 export function activateTask(state:TaskProjectionV1,taskId:string):TaskProjectionV1 {const current=requireTask(state,taskId,"ILLEGAL_TASK_TRANSITION");if(current.lifecycle!=="draft")fail("ILLEGAL_TASK_TRANSITION");const next=clone(state);next.tasks.set(taskId,{...cloneTask(current),lifecycle:"active"});return next}
 
-export function authorityReplayDigest(replay:readonly HashedEventEnvelopeV1<unknown>[]):string {
-  return domainDigest("horseness.authority-replay.v1",replay as unknown as JsonValue);
-}
-function immutableClone<T>(value:T):T {
-  const clone=structuredClone(value);
-  const freeze=(current:unknown):void=>{if(current===null||typeof current!=="object"||Object.isFrozen(current))return;for(const nested of Object.values(current))freeze(nested);Object.freeze(current)};
-  freeze(clone);return clone;
-}
-export function verifyAuthorityEvent(event:DurableAuthorityEventV1,proof:VerifiedStreamChainHeadProofV1):VerifiedAuthorityEventV1 {
-  const {envelope,resultCursor}=event;
-  let prior:string|null=null;
-  let expectedSequence=1;
-  for(const item of proof.replay){if(item.envelope.schemaVersion!=="1"||item.envelope.streamKind!=="run"||item.envelope.workspaceId!==proof.workspaceId||item.envelope.streamId!==proof.runId||item.envelope.sequence!==expectedSequence||item.envelope.priorEnvelopeHash!==prior||item.envelope.payloadHash!==domainDigest("horseness.event-payload.v1",item.envelope.payload as unknown as JsonValue)||item.envelopeHash!==domainDigest("horseness.event-envelope.v1",item.envelope as unknown as JsonValue))fail("PREDICATE_EVENT_UNAUTHENTICATED");prior=item.envelopeHash;expectedSequence+=1}
-  const head=proof.replay.at(-1),replayed=proof.replay.find(item=>item.envelope.sequence===envelope.sequence);
-  if(proof.workspaceId!==resultCursor.workspaceId||proof.runId!==resultCursor.runId||proof.headSequence!==resultCursor.runSequence||proof.headEnvelopeHash!==resultCursor.runEnvelopeHash||head?.envelope.sequence!==proof.headSequence||head.envelopeHash!==proof.headEnvelopeHash||proof.authorityReplayDigest!==authorityReplayDigest(proof.replay))fail("PREDICATE_EVENT_UNAUTHENTICATED");
-  if(replayed===undefined||replayed.envelopeHash!==event.envelopeHash||canonicalJson(replayed.envelope)!==canonicalJson(envelope))fail("PREDICATE_EVENT_UNAUTHENTICATED");
-  if(envelope.schemaVersion!=="1"||envelope.streamKind!=="run"||envelope.workspaceId!==resultCursor.workspaceId||envelope.streamId!==resultCursor.runId||envelope.sequence>resultCursor.runSequence)fail("PREDICATE_EVENT_UNAUTHENTICATED");
-  if(envelope.eventType!==envelope.payload.eventType||envelope.payload.workspaceId!==resultCursor.workspaceId||envelope.payload.runId!==resultCursor.runId)fail("PREDICATE_EVENT_UNAUTHENTICATED");
-  if(envelope.payloadHash!==domainDigest("horseness.event-payload.v1",envelope.payload as unknown as JsonValue)||event.envelopeHash!==domainDigest("horseness.event-envelope.v1",envelope as unknown as JsonValue))fail("PREDICATE_EVENT_UNAUTHENTICATED");
-  const allowed=proof.authorizedProducers?.[envelope.eventType];if(allowed!==undefined&&!allowed.includes(envelope.principalId))fail("PREDICATE_EVENT_UNAUTHENTICATED");
-  const verified=immutableClone(event) as VerifiedAuthorityEventV1;verifiedAuthorityEvents.add(verified);return verified;
-}
 function predicateFrom(event:VerifiedAuthorityEventV1):CompletionPredicateV1 {
   const payload=event.envelope.payload;
   switch(payload.eventType){
@@ -149,15 +138,36 @@ export function resolveProjectedTask(state:TaskProjectionV1,input:{taskId:string
 const projectionName=(kind:TaskAuthorityComponentKindV1):string=>`task-authority/${kind}`;
 function componentDigest(snapshot:TaskAuthorityComponentSnapshotV1):string {const {projectionProof:_proof,...core}=snapshot;return domainDigest("horseness.task-authority-component.v1",core as unknown as JsonValue)}
 function compositeDigest(input:{schemaVersion:"1";observationCursor:CompositeCursorV1;taskId:string;components:readonly TaskAuthorityComponentSnapshotV1[]}):string {return domainDigest("horseness.task-authority-composite.v1",{schemaVersion:input.schemaVersion,observationCursor:input.observationCursor,taskId:input.taskId,componentDigests:input.components.map(component=>component.projectionProof.snapshotDigest)} as unknown as JsonValue)}
-export function projectTaskAuthorityComponent(event:VerifiedAuthorityEventV1,input:{taskId:string;value:TaskAuthorityComponentValueV1;authoritativeHead:{sequence:number;envelopeHash:string}}):TaskAuthorityComponentSnapshotV1 {
-  if(!verifiedAuthorityEvents.has(event))fail("AUTHORITY_EVENT_UNVERIFIED");if(!input.taskId||input.authoritativeHead.sequence!==event.resultCursor.runSequence||input.authoritativeHead.envelopeHash!==event.resultCursor.runEnvelopeHash)fail("AUTHORITY_HEAD_SUBSTITUTED");
-  const core={schemaVersion:"1" as const,workspaceId:event.resultCursor.workspaceId,runId:event.resultCursor.runId,taskId:input.taskId,observationCursor:event.resultCursor,value:input.value};const projectionNameValue=projectionName(input.value.kind),snapshotDigest=domainDigest("horseness.task-authority-component.v1",core as unknown as JsonValue);const component:TaskAuthorityComponentSnapshotV1={...core,projectionProof:{schemaVersion:"1",projectionName:projectionNameValue,projectionVersion:"1",snapshotDigest,replayDigest:domainDigest("horseness.task-authority-replay-proof.v1",{projectionName:projectionNameValue,projectionVersion:"1",observationCursor:event.resultCursor,snapshotDigest} as unknown as JsonValue)}};authenticatedTaskAuthorityComponents.add(component);return component;
-}
-export function assembleTaskAuthorityProjection(input:Omit<TaskAuthorityProjectionV1,typeof authenticatedTaskAuthority>):TaskAuthorityProjectionV1 {
+function assembleTaskAuthorityProjection(input:Omit<TaskAuthorityProjectionV1,typeof authenticatedTaskAuthority>):TaskAuthorityProjectionV1 {
   if(input.schemaVersion!=="1"||!input.taskId||input.components.length!==5)fail("AUTHORITY_PROOF_INVALID");
   const kinds=new Set<TaskAuthorityComponentKindV1>();
   for(const component of input.components){if(!authenticatedTaskAuthorityComponents.has(component))fail("AUTHORITY_PROOF_INVALID");const kind=component.value.kind;kinds.add(kind);if(component.schemaVersion!=="1"||component.workspaceId!==input.observationCursor.workspaceId||component.runId!==input.observationCursor.runId||component.taskId!==input.taskId||canonicalJson(component.observationCursor)!==canonicalJson(input.observationCursor))fail("AUTHORITY_CURSOR_SUBSTITUTED");const proof=component.projectionProof;if(proof.schemaVersion!=="1"||proof.projectionVersion!=="1"||proof.projectionName!==projectionName(kind)||!proof.snapshotDigest||!proof.replayDigest||proof.snapshotDigest!==componentDigest(component)||proof.replayDigest!==domainDigest("horseness.task-authority-replay-proof.v1",{projectionName:proof.projectionName,projectionVersion:proof.projectionVersion,observationCursor:component.observationCursor,snapshotDigest:proof.snapshotDigest} as unknown as JsonValue))fail("AUTHORITY_PROOF_INVALID")}
   if(kinds.size!==5||input.compositeDigest!==compositeDigest(input))fail("AUTHORITY_PROOF_INVALID");const projection={...input,[authenticatedTaskAuthority]:true as const};authenticatedTaskAuthorityProjections.add(projection);return projection;
+}
+
+export function issueTaskAuthorityProjection(reader:TrustedAuthorityReader,input:{workspaceId:string;runId:string;taskId:string}):TaskAuthorityProjectionV1 {
+  const view=reader.authenticatedView(input.workspaceId,input.runId);
+  const kinds:readonly TaskAuthorityComponentKindV1[]=["contract","policy","grant-revocation","quota","attempt-outcome"];
+  const components=kinds.map(kind=>{
+    const snapshot=reader.exactRunHeadSnapshot(input.workspaceId,input.runId,projectionName(kind));
+    if(snapshot.state===null||typeof snapshot.state!=="object"||Array.isArray(snapshot.state))fail("AUTHORITY_PROOF_INVALID");
+    const record=snapshot.state as Record<string,JsonValue>;
+    if(record.taskId!==input.taskId||record.kind!==kind)fail("AUTHORITY_PROOF_INVALID");
+    let value:TaskAuthorityComponentValueV1;
+    switch(kind){
+      case "contract": if(typeof record.valid!=="boolean")return fail("AUTHORITY_PROOF_INVALID");value={kind,valid:record.valid};break;
+      case "policy": if(record.state!=="allowed"&&record.state!=="denied"&&record.state!=="unknown")return fail("AUTHORITY_PROOF_INVALID");value={kind,state:record.state};break;
+      case "grant-revocation": if((record.grantState!=="allowed"&&record.grantState!=="denied"&&record.grantState!=="unknown")||(record.revocationState!=="clear"&&record.revocationState!=="revoked"&&record.revocationState!=="unknown"))return fail("AUTHORITY_PROOF_INVALID");value={kind,grantState:record.grantState,revocationState:record.revocationState};break;
+      case "quota": if(record.state!=="available"&&record.state!=="exhausted"&&record.state!=="unknown")return fail("AUTHORITY_PROOF_INVALID");value={kind,state:record.state};break;
+      case "attempt-outcome": if(record.state!=="none"&&record.state!=="live"&&record.state!=="unknown_outcome")return fail("AUTHORITY_PROOF_INVALID");value={kind,state:record.state};break;
+    }
+    const core={schemaVersion:"1" as const,workspaceId:input.workspaceId,runId:input.runId,taskId:input.taskId,observationCursor:view.cursor,value};
+    const snapshotDigest=domainDigest("horseness.task-authority-component.v1",core as unknown as JsonValue);
+    const component:TaskAuthorityComponentSnapshotV1={...core,projectionProof:{schemaVersion:"1",projectionName:projectionName(kind),projectionVersion:"1",snapshotDigest,replayDigest:domainDigest("horseness.task-authority-replay-proof.v1",{projectionName:projectionName(kind),projectionVersion:"1",observationCursor:view.cursor,snapshotDigest} as unknown as JsonValue)}};
+    authenticatedTaskAuthorityComponents.add(component);return Object.freeze(component);
+  });
+  const core={schemaVersion:"1" as const,observationCursor:view.cursor,taskId:input.taskId,components};
+  return assembleTaskAuthorityProjection({...core,compositeDigest:compositeDigest(core)});
 }
 function authorityAggregate(authority:TaskAuthorityProjectionV1,cursor:CompositeCursorV1,taskId:string):{reasons:string[];contractValid:boolean;attempt:"none"|"live"|"unknown_outcome"} {
   if(authority[authenticatedTaskAuthority]!==true||!authenticatedTaskAuthorityProjections.has(authority))fail("AUTHORITY_PROOF_INVALID");if(authority.taskId!==taskId||canonicalJson(authority.observationCursor)!==canonicalJson(cursor))fail("AUTHORITY_CURSOR_SUBSTITUTED");

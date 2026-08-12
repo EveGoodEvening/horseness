@@ -1,21 +1,203 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { domainDigest, sealAttemptReceipt, sealEventEnvelope, type AttemptGenerationStateV1, type JsonValue } from "@horseness/domain";
+import {
+  createRunGenesis,
+  createWorkspaceGenesis,
+  NO_POLICY_DIGEST,
+  sealAttemptReceipt,
+  sealEventEnvelope,
+  type AttemptGenerationStateV1,
+  type AttemptReceiptRecordedV1,
+} from "@horseness/domain";
+import { SQLiteAuthority, trustedAuthorityReader } from "@horseness/store-sqlite";
 import * as orchestrator from "../../src/index.js";
-import { emptyReceiptProjection, projectAuthenticatedReceipt, registerReceiptGeneration, verifyAttemptAuthority, verifyReceiptEvent, type AttemptAuthorityInputV1, type ReceiptEventV1 } from "../../src/index.js";
+import {
+  emptyReceiptProjection,
+  issueStoredReceiptCapabilities,
+  projectAuthenticatedReceipt,
+  registerReceiptGeneration,
+  type AttemptAuthorityInputV1,
+  type ReceiptEventV1,
+} from "../../src/index.js";
 
-const generation=(number:number):AttemptGenerationStateV1=>({attemptId:"attempt",generation:number,state:"acknowledged",bindingDigest:`binding-${number}`,idempotencyKeyDigest:`key-${number}`,providerHandle:`handle-${number}`,terminalEventSequence:null,findingCodes:[]});
-const receipt=(generationNumber=1)=>sealAttemptReceipt({schemaVersion:"1",workspaceId:"w",runId:"r",taskId:"task",attemptId:"attempt",generation:generationNumber,attemptContextBindingDigest:`binding-${generationNumber}`,contextManifestCoreDigest:`manifest-${generationNumber}`,forkPinDigest:`fork-${generationNumber}`,providerId:"provider",providerOperationId:`operation-${generationNumber}`,providerIdempotencyKeyDigest:`key-${generationNumber}`,producerPrincipalId:"adapter",producerGrantDigest:"grant",adapterId:"adapter",adapterVersion:"1",hostId:"host",hostVersion:"1",outcome:"succeeded",startedAt:"2026-08-12T00:00:00Z",finishedAt:"2026-08-12T00:00:01Z",outputDigest:"output",evidence:[],provenance:{},nonce:`nonce-${generationNumber}`});
-const plainAuthority=(generationNumber=1):AttemptAuthorityInputV1=>({binding:{attemptId:"attempt",generation:generationNumber,digest:`binding-${generationNumber}`,contextManifestCoreDigest:`manifest-${generationNumber}`,forkPinDigest:`fork-${generationNumber}`,providerId:"provider",providerOperationId:`operation-${generationNumber}`,providerIdempotencyKeyDigest:`key-${generationNumber}`,allowedProducerPrincipalId:"adapter",allowedProducerGrantDigest:"grant"},providerHandle:`handle-${generationNumber}`,grant:{principalId:"adapter",grantDigest:"grant",revoked:false},dispatch:{attemptId:"attempt",generation:generationNumber,providerId:"provider",providerOperationId:`operation-${generationNumber}`,providerIdempotencyKeyDigest:`key-${generationNumber}`,providerHandle:`handle-${generationNumber}`}});
-const verified=(generationNumber=1)=>{const authorityInput=plainAuthority(generationNumber);const bindingEvent=sealEventEnvelope({schemaVersion:"1",streamKind:"run",workspaceId:"w",streamId:"r",sequence:1,eventId:"binding:1",eventType:"AttemptContextBindingProjectedV1",principalId:"coordinator",causationId:"command",correlationId:"command",idempotencyKey:"binding",priorEnvelopeHash:null,payload:authorityInput.binding});const grantEvent=sealEventEnvelope({schemaVersion:"1",streamKind:"run",workspaceId:"w",streamId:"r",sequence:2,eventId:"grant:2",eventType:"AttemptGrantProjectedV1",principalId:"coordinator",causationId:"command",correlationId:"command",idempotencyKey:"grant",priorEnvelopeHash:bindingEvent.envelopeHash,payload:authorityInput.grant});const dispatchEvent=sealEventEnvelope({schemaVersion:"1",streamKind:"run",workspaceId:"w",streamId:"r",sequence:3,eventId:"dispatch:3",eventType:"AttemptDispatchProjectedV1",principalId:"coordinator",causationId:"command",correlationId:"command",idempotencyKey:"dispatch",priorEnvelopeHash:grantEvent.envelopeHash,payload:authorityInput.dispatch});const authorityReplay=[bindingEvent,grantEvent,dispatchEvent];const authority=verifyAttemptAuthority(authorityInput,{workspaceId:"w",runId:"r",headSequence:3,headEnvelopeHash:dispatchEvent.envelopeHash,replayDigest:domainDigest("horseness.receipt-authority-replay.v1",authorityReplay as unknown as JsonValue),replay:authorityReplay,bindingEventSequence:1,grantEventSequence:2,dispatchEventSequence:3});const value=receipt(generationNumber);const stored=sealEventEnvelope({schemaVersion:"1",streamKind:"run",workspaceId:"w",streamId:"r",sequence:1,eventId:"receipt:1",eventType:"AttemptReceiptRecordedV1",principalId:"adapter",causationId:"command",correlationId:"command",idempotencyKey:"receipt",priorEnvelopeHash:null,payload:value});const input:ReceiptEventV1={eventSequence:1,eventDigest:stored.envelopeHash,authenticatedPrincipalId:"adapter",receipt:value};const event=verifyReceiptEvent(input,{workspaceId:"w",runId:"r",headSequence:1,headEnvelopeHash:stored.envelopeHash,replayDigest:domainDigest("horseness.receipt-authority-replay.v1",[stored] as unknown as JsonValue),replay:[stored]});return {event,authority};};
-const state=(generationNumber=1)=>registerReceiptGeneration(emptyReceiptProjection("attempt"),generation(generationNumber));
+const generation = (number: number): AttemptGenerationStateV1 => ({
+  attemptId: "attempt",
+  generation: number,
+  state: "acknowledged",
+  bindingDigest: `binding-${number}`,
+  idempotencyKeyDigest: `key-${number}`,
+  providerHandle: `handle-${number}`,
+  terminalEventSequence: null,
+  findingCodes: [],
+});
 
-test("verified receipt event and authoritative binding capability mutate the projection",()=>{const capabilities=verified();const projected=projectAuthenticatedReceipt(state(),capabilities.event,capabilities.authority);assert.equal(projected.resolution?.resolution,"succeeded");assert.equal(projected.resolution?.winningGeneration,1);});
+const receipt = (generationNumber = 1) => sealAttemptReceipt({
+  schemaVersion: "1",
+  workspaceId: "w",
+  runId: "r",
+  taskId: "task",
+  attemptId: "attempt",
+  generation: generationNumber,
+  attemptContextBindingDigest: `binding-${generationNumber}`,
+  contextManifestCoreDigest: `manifest-${generationNumber}`,
+  forkPinDigest: `fork-${generationNumber}`,
+  providerId: "provider",
+  providerOperationId: `operation-${generationNumber}`,
+  providerIdempotencyKeyDigest: `key-${generationNumber}`,
+  producerPrincipalId: "adapter",
+  producerGrantDigest: "grant",
+  adapterId: "adapter",
+  adapterVersion: "1",
+  hostId: "host",
+  hostVersion: "1",
+  outcome: "succeeded",
+  startedAt: "2026-08-12T00:00:00Z",
+  finishedAt: "2026-08-12T00:00:01Z",
+  outputDigest: "output",
+  evidence: [],
+  provenance: {},
+  nonce: `nonce-${generationNumber}`,
+});
 
-test("fully populated self-consistent plain objects cannot self-assert receipt authority",()=>{const capabilities=verified();const plainEvent:ReceiptEventV1={eventSequence:capabilities.event.eventSequence,eventDigest:capabilities.event.eventDigest,authenticatedPrincipalId:capabilities.event.authenticatedPrincipalId,receipt:capabilities.event.receipt};const authority=plainAuthority();assert.throws(()=>projectAuthenticatedReceipt(state(),plainEvent as Parameters<typeof projectAuthenticatedReceipt>[1],authority as Parameters<typeof projectAuthenticatedReceipt>[2]),/UNAUTHENTICATED_RECEIPT_EVENT/);assert.equal("authenticated" in plainEvent,false);});
+const plainAuthority = (generationNumber = 1): AttemptAuthorityInputV1 => ({
+  binding: {
+    attemptId: "attempt",
+    generation: generationNumber,
+    digest: `binding-${generationNumber}`,
+    contextManifestCoreDigest: `manifest-${generationNumber}`,
+    forkPinDigest: `fork-${generationNumber}`,
+    providerId: "provider",
+    providerOperationId: `operation-${generationNumber}`,
+    providerIdempotencyKeyDigest: `key-${generationNumber}`,
+    allowedProducerPrincipalId: "adapter",
+    allowedProducerGrantDigest: "grant",
+  },
+  providerHandle: `handle-${generationNumber}`,
+  grant: { principalId: "adapter", grantDigest: "grant", revoked: false },
+  dispatch: {
+    attemptId: "attempt",
+    generation: generationNumber,
+    providerId: "provider",
+    providerOperationId: `operation-${generationNumber}`,
+    providerIdempotencyKeyDigest: `key-${generationNumber}`,
+    providerHandle: `handle-${generationNumber}`,
+  },
+});
 
-test("verified capabilities must share the same attempt-generation identity",()=>{const first=verified(1),second=verified(2);assert.throws(()=>projectAuthenticatedReceipt(state(1),first.event,second.authority),/UNAUTHENTICATED_RECEIPT_EVENT/);});
+function storedCapabilities(generationNumber = 1) {
+  const root = mkdtempSync(join(tmpdir(), "horseness-receipt-projection-"));
+  const authority = new SQLiteAuthority(join(root, "authority.sqlite"), join(root, "artifacts"));
+  const workspace = createWorkspaceGenesis({
+    workspaceId: "w",
+    authorityPrincipalId: "authority",
+    initialGrantDigest: "grant",
+    authorityConsumptionMarker: "marker",
+    activePolicyDigest: NO_POLICY_DIGEST,
+    commandId: "workspace",
+  });
+  authority.appendAtomic({
+    commandId: "workspace",
+    workspace: { streamKind: "workspace", workspaceId: "w", streamId: "w", expectedSequence: 0, expectedEnvelopeHash: null, events: [workspace.event] },
+  });
+  const observationCursor = { ...workspace.resultCursor, kind: "absent-run-genesis" as const, runId: "r", expectedRunHead: "absent" as const };
+  const run = createRunGenesis({ observationCursor, initialDocument: {}, principalId: "coordinator", commandId: "run" });
+  authority.appendAtomic({ commandId: "run", runGenesis: { observationCursor, event: run.event } });
 
-test("receipt verifier rejects a plain event absent authenticated replay",()=>{const value=receipt();const input:ReceiptEventV1={eventSequence:1,eventDigest:"forged",authenticatedPrincipalId:"adapter",receipt:value};assert.throws(()=>verifyReceiptEvent(input,{workspaceId:"w",runId:"r",headSequence:1,headEnvelopeHash:"forged",replayDigest:domainDigest("horseness.receipt-authority-replay.v1",[]),replay:[]}),/UNAUTHENTICATED_RECEIPT_EVENT/);});
+  const value = receipt(generationNumber);
+  const payload: AttemptReceiptRecordedV1 = {
+    eventType: "AttemptReceiptRecordedV1",
+    workspaceId: "w",
+    runId: "r",
+    receiptId: value.receiptId,
+    receiptDigest: value.receiptDigest,
+    outcome: value.outcome,
+  };
+  const stored = sealEventEnvelope({
+    schemaVersion: "1",
+    streamKind: "run",
+    workspaceId: "w",
+    streamId: "r",
+    sequence: 2,
+    eventId: `receipt:${generationNumber}`,
+    eventType: payload.eventType,
+    principalId: "adapter",
+    causationId: `receipt-command:${generationNumber}`,
+    correlationId: "attempt",
+    idempotencyKey: `receipt:${generationNumber}`,
+    priorEnvelopeHash: run.event.envelopeHash,
+    payload,
+  });
+  authority.appendAtomic({
+    commandId: `receipt-command:${generationNumber}`,
+    run: { streamKind: "run", workspaceId: "w", streamId: "r", expectedSequence: 1, expectedEnvelopeHash: run.event.envelopeHash, events: [stored] },
+  });
+  authority.putSnapshot({
+    workspaceId: "w",
+    streamKind: "run",
+    streamId: "r",
+    sequence: 2,
+    envelopeHash: stored.envelopeHash,
+    projectionName: "receipt-event",
+    projectionVersion: "1",
+    state: { eventSequence: 2, eventDigest: stored.envelopeHash, authenticatedPrincipalId: "adapter", receipt: value },
+  });
+  authority.putSnapshot({
+    workspaceId: "w",
+    streamKind: "run",
+    streamId: "r",
+    sequence: 2,
+    envelopeHash: stored.envelopeHash,
+    projectionName: "receipt-authority",
+    projectionVersion: "1",
+    state: plainAuthority(generationNumber),
+  });
+  const capabilities = issueStoredReceiptCapabilities(trustedAuthorityReader(authority), { workspaceId: "w", runId: "r", receiptEventSequence: 2 });
+  return { authority, capabilities, close: () => { authority.close(); rmSync(root, { recursive: true, force: true }); } };
+}
 
-test("package root exports capability verifiers and no unauthenticated projector",()=>{assert.equal(orchestrator.projectAuthenticatedReceipt,projectAuthenticatedReceipt);assert.equal(orchestrator.verifyReceiptEvent,verifyReceiptEvent);assert.equal("projectReceipt" in orchestrator,false);});
+const state = (generationNumber = 1) => registerReceiptGeneration(emptyReceiptProjection("attempt"), generation(generationNumber));
+
+test("trusted SQLite receipt event and authority snapshots mutate the projection", () => {
+  const fixture = storedCapabilities();
+  try {
+    const projected = projectAuthenticatedReceipt(state(), fixture.capabilities.event, fixture.capabilities.authority);
+    assert.equal(projected.resolution?.resolution, "succeeded");
+    assert.equal(projected.resolution?.winningGeneration, 1);
+  } finally { fixture.close(); }
+});
+
+test("fully populated self-consistent plain objects cannot self-assert receipt authority", () => {
+  const fixture = storedCapabilities();
+  try {
+    const plainEvent: ReceiptEventV1 = {
+      eventSequence: fixture.capabilities.event.eventSequence,
+      eventDigest: fixture.capabilities.event.eventDigest,
+      authenticatedPrincipalId: fixture.capabilities.event.authenticatedPrincipalId,
+      receipt: fixture.capabilities.event.receipt,
+    };
+    assert.throws(
+      () => projectAuthenticatedReceipt(state(), plainEvent as Parameters<typeof projectAuthenticatedReceipt>[1], plainAuthority() as Parameters<typeof projectAuthenticatedReceipt>[2]),
+      /UNAUTHENTICATED_RECEIPT_EVENT/,
+    );
+    assert.equal("authenticated" in plainEvent, false);
+  } finally { fixture.close(); }
+});
+
+test("trusted capabilities must share the same attempt-generation identity", () => {
+  const first = storedCapabilities(1);
+  const second = storedCapabilities(2);
+  try {
+    assert.throws(() => projectAuthenticatedReceipt(state(1), first.capabilities.event, second.capabilities.authority), /UNAUTHENTICATED_RECEIPT_EVENT/);
+  } finally { first.close(); second.close(); }
+});
+
+test("package root exposes only capability consumers and trusted issuers", () => {
+  assert.equal(orchestrator.projectAuthenticatedReceipt, projectAuthenticatedReceipt);
+  assert.equal("verifyReceiptEvent" in orchestrator, false);
+  assert.equal("verifyAttemptAuthority" in orchestrator, false);
+  assert.equal(orchestrator.issueStoredReceiptCapabilities, issueStoredReceiptCapabilities);
+  assert.equal("projectReceipt" in orchestrator, false);
+});

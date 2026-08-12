@@ -12,3 +12,4 @@ export {
   type SnapshotRecord,
   type StoredEvent,
 } from "./sqlite-authority.js";
+export { TrustedAuthorityReader, trustedAuthorityReader, type AuthenticatedAuthorityViewV1 } from "./trusted-reader.js";
