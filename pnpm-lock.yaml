@@ -86,6 +86,9 @@ importers:
 
   apps/daemon:
     dependencies:
+      '@horseness/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@horseness/orchestrator':
         specifier: workspace:*
         version: link:../../packages/orchestrator
@@ -95,6 +98,10 @@ importers:
       '@horseness/store-sqlite':
         specifier: workspace:*
         version: link:../../packages/store-sqlite
+    devDependencies:
+      tsx:
+        specifier: 4.20.5
+        version: 4.20.5
 
   packages/adapter-kit:
     dependencies:

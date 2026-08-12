@@ -19,6 +19,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node ./bin/test-runner.mjs",
+    "test:transports": "node --import tsx --test test/transports/**/*.test.ts",
     "protocol:conformance": "node --import tsx ./bin/conformance.ts",
     "generated:check": "node --import tsx ./bin/generate.ts --check",
     "generate": "node --import tsx ./bin/generate.ts"

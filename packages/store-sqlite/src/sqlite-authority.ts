@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { attemptContextBindingDigest, canonicalJson, contextManifestCoreDigest, domainDigest, parseDomainEventPayloadV1, parseObservationCursorV1, sealEventEnvelope, verifyEventChain, type AbsentRunGenesisCursorV1, type AttemptContextBindingV1, type CompositeCursorV1, type ContextManifestRecordV1, type DomainEventPayloadV1, type HashedEventEnvelopeV1, type JsonValue, type RunCreatedV1, type RunEventPayloadV1, type WorkspaceEventPayloadV1 } from "@horseness/domain";
@@ -20,6 +20,9 @@ export interface SnapshotRecord { workspaceId:string; streamKind:EventStream; st
 export interface ArtifactPublication { data:Uint8Array|string; mediaType?:string|null; references?:readonly {ownerKind:string;ownerId:string;allowExistingEvent?:true}[]; pins?:readonly {pinId:string}[] }
 export interface AtomicProjectionUpdate { workspaceId:string; name:string; version:string; streamKind:EventStream; streamId:string; lastSequence:number; lastEnvelopeHash:string|null }
 export interface AtomicSnapshotUpdate extends SnapshotRecord {}
+export interface AuthorityStateRecordV1 { readonly schemaVersion:"1"; readonly workspaceId:string; readonly stateKind:string; readonly revision:number; readonly stateDigest:string; readonly state:JsonValue }
+export interface BootstrapWorkspaceAuthorityRequestV1 { readonly commandId:string; readonly workspace:AppendRequest<WorkspaceEventPayloadV1>; readonly authorityState:AuthorityStateRecordV1 }
+export interface CompareAndSwapAuthorityStateRequestV1 { readonly commandId:string; readonly workspaceId:string; readonly stateKind:string; readonly expectedRevision:number; readonly expectedStateDigest:string; readonly nextState:JsonValue }
 const authorityCredentialBrand:unique symbol=Symbol("authorityCredential");
 export interface AuthorityCredentialV1 { readonly schemaVersion:"1"; readonly authorityId:string; readonly workspaceId:string; readonly databasePath:string; readonly artifactRoot:string; readonly proof:string; readonly [authorityCredentialBrand]:true }
 export interface AuthenticatedWorkspaceOpenV1 { workspaceId:string; sessionId:string; credential:AuthorityCredentialV1 }
@@ -63,6 +66,18 @@ export function createOrLoadAuthorityCredential(databasePath:string,artifactRoot
   const credential=Object.freeze({schemaVersion:"1" as const,authorityId:manifest.authorityId,workspaceId,databasePath:db,artifactRoot:artifacts,proof:credentialProof(manifest,secret),[authorityCredentialBrand]:true as const});issuedCredentials.add(credential);return credential;
 }
 
+export function rebindAuthorityCredential(databasePath:string,artifactRoot:string):AuthorityCredentialV1 {
+  const db=canonicalExisting(databasePath),artifacts=canonicalExisting(artifactRoot),manifestPath=join(artifacts,MANIFEST),secretPath=join(artifacts,SECRET);
+  if(!existsSync(db)||!existsSync(manifestPath)||!existsSync(secretPath))throw new StoreIntegrityError("authority rebind source is incomplete");
+  const manifest=JSON.parse(readFileSync(manifestPath,"utf8")) as AuthorityManifestV1,secret=readFileSync(secretPath);
+  if(manifest.schemaVersion!=="1"||!manifest.workspaceId||!manifest.authorityId||secret.length!==32||!timingSafeEqual(Buffer.from(manifest.secretDigest),Buffer.from(digest(secret))))throw new StoreIntegrityError("authority rebind identity authentication failed");
+  const workspaceId=manifest.workspaceId;const authority=SQLiteAuthority.open(db,artifacts);try{if(authority.replay(workspaceId,"workspace",workspaceId).length===0)throw new StoreIntegrityError("authority rebind workspace replay is empty");}finally{authority.close();}
+  const rebound:AuthorityManifestV1={...manifest,databasePath:db,artifactRoot:artifacts};const temporary=`${manifestPath}.${process.pid}.${randomUUID()}.tmp`;const descriptor=openSync(temporary,"wx",0o600);
+  try{writeFileSync(descriptor,`${canonicalJson(rebound as unknown as JsonValue)}\n`);fsyncSync(descriptor);}finally{closeSync(descriptor);}
+  renameSync(temporary,manifestPath);chmodSync(manifestPath,0o600);const directory=openSync(artifacts,"r");try{fsyncSync(directory);}finally{closeSync(directory);}
+  return createOrLoadAuthorityCredential(db,artifacts,workspaceId);
+}
+
 export class SQLiteAuthority {
   readonly db:DatabaseSync; readonly artifacts:ArtifactStore;
   private readonly authorityIdentity:string;
@@ -78,6 +93,7 @@ export class SQLiteAuthority {
         upgradeAuthority(this.db,artifactRoot);
       }else migrate(this.db);
       this.artifacts=new ArtifactStore(artifactRoot,this.db,crash);
+      this.db.exec("CREATE TABLE IF NOT EXISTS workspace_authority_state(workspace_id TEXT NOT NULL,state_kind TEXT NOT NULL,revision INTEGER NOT NULL,state_digest TEXT NOT NULL,state_json TEXT NOT NULL,command_id TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(workspace_id,state_kind),UNIQUE(workspace_id,command_id))");
       this.db.exec("CREATE TABLE IF NOT EXISTS dispatch_authority(workspace_id TEXT NOT NULL,run_id TEXT NOT NULL,attempt_id TEXT NOT NULL,generation INTEGER NOT NULL,run_sequence INTEGER NOT NULL,run_envelope_hash TEXT NOT NULL,workspace_sequence INTEGER NOT NULL,workspace_envelope_hash TEXT NOT NULL,attempt_digest TEXT NOT NULL,lease_digest TEXT,dispatch_digest TEXT NOT NULL,fence_counter INTEGER NOT NULL,state_json TEXT NOT NULL,command_id TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(workspace_id,run_id,attempt_id,generation),UNIQUE(workspace_id,run_id,command_id))");
     }catch(error){this.db.close();throw error;}
   }
@@ -192,6 +208,39 @@ export class SQLiteAuthority {
       this.db.prepare("INSERT INTO command_dedup(workspace_id,scope_kind,scope_id,command_id,request_digest,result_json,created_at) VALUES(?,?,?,?,?,?,?)").run(workspaceId,scope.kind,scope.id,request.commandId,digest,canonicalJson(result as unknown as JsonValue),now());
       this.crash("transaction.write.after");this.crash("transaction.commit.before");this.db.exec("COMMIT");this.crash("transaction.commit.after");return result;
     }catch(error){if(this.db.isTransaction){this.crash("transaction.rollback.before");this.db.exec("ROLLBACK");this.crash("transaction.rollback.after");}throw error;}
+  }
+  bootstrapWorkspaceAuthorityAtomic(request:BootstrapWorkspaceAuthorityRequestV1):AppendResult {
+    const state=request.authorityState;
+    if(request.workspace.expectedSequence!==0||request.workspace.expectedEnvelopeHash!==null||request.workspace.events.length!==1||state.schemaVersion!=="1"||state.workspaceId!==request.workspace.workspaceId||state.revision!==1||!state.stateKind)throw new StoreIntegrityError("invalid workspace authority bootstrap");
+    const computed=domainDigest("horseness.workspace-authority-state.v1",state.state);
+    if(computed!==state.stateDigest)throw new StoreIntegrityError("workspace authority state digest mismatch");
+    const digest=domainDigest("horseness.workspace-authority-bootstrap.v1",request as unknown as JsonValue);
+    this.crash("transaction.begin.before");this.db.exec("BEGIN IMMEDIATE");this.crash("transaction.begin.after");
+    try{
+      const prior=this.db.prepare("SELECT request_digest,result_json FROM command_dedup WHERE workspace_id=? AND scope_kind='workspace' AND scope_id=? AND command_id=?").get(state.workspaceId,state.workspaceId,request.commandId) as {request_digest:string;result_json:string}|undefined;
+      if(prior){if(prior.request_digest!==digest)throw new StoreConflictError("command id reused with different request");this.db.exec("COMMIT");return{...(JSON.parse(prior.result_json) as AppendResult),deduplicated:true};}
+      if(this.db.prepare("SELECT 1 FROM workspace_authority_state WHERE workspace_id=? OR state_kind=? AND workspace_id=?").get(state.workspaceId,state.stateKind,state.workspaceId)!==undefined)throw new StoreConflictError("workspace authority is already bootstrapped");
+      this.crash("transaction.write.before");const head=this.writeAppend(request.workspace);const result:AppendResult={commandId:request.commandId,workspaceHead:head,deduplicated:false};
+      this.db.prepare("INSERT INTO workspace_authority_state(workspace_id,state_kind,revision,state_digest,state_json,command_id,updated_at) VALUES(?,?,?,?,?,?,?)").run(state.workspaceId,state.stateKind,state.revision,state.stateDigest,canonicalJson(state.state),request.commandId,now());
+      this.db.prepare("INSERT INTO command_dedup(workspace_id,scope_kind,scope_id,command_id,request_digest,result_json,created_at) VALUES(?,'workspace',?,?,?,?,?)").run(state.workspaceId,state.workspaceId,request.commandId,digest,canonicalJson(result as unknown as JsonValue),now());
+      this.crash("transaction.write.after");this.crash("transaction.commit.before");this.db.exec("COMMIT");this.crash("transaction.commit.after");return result;
+    }catch(error){if(this.db.isTransaction){this.db.exec("ROLLBACK");}throw error;}
+  }
+  authenticatedAuthorityState(workspaceId:string,stateKind:string):AuthorityStateRecordV1 {
+    if(this.trustedSession===null||this.trustedSession.workspaceId!==workspaceId)throw new StoreIntegrityError("authenticated workspace session required");
+    this.authenticatedRows(workspaceId,"workspace",workspaceId);
+    const row=this.db.prepare("SELECT revision,state_digest,state_json FROM workspace_authority_state WHERE workspace_id=? AND state_kind=?").get(workspaceId,stateKind) as {revision:number;state_digest:string;state_json:string}|undefined;
+    if(!row)throw new StoreIntegrityError("workspace authority state is missing");const state=JSON.parse(row.state_json) as JsonValue;
+    if(domainDigest("horseness.workspace-authority-state.v1",state)!==row.state_digest)throw new StoreIntegrityError("workspace authority state authentication failed");
+    return Object.freeze({schemaVersion:"1",workspaceId,stateKind,revision:row.revision,stateDigest:row.state_digest,state});
+  }
+  compareAndSwapAuthorityState(request:CompareAndSwapAuthorityStateRequestV1):AuthorityStateRecordV1 {
+    if(this.trustedSession===null||this.trustedSession.workspaceId!==request.workspaceId)throw new StoreIntegrityError("authenticated workspace session required");
+    const nextDigest=domainDigest("horseness.workspace-authority-state.v1",request.nextState);this.db.exec("BEGIN IMMEDIATE");
+    try{const current=this.authenticatedAuthorityState(request.workspaceId,request.stateKind);if(current.revision!==request.expectedRevision||current.stateDigest!==request.expectedStateDigest)throw new StoreConflictError("workspace authority state compare-and-swap conflict");
+      const changed=this.db.prepare("UPDATE workspace_authority_state SET revision=?,state_digest=?,state_json=?,command_id=?,updated_at=? WHERE workspace_id=? AND state_kind=? AND revision=? AND state_digest=?").run(current.revision+1,nextDigest,canonicalJson(request.nextState),request.commandId,now(),request.workspaceId,request.stateKind,current.revision,current.stateDigest).changes;
+      if(changed!==1)throw new StoreConflictError("workspace authority state compare-and-swap conflict");this.db.exec("COMMIT");return Object.freeze({schemaVersion:"1",workspaceId:request.workspaceId,stateKind:request.stateKind,revision:current.revision+1,stateDigest:nextDigest,state:request.nextState});
+    }catch(error){if(this.db.isTransaction)this.db.exec("ROLLBACK");throw error;}
   }
   private authenticatedRows(workspaceId:string,streamKind:EventStream,streamId:string):{raw:string;event:StoredEvent}[]{const head=this.db.prepare("SELECT head_sequence,head_hash FROM streams WHERE workspace_id=? AND stream_kind=? AND stream_id=?").get(workspaceId,streamKind,streamId) as {head_sequence:number;head_hash:string|null}|undefined;const rows=this.db.prepare("SELECT sequence,envelope_hash,prior_envelope_hash,envelope_json FROM events WHERE workspace_id=? AND stream_kind=? AND stream_id=? ORDER BY sequence").all(workspaceId,streamKind,streamId) as {sequence:number;envelope_hash:string;prior_envelope_hash:string|null;envelope_json:string}[];if(head===undefined){if(rows.length!==0)throw new StoreIntegrityError("events exist without stream head");return[];}try{const authenticated=rows.map(row=>{const event=JSON.parse(row.envelope_json) as StoredEvent;const envelope=event.envelope;if(envelope.workspaceId!==workspaceId||envelope.streamKind!==streamKind||envelope.streamId!==streamId||envelope.sequence!==row.sequence||event.envelopeHash!==row.envelope_hash||envelope.priorEnvelopeHash!==row.prior_envelope_hash)throw new StoreIntegrityError("event row does not match envelope");return{raw:row.envelope_json,event};});if(authenticated.length===0||authenticated[0]?.event.envelope.sequence!==1||authenticated[0].event.envelope.priorEnvelopeHash!==null)throw new StoreIntegrityError("invalid stream genesis");verifyEventChain(authenticated.map(item=>item.event));const last=authenticated.at(-1)?.event;if(last===undefined||head.head_sequence!==last.envelope.sequence||head.head_hash!==last.envelopeHash)throw new StoreIntegrityError("stored stream head mismatch");return authenticated;}catch(error){if(error instanceof StoreIntegrityError)throw error;throw new StoreIntegrityError(`event chain authentication failed: ${error instanceof Error?error.message:String(error)}`);}}
   replay(workspaceId:string,streamKind:EventStream,streamId:string,fromSequence=1):StoredEvent[]{if(!Number.isSafeInteger(fromSequence)||fromSequence<1)throw new StoreIntegrityError("invalid replay sequence");return this.authenticatedRows(workspaceId,streamKind,streamId).filter(item=>item.event.envelope.sequence>=fromSequence).map(item=>item.event);}

@@ -46,6 +46,16 @@ Credentials cross the adapter boundary only as versioned opaque references scope
 
 The executable adapter conformance suite covers capability detection, lifecycle recovery, immutable binding retention, callback deduplication, credential/reference exclusion, scope rejection, executable/cwd and symlink confinement, bounded/redacted output, declarative install and doctor validation, and a `WorkerReturnV1` artifact/receipt/proposal/decision-resume loop through an SDK-compatible client fake. The repository root `adapter:conformance` command is the focused gate for this contract.
 
+## Daemon v1 implementation train
+
+`@horseness/daemon` serves the local authority through versioned stdio, Unix-domain socket, and Windows named-pipe endpoints. Stdio is process-inherited; filesystem endpoints require an owner-only parent and endpoint. TCP is not a v1 transport and remains disabled by default. Transport implementations authenticate peers and frame newline-delimited JSON-RPC 2.0 messages, while daemon services alone own bootstrap, grants, dispatch, and authority mutations.
+
+The first-authority ceremony uses a single-use bootstrap capability stored as an owner-only `0o600` file beneath an owner-only `0o700` directory. Its v1 payload binds the workspace identity and local OS account. Consumption verifies that binding, atomically appends workspace genesis and the initial grant through the authority compare-and-swap boundary, and removes the capability; concurrent, substituted-user, or already-consumed attempts fail closed.
+
+The v1 grant lookup contract returns authenticated principal, role, grant digest, workspace/run/task scope, allowed methods, expiry, and revocation state from authoritative SQLite projections. Restarts and restored workspaces must rebind the local authority credential and endpoint identity before serving requests.
+
+C13 CI receipts use `horseness.os-receipt.v1`. Each Linux, macOS, and Windows receipt binds the exact candidate commit SHA and records successful focused typecheck and daemon multiprocess gates. Receipt aggregation rejects absent platforms, duplicate or unexpected fields, candidate substitution, reordered or missing gates, and any status other than `passed`; local fixture inputs are accepted only when an explicit candidate SHA environment override matches them.
+
 ## Policy v1 implementation train
 
 `@horseness/policy` writes immutable `PolicyDocumentV1` values addressed by the domain-separated `horseness.policy.v1` digest and strict `PolicyReferenceStateV1` lifecycle values. `NoPolicyV1` and `NO_POLICY_DIGEST` are the only neutral representation; policy references and pinned/current policy slots are never nullable. Readers reject unknown versions, kinds, effects, extra fields, malformed lineage, duplicate or noncanonical rule/evidence identifiers, substituted document digests, noncanonical JSON Pointers, and noncanonical UTF-8 ordering.

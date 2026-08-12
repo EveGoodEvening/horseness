@@ -25,6 +25,7 @@
     "host:validate:codex": "node scripts/host-feasibility/codex/validate.mjs --fixture tests/fixtures/hosts/codex/manifest.v1.json --mode hermetic",
     "host:harness:test": "node --test tests/host-feasibility/*.test.mjs tests/host-feasibility/**/*.test.mjs",
     "hosts:matrix:verify": "node scripts/host-feasibility/verify-matrix.mjs",
+    "ci:require-os-receipts": "node scripts/ci-require-os-receipts.mjs",
     "acceptance": "node scripts/acceptance.mjs",
     "progress:cas": "node scripts/progress-cas.mjs"
   },
@@ -49,5 +50,10 @@
     "markdownlint-cli2": "0.18.1",
     "typescript": "5.9.2",
     "typescript-eslint": "8.39.1"
-  }
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "adapters/*"
+  ]
 }

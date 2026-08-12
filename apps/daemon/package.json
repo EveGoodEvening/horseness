@@ -11,13 +11,18 @@
     }
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p ../../tsconfig.base.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src --max-warnings=0",
-    "test": "node --test"
+    "test:multiprocess": "node --import tsx --test test/multiprocess.test.ts",
+    "test": "node --import tsx --test test/**/*.test.ts"
   },
   "dependencies": {
+    "@horseness/domain": "workspace:*",
     "@horseness/orchestrator": "workspace:*",
     "@horseness/protocol": "workspace:*",
     "@horseness/store-sqlite": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "4.20.5"
   }
 }

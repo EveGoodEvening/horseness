@@ -47,3 +47,78 @@ jobs:
           node scripts/progress-cas.mjs verify-live-receipt --receipt docs/checkpoints/C01/final/1.json --claim docs/claims/C01/1.json --remediation-claim docs/claims/R001/1.json --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --integrated-head HEAD --strict
           node scripts/acceptance.mjs verify C01 docs/checkpoints/C01/final/1.json
           node scripts/progress-cas.mjs verify-live-resume --receipt docs/checkpoints/C01/final/1.json --claim docs/claims/C01/1.json --remediation-claim docs/claims/R001/1.json --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --progress docs/progress.md --subject-progress docs/progress/C01.md --integrated-head HEAD --strict
+
+  c13-os:
+    name: C13 (${{ matrix.receipt-os }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            receipt-os: linux
+          - runner: macos-latest
+            receipt-os: macos
+          - runner: windows-latest
+            receipt-os: windows
+    env:
+      CI: "1"
+      TZ: UTC
+      LANG: C
+      NODE_OPTIONS: --unhandled-rejections=strict
+      HORSENESS_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: corepack enable
+      - run: corepack pnpm install --frozen-lockfile
+      - name: C13 focused typecheck
+        run: corepack pnpm --filter @horseness/daemon --filter @horseness/protocol run typecheck
+      - name: C13 multiprocess gate
+        run: corepack pnpm --filter @horseness/daemon run test:multiprocess
+      - name: Write candidate-bound OS receipt
+        shell: bash
+        env:
+          RECEIPT_OS: ${{ matrix.receipt-os }}
+        run: |
+          mkdir -p .ci/os-receipts
+          node -e 'const fs=require("node:fs"); const value={version:"horseness.os-receipt.v1",chunk:"C13",os:process.env.RECEIPT_OS,candidateSha:process.env.HORSENESS_CANDIDATE_SHA,gates:[{name:"c13:typecheck",status:"passed"},{name:"c13:multiprocess",status:"passed"}]}; fs.writeFileSync(`.ci/os-receipts/C13-${process.env.RECEIPT_OS}.json`,`${JSON.stringify(value)}\n`,{flag:"wx",mode:0o600});'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: c13-os-receipt-${{ matrix.receipt-os }}
+          path: .ci/os-receipts/C13-${{ matrix.receipt-os }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  c13-receipts:
+    name: Require C13 OS receipts
+    needs: c13-os
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CI: "1"
+      TZ: UTC
+      LANG: C
+      NODE_OPTIONS: --unhandled-rejections=strict
+      HORSENESS_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: c13-os-receipt-*
+          path: .ci/os-receipts
+          merge-multiple: true
+      - run: corepack enable
+      - run: corepack pnpm run ci:require-os-receipts -- C13 linux macos windows
