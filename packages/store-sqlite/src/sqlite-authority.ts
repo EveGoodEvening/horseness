@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
-import { attemptContextBindingDigest, canonicalJson, contextManifestCoreDigest, domainDigest, parseDomainEventPayloadV1, parseObservationCursorV1, sealEventEnvelope, verifyEventChain, type AbsentRunGenesisCursorV1, type AttemptContextBindingV1, type ContextManifestRecordV1, type DomainEventPayloadV1, type HashedEventEnvelopeV1, type JsonValue, type RunCreatedV1, type RunEventPayloadV1, type WorkspaceEventPayloadV1 } from "@horseness/domain";
+import { attemptContextBindingDigest, canonicalJson, contextManifestCoreDigest, domainDigest, parseDomainEventPayloadV1, parseObservationCursorV1, sealEventEnvelope, verifyEventChain, type AbsentRunGenesisCursorV1, type AttemptContextBindingV1, type CompositeCursorV1, type ContextManifestRecordV1, type DomainEventPayloadV1, type HashedEventEnvelopeV1, type JsonValue, type RunCreatedV1, type RunEventPayloadV1, type WorkspaceEventPayloadV1 } from "@horseness/domain";
 import { ArtifactStore } from "./artifact-store.js";
 import { noCrash, type CrashInjector } from "./crash.js";
 import { inspectMigrationLedger, migrate } from "./migrations.js";
@@ -30,6 +30,13 @@ export interface ContextManifestPublicationRequestV1 {
   principalId:string; commandId:string;
 }
 export interface ContextManifestPublicationResultV1 extends AppendResult { artifactDigest:string; byteLength:number; eventId:string }
+export interface DispatchAuthorityStateV1 { readonly attempt:JsonValue; readonly lease:JsonValue|null; readonly dispatch:JsonValue; }
+export interface PersistDispatchAuthorityRequestV1 {
+  readonly workspaceId:string; readonly runId:string; readonly attemptId:string; readonly generation:number;
+  readonly authorityCursor:CompositeCursorV1; readonly state:DispatchAuthorityStateV1;
+  readonly expectedAttemptDigest:string|null; readonly expectedLeaseDigest:string|null; readonly expectedDispatchDigest:string|null;
+  readonly commandId:string;
+}
 export class StoreConflictError extends Error { constructor(message:string){super(message);this.name="StoreConflictError";} }
 export class StoreIntegrityError extends Error { constructor(message:string){super(message);this.name="StoreIntegrityError";} }
 const now=():string=>new Date().toISOString();
@@ -71,6 +78,7 @@ export class SQLiteAuthority {
         upgradeAuthority(this.db,artifactRoot);
       }else migrate(this.db);
       this.artifacts=new ArtifactStore(artifactRoot,this.db,crash);
+      this.db.exec("CREATE TABLE IF NOT EXISTS dispatch_authority(workspace_id TEXT NOT NULL,run_id TEXT NOT NULL,attempt_id TEXT NOT NULL,generation INTEGER NOT NULL,run_sequence INTEGER NOT NULL,run_envelope_hash TEXT NOT NULL,workspace_sequence INTEGER NOT NULL,workspace_envelope_hash TEXT NOT NULL,attempt_digest TEXT NOT NULL,lease_digest TEXT,dispatch_digest TEXT NOT NULL,fence_counter INTEGER NOT NULL,state_json TEXT NOT NULL,command_id TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(workspace_id,run_id,attempt_id,generation),UNIQUE(workspace_id,run_id,command_id))");
     }catch(error){this.db.close();throw error;}
   }
   static open(databasePath:string,artifactRoot:string,crash:CrashInjector=noCrash):SQLiteAuthority{
@@ -97,6 +105,29 @@ export class SQLiteAuthority {
   }
   close():void{if(this.trustedSession!==null){const sessionKey=`${this.trustedAuthorityId??this.authorityIdentity}\u0000${this.trustedSession.workspaceId}`;const current=activeWorkspaceSessions.get(sessionKey);if(current?.authority.deref()===this)activeWorkspaceSessions.delete(sessionKey);this.trustedSession=null;this.trustedAuthorityId=null;}this.db.close();}
   migrationVersions():number[]{return (this.db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as {version:number}[]).map(r=>r.version);}
+  persistDispatchAuthorityAtomic(request:PersistDispatchAuthorityRequestV1):Readonly<{deduplicated:boolean;fenceCounter:number}>{
+    if(!request.workspaceId||!request.runId||!request.attemptId||!request.commandId||!Number.isSafeInteger(request.generation)||request.generation<1)throw new StoreIntegrityError("invalid dispatch authority identity");
+    let cursor:CompositeCursorV1;try{const parsed=parseObservationCursorV1(request.authorityCursor);if(parsed.kind!=="composite")throw new Error("not composite");cursor=parsed;}catch{throw new StoreIntegrityError("invalid dispatch authority cursor");}
+    if(cursor.workspaceId!==request.workspaceId||cursor.runId!==request.runId)throw new StoreIntegrityError("dispatch authority cursor identity mismatch");
+    const state=request.state as unknown as Record<string,unknown>,attempt=state.attempt as Record<string,unknown>,lease=state.lease as Record<string,unknown>|null,dispatch=state.dispatch as Record<string,unknown>;
+    const attemptDigest=attempt?.attemptDigest,leaseDigest=lease?.leaseDigest??null,dispatchDigest=dispatch?.recordDigest,fenceValue=lease?.fenceToken??0;
+    if(typeof attemptDigest!=="string"||typeof dispatchDigest!=="string"||leaseDigest!==null&&typeof leaseDigest!=="string"||typeof fenceValue!=="number"||!Number.isSafeInteger(fenceValue)||fenceValue<0||attempt.attemptId!==request.attemptId||attempt.generation!==request.generation||dispatch.attemptId!==request.attemptId||dispatch.generation!==request.generation||lease!==null&&(lease.attemptId!==request.attemptId||lease.generation!==request.generation||canonicalJson(lease.authorityCursor as JsonValue)!==canonicalJson(cursor as unknown as JsonValue)))throw new StoreIntegrityError("invalid dispatch authority state");
+    const fence=fenceValue;
+    const stateJson=canonicalJson(request.state as unknown as JsonValue);this.crash("transaction.begin.before");this.db.exec("BEGIN IMMEDIATE");this.crash("transaction.begin.after");try{
+      const workspace=this.db.prepare("SELECT head_sequence,head_hash FROM streams WHERE workspace_id=? AND stream_kind='workspace' AND stream_id=?").get(request.workspaceId,request.workspaceId) as {head_sequence:number;head_hash:string}|undefined;
+      const run=this.db.prepare("SELECT head_sequence,head_hash FROM streams WHERE workspace_id=? AND stream_kind='run' AND stream_id=?").get(request.workspaceId,request.runId) as {head_sequence:number;head_hash:string}|undefined;
+      if(!workspace||!run||workspace.head_sequence!==cursor.workspaceSequence||workspace.head_hash!==cursor.workspaceEnvelopeHash||run.head_sequence!==cursor.runSequence||run.head_hash!==cursor.runEnvelopeHash)throw new StoreConflictError("dispatch authority exact head conflict");
+      this.authenticatedRows(request.workspaceId,"workspace",request.workspaceId);this.authenticatedRows(request.workspaceId,"run",request.runId);
+      const prior=this.db.prepare("SELECT attempt_digest,lease_digest,dispatch_digest,fence_counter,state_json,command_id FROM dispatch_authority WHERE workspace_id=? AND run_id=? AND attempt_id=? AND generation=?").get(request.workspaceId,request.runId,request.attemptId,request.generation) as {attempt_digest:string;lease_digest:string|null;dispatch_digest:string;fence_counter:number;state_json:string;command_id:string}|undefined;
+      if(prior?.command_id===request.commandId){if(prior.state_json!==stateJson)throw new StoreConflictError("dispatch authority command reused with different state");this.db.exec("COMMIT");return Object.freeze({deduplicated:true,fenceCounter:prior.fence_counter});}
+      if((prior?.attempt_digest??null)!==request.expectedAttemptDigest||(prior?.lease_digest??null)!==request.expectedLeaseDigest||(prior?.dispatch_digest??null)!==request.expectedDispatchDigest)throw new StoreConflictError("dispatch authority compare-and-swap conflict");
+      if(prior&&prior.attempt_digest!==attemptDigest)throw new StoreConflictError("bound attempt is immutable");
+      if(prior&&fence<prior.fence_counter)throw new StoreConflictError("lease fence rollback");
+      if(prior){const priorState=JSON.parse(prior.state_json) as Record<string,JsonValue>,priorLease=priorState.lease as Record<string,JsonValue>|null;if(fence>prior.fence_counter+1)throw new StoreConflictError("lease fence counter skipped");if(fence===prior.fence_counter&&priorLease!==null&&lease!==null){for(const field of ["leaseId","ownerId","bootId","processId","fenceToken","bindingDigest"] as const)if(priorLease[field]!==lease[field])throw new StoreConflictError("lease identity substitution");}}
+      this.crash("transaction.write.before");this.db.prepare("INSERT INTO dispatch_authority(workspace_id,run_id,attempt_id,generation,run_sequence,run_envelope_hash,workspace_sequence,workspace_envelope_hash,attempt_digest,lease_digest,dispatch_digest,fence_counter,state_json,command_id,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workspace_id,run_id,attempt_id,generation) DO UPDATE SET run_sequence=excluded.run_sequence,run_envelope_hash=excluded.run_envelope_hash,workspace_sequence=excluded.workspace_sequence,workspace_envelope_hash=excluded.workspace_envelope_hash,lease_digest=excluded.lease_digest,dispatch_digest=excluded.dispatch_digest,fence_counter=excluded.fence_counter,state_json=excluded.state_json,command_id=excluded.command_id,updated_at=excluded.updated_at").run(request.workspaceId,request.runId,request.attemptId,request.generation,cursor.runSequence,cursor.runEnvelopeHash,cursor.workspaceSequence,cursor.workspaceEnvelopeHash,attemptDigest,leaseDigest,dispatchDigest,fence,stateJson,request.commandId,now());this.crash("transaction.write.after");
+      this.crash("transaction.commit.before");this.db.exec("COMMIT");this.crash("transaction.commit.after");return Object.freeze({deduplicated:false,fenceCounter:fence});
+    }catch(error){if(this.db.isTransaction){this.crash("transaction.rollback.before");this.db.exec("ROLLBACK");this.crash("transaction.rollback.after");}throw error;}
+  }
   private validateAppend<T extends DomainEventPayloadV1>(request:AppendRequest<T>):void {
     if(request.events.length===0)throw new StoreIntegrityError("empty append");
     if(!Number.isSafeInteger(request.expectedSequence)||request.expectedSequence<0)throw new StoreIntegrityError("invalid expected sequence");

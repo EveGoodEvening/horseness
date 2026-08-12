@@ -1,0 +1,28 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { createRunGenesis, createWorkspaceGenesis, domainDigest, NO_POLICY_DIGEST, type CompositeCursorV1, type JsonValue } from "@horseness/domain";
+import { SQLiteAuthority, StoreConflictError, createOrLoadAuthorityCredential } from "../src/index.js";
+
+function setup() {
+  const directory=mkdtempSync(join(tmpdir(),"horseness-dispatch-authority-")),database=join(directory,"authority.sqlite"),artifacts=join(directory,"artifacts"),workspaceId="workspace",runId="run";
+  const authority=new SQLiteAuthority(database,artifacts);
+  const workspace=createWorkspaceGenesis({workspaceId,authorityPrincipalId:"authority",initialGrantDigest:"grant",authorityConsumptionMarker:"marker",activePolicyDigest:NO_POLICY_DIGEST,commandId:"workspace"});
+  authority.appendAtomic({commandId:"workspace",workspace:{streamKind:"workspace",workspaceId,streamId:workspaceId,expectedSequence:0,expectedEnvelopeHash:null,events:[workspace.event]}});
+  const absent={...workspace.resultCursor,kind:"absent-run-genesis" as const,runId,expectedRunHead:"absent" as const};
+  const run=createRunGenesis({observationCursor:absent,initialDocument:{},principalId:"authority",commandId:"run"});authority.appendAtomic({commandId:"run",runGenesis:{observationCursor:absent,event:run.event}});authority.close();
+  return{directory,database,artifacts,workspaceId,runId};
+}
+function state(cursor:CompositeCursorV1,fence=1,owner="owner") {
+  const attemptCore={schemaVersion:"1",workspaceId:"workspace",runId:"run",taskId:"task",attemptId:"attempt",generation:1,bindingDigest:"binding",outcome:"live"};
+  const attempt={...attemptCore,attemptDigest:domainDigest("test.attempt",attemptCore as JsonValue)};
+  const leaseCore={schemaVersion:"1",attemptId:"attempt",generation:1,bindingDigest:"binding",leaseId:`lease-${fence}`,ownerId:owner,bootId:"boot",processId:"pid",fenceToken:fence,authorityCursor:cursor,acquiredAt:"2026-01-01T00:00:00.000Z",expiresAt:"2026-01-01T00:01:00.000Z",durationMs:60000};
+  const dispatchCore={schemaVersion:"1",attemptId:"attempt",generation:1,bindingDigest:"binding",attemptDigest:attempt.attemptDigest,phase:"planned"};
+  return{attempt,lease:{...leaseCore,leaseDigest:domainDigest("test.lease",leaseCore as unknown as JsonValue)},dispatch:{...dispatchCore,recordDigest:domainDigest("test.dispatch",dispatchCore as JsonValue)}} as unknown as {attempt:JsonValue;lease:JsonValue;dispatch:JsonValue};
+}
+
+test("only exact-head persisted dispatch authority rehydrates after a fresh authenticated open",()=>{const f=setup();try{const credential=createOrLoadAuthorityCredential(f.database,f.artifacts,f.workspaceId);let opened=SQLiteAuthority.openAuthenticatedWorkspace(f.database,f.artifacts,{workspaceId:f.workspaceId,sessionId:"one",credential});const cursor=opened.reader.authenticatedView(f.workspaceId,f.runId).cursor,s=state(cursor);opened.authority.persistDispatchAuthorityAtomic({workspaceId:f.workspaceId,runId:f.runId,attemptId:"attempt",generation:1,authorityCursor:cursor,state:s,expectedAttemptDigest:null,expectedLeaseDigest:null,expectedDispatchDigest:null,commandId:"create"});opened.authority.close();const nextCredential=createOrLoadAuthorityCredential(f.database,f.artifacts,f.workspaceId);opened=SQLiteAuthority.openAuthenticatedWorkspace(f.database,f.artifacts,{workspaceId:f.workspaceId,sessionId:"two",credential:nextCredential});assert.deepEqual(opened.reader.dispatchAuthority(f.workspaceId,f.runId,"attempt",1).state,s);opened.authority.close();}finally{rmSync(f.directory,{recursive:true,force:true});}});
+
+test("re-digested alternate state and fence rollback fail closed",()=>{const f=setup();try{const credential=createOrLoadAuthorityCredential(f.database,f.artifacts,f.workspaceId),opened=SQLiteAuthority.openAuthenticatedWorkspace(f.database,f.artifacts,{workspaceId:f.workspaceId,sessionId:"one",credential}),cursor=opened.reader.authenticatedView(f.workspaceId,f.runId).cursor,first=state(cursor),firstLease=(first.lease as Record<string,JsonValue>).leaseDigest as string,firstDispatch=(first.dispatch as Record<string,JsonValue>).recordDigest as string,firstAttempt=(first.attempt as Record<string,JsonValue>).attemptDigest as string;opened.authority.persistDispatchAuthorityAtomic({workspaceId:f.workspaceId,runId:f.runId,attemptId:"attempt",generation:1,authorityCursor:cursor,state:first,expectedAttemptDigest:null,expectedLeaseDigest:null,expectedDispatchDigest:null,commandId:"create"});const rollback=state(cursor,0,"attacker");assert.throws(()=>opened.authority.persistDispatchAuthorityAtomic({workspaceId:f.workspaceId,runId:f.runId,attemptId:"attempt",generation:1,authorityCursor:cursor,state:rollback,expectedAttemptDigest:firstAttempt,expectedLeaseDigest:firstLease,expectedDispatchDigest:firstDispatch,commandId:"rollback"}),StoreConflictError);const alternate=structuredClone(first) as typeof first;(alternate.attempt as Record<string,JsonValue>).taskId="other";(alternate.attempt as Record<string,JsonValue>).attemptDigest=domainDigest("test.attempt",alternate.attempt);assert.throws(()=>opened.authority.persistDispatchAuthorityAtomic({workspaceId:f.workspaceId,runId:f.runId,attemptId:"attempt",generation:1,authorityCursor:cursor,state:alternate,expectedAttemptDigest:firstAttempt,expectedLeaseDigest:firstLease,expectedDispatchDigest:firstDispatch,commandId:"alternate"}),/immutable/);opened.authority.close();}finally{rmSync(f.directory,{recursive:true,force:true});}});

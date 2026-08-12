@@ -4,6 +4,7 @@ import { StoreConflictError, StoreIntegrityError } from "./sqlite-authority.js";
 
 const trustedReaders = new WeakSet<object>();
 const readerIssuer = Object.freeze({});
+const dispatchAuthorities = new WeakSet<object>();
 
 export interface AuthenticatedWorkspaceSessionV1 {
   readonly schemaVersion: "1";
@@ -16,6 +17,8 @@ export interface AuthenticatedAuthorityViewV1 {
   readonly workspaceEvents: readonly StoredEvent[];
   readonly runEvents: readonly StoredEvent[];
 }
+export interface AuthenticatedDispatchAuthorityV1 { readonly workspaceId:string;readonly runId:string;readonly attemptId:string;readonly generation:number;readonly cursor:CompositeCursorV1;readonly state:JsonValue }
+export function isAuthenticatedDispatchAuthority(value:AuthenticatedDispatchAuthorityV1):boolean{return dispatchAuthorities.has(value);}
 
 export class TrustedAuthorityReader {
   constructor(
@@ -94,6 +97,13 @@ export class TrustedAuthorityReader {
       bytes: new Uint8Array(this.authority.artifacts.readReferenced(digest)),
       ownerRunSequence: owner.envelope.sequence,
     });
+  }
+
+  dispatchAuthority(workspaceId:string,runId:string,attemptId:string,generation:number):AuthenticatedDispatchAuthorityV1 {
+    const view=this.authenticatedView(workspaceId,runId);
+    const row=this.authority.db.prepare("SELECT run_sequence,run_envelope_hash,workspace_sequence,workspace_envelope_hash,state_json FROM dispatch_authority WHERE workspace_id=? AND run_id=? AND attempt_id=? AND generation=?").get(workspaceId,runId,attemptId,generation) as {run_sequence:number;run_envelope_hash:string;workspace_sequence:number;workspace_envelope_hash:string;state_json:string}|undefined;
+    if(!row||row.run_sequence!==view.cursor.runSequence||row.run_envelope_hash!==view.cursor.runEnvelopeHash||row.workspace_sequence!==view.cursor.workspaceSequence||row.workspace_envelope_hash!==view.cursor.workspaceEnvelopeHash)throw new StoreConflictError("dispatch authority is missing or stale");
+    const value=Object.freeze({workspaceId,runId,attemptId,generation,cursor:view.cursor,state:structuredClone(JSON.parse(row.state_json) as JsonValue)});dispatchAuthorities.add(value);return value;
   }
 }
 
