@@ -1,0 +1,67 @@
+{
+  "schemaVersion": "HostFixtureManifestV1",
+  "host": "codex",
+  "native": {
+    "binary": "native/codex.mjs",
+    "version": "0.144.1",
+    "distributionIdentity": "npm:@openai/codex@0.144.1",
+    "distributionDigest": "sha256:8edbdcb51a6979a26a283299d928f60a306ae94cd6b4b514a5c5e1f29fb918d9",
+    "mode": "native"
+  },
+  "officialValidator": {
+    "command": ["native/validator.mjs"],
+    "version": "0.144.1",
+    "distributionIdentity": "OpenAI Codex plugin/skill/MCP native contribution validator for npm:@openai/codex@0.144.1",
+    "distributionDigest": "sha256:9eee3e147603af046f5ed75fa7bd8533058f88d43ff3c6e7228d57dd3e0f801b"
+  },
+  "capabilities": {
+    "required": [
+      "nativeArtifactLoad",
+      "contextInjection",
+      "deterministicProviderAttempt",
+      "receiptBinding",
+      "restartReconcile",
+      "resume",
+      "forkSwitch",
+      "uninstall"
+    ],
+    "supported": [
+      "nativeArtifactLoad",
+      "contextInjection",
+      "deterministicProviderAttempt",
+      "receiptBinding",
+      "restartReconcile",
+      "resume",
+      "forkSwitch",
+      "uninstall"
+    ]
+  },
+  "resume": {
+    "daemonRestart": "reconcile-original-attempt-and-receipt",
+    "hostRestart": "resume-original-thread",
+    "sessionResume": "native-thread-resume-at-original-cursor",
+    "forkSwitch": "new-binding-required"
+  },
+  "provider": {
+    "identity": "horseness-local-provider-v1",
+    "requestFixture": "provider/request.json",
+    "responseFixture": "provider/response.json",
+    "clock": "2026-01-01T00:00:00Z",
+    "budget": {
+      "maxInputBytes": 4096,
+      "maxOutputBytes": 4096,
+      "maxAttempts": 1
+    },
+    "network": "disabled",
+    "credentials": "disabled"
+  },
+  "livePolicy": {
+    "credentialReference": "HORSENESS_CODEX_CREDENTIAL_REF",
+    "publicationRequired": false,
+    "timeoutMs": 30000,
+    "budget": {
+      "maxCostUsd": 0.25,
+      "maxAttempts": 1
+    }
+  }
+}

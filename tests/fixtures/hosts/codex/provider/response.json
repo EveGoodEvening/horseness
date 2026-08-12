@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "CodexProviderResponseV1",
+  "output": "CODEX_DETERMINISTIC_OUTPUT_V1",
+  "evidence": "CODEX_EVIDENCE_V1",
+  "finishReason": "stop",
+  "usage": {
+    "inputBytes": 243,
+    "outputBytes": 182,
+    "attempts": 1
+  }
+}

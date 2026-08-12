@@ -12,6 +12,10 @@ Writers emit only the current supported version. Readers support the documented 
 
 Pi, OMP, Claude Code, and Codex native contributions are mandatory. C11 freezes supported host versions and capabilities. Unsupported or managed-blocked hosts are errors; absent hosts are reported no-ops. CLI-only mode does not satisfy native compatibility.
 
+The machine-readable authority is `config/hosts/capability-matrix.v1.json`. Each row binds the exact native distribution and official validator version/digest, the repository fixture and validator entry point, and the capability/resume declaration. `HostValidationResultV1` is the stable nine-field result contract. A passing hermetic result requires both native and official-validator minimums; a CLI-only path, missing/tampered binary, incompatible version, missing/tampered validator, or missing required capability fails closed.
+
+Hermetic feasibility uses the repository deterministic provider with frozen request/response bytes, clock, budget, identity, disabled network, and disabled credentials. Credentialed-live checks are separate: local execution may report `LIVE_CREDENTIAL_ABSENT` only when the allowlisted opaque reference is absent and publication is not required. Once configured, every credential, provenance, redaction, budget, timeout, or host failure is fatal; publication-required evidence never skips.
+
 ## Release train
 
 All packages, applications, native bundles, bootstrap binaries, offline archives, schemas, migration data, SBOM, provenance, signatures, trust metadata, and rollback instructions share one coherent immutable release version and manifest digest.

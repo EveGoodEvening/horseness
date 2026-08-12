@@ -1,0 +1,6 @@
+{
+  "schemaVersion": "DeterministicProviderResponseV1",
+  "finishReason": "stop",
+  "content": "horseness-host-feasibility-ok",
+  "usage": { "inputUnits": 17, "outputUnits": 1 }
+}

@@ -1,0 +1,5 @@
+{
+  "evidence": "OMP_EVIDENCE_V1",
+  "output": "OMP_DETERMINISTIC_OUTPUT_V1",
+  "provider": "horseness-local-deterministic-provider-v1"
+}

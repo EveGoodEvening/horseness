@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "printf '%s\\n' horseness-context-injected >/dev/null"
+          }
+        ]
+      }
+    ]
+  }
+}

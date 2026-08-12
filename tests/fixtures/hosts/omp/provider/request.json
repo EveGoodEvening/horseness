@@ -1,0 +1,7 @@
+{
+  "context": "horseness deterministic context v1",
+  "provider": "horseness-local-deterministic-provider-v1",
+  "receiptBinding": "sha256:6d6e9d50276f32b842a932b37899f739c93f0e138956576274f7a7147a719b2c",
+  "resumeCursor": "omp-session-0001:turn-0001",
+  "session": "omp-session-0001"
+}

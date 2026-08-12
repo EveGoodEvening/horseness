@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "HostFixtureManifestV1",
+  "host": "claude",
+  "native": {
+    "binary": "native/claude.mjs",
+    "version": "2.1.228",
+    "distributionIdentity": "npm:@anthropic-ai/claude-code@2.1.228",
+    "distributionDigest": "sha256:d6b6eb68c4a973ac29e616b068320c334bae2d3a74ed85a73e42fb975ceee007",
+    "mode": "native"
+  },
+  "officialValidator": {
+    "command": ["native/claude-plugin-validator.mjs", "plugin", "validate", "./plugin"],
+    "version": "2.1.228",
+    "distributionIdentity": "Claude Code native plugin validate from npm:@anthropic-ai/claude-code@2.1.228",
+    "distributionDigest": "sha256:d6b6eb68c4a973ac29e616b068320c334bae2d3a74ed85a73e42fb975ceee007"
+  },
+  "capabilities": {
+    "required": ["nativeArtifactLoad", "contextInjection", "deterministicProviderAttempt", "receiptBinding", "restartReconcile", "resume", "forkSwitch", "uninstall"],
+    "supported": ["nativeArtifactLoad", "contextInjection", "deterministicProviderAttempt", "receiptBinding", "restartReconcile", "resume", "forkSwitch", "uninstall"]
+  },
+  "resume": {
+    "daemonRestart": "reconcile-original-binding",
+    "hostRestart": "resume-original-session",
+    "sessionResume": "native-resume-original-binding",
+    "forkSwitch": "new-binding-required"
+  },
+  "provider": {
+    "identity": "horseness-local-provider-v1",
+    "requestFixture": "provider/request.json",
+    "responseFixture": "provider/response.json",
+    "clock": "2026-01-01T00:00:00Z",
+    "budget": {"maxInputBytes": 4096, "maxOutputBytes": 4096, "maxAttempts": 1},
+    "network": "disabled",
+    "credentials": "disabled"
+  },
+  "livePolicy": {
+    "credentialReference": "HORSENESS_CLAUDE_CREDENTIAL_REF",
+    "publicationRequired": false,
+    "timeoutMs": 30000,
+    "budget": {"maxCostUsd": 0.25, "maxAttempts": 1}
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "HostFixtureManifestV1",
+  "host": "omp",
+  "native": {
+    "binary": "native/omp.mjs",
+    "version": "17.2.15",
+    "distributionIdentity": "npm:@oh-my-pi/pi-coding-agent@17.2.15",
+    "distributionDigest": "sha256:e52b9ee5b34179367bfb6f0a25c226b66280bc700bb1d059274fae53c2cac0ea",
+    "mode": "native"
+  },
+  "officialValidator": {
+    "command": "native/validator.mjs",
+    "version": "17.2.15",
+    "distributionIdentity": "omp-official-plugin-doctor@17.2.15",
+    "distributionDigest": "sha256:82063ce996eb84fe15cc35e3aa57d132e7c6dc35b01bcfa720fb42f8c419d604"
+  },
+  "capabilities": {
+    "required": ["nativeArtifactLoad", "contextInjection", "deterministicProviderAttempt", "receiptBinding", "restartReconcile", "resume", "forkSwitch", "uninstall"],
+    "supported": ["nativeArtifactLoad", "contextInjection", "deterministicProviderAttempt", "receiptBinding", "restartReconcile", "resume", "forkSwitch", "uninstall"]
+  },
+  "resume": {
+    "daemonRestart": "reconcile",
+    "hostRestart": "resume",
+    "sessionResume": "native",
+    "forkSwitch": "new-binding"
+  },
+  "provider": {
+    "identity": "horseness-local-deterministic-provider-v1",
+    "requestFixture": "provider/request.json",
+    "responseFixture": "provider/response.json",
+    "clock": "2026-01-01T00:00:00Z",
+    "budget": { "maxInputBytes": 4096, "maxOutputBytes": 4096, "maxAttempts": 1 },
+    "network": "disabled",
+    "credentials": "disabled"
+  },
+  "livePolicy": {
+    "credentialReference": "HORSENESS_OMP_LIVE_CREDENTIAL_REF",
+    "publicationRequired": false,
+    "timeoutMs": 30000,
+    "budget": { "maxAttempts": 1, "maxCostUsd": 1 }
+  }
+}

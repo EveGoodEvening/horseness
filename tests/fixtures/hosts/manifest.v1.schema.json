@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://horseness.dev/schemas/host-fixture-manifest-v1.json",
+  "title": "HostFixtureManifestV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "host", "native", "officialValidator", "capabilities", "resume", "provider", "livePolicy"],
+  "properties": {
+    "schemaVersion": { "const": "HostFixtureManifestV1" },
+    "host": { "enum": ["pi", "omp", "claude", "codex"] },
+    "native": { "$ref": "#/$defs/distribution" },
+    "officialValidator": { "$ref": "#/$defs/validator" },
+    "capabilities": {
+      "type": "object", "additionalProperties": false, "required": ["required", "supported"],
+      "properties": { "required": { "$ref": "#/$defs/capabilityArray" }, "supported": { "$ref": "#/$defs/capabilityArray" } }
+    },
+    "resume": { "type": "object" },
+    "provider": {
+      "type": "object", "additionalProperties": false,
+      "required": ["identity", "requestFixture", "responseFixture", "clock", "budget", "network", "credentials"],
+      "properties": {
+        "identity": { "type": "string", "minLength": 1 }, "requestFixture": { "type": "string", "minLength": 1 },
+        "responseFixture": { "type": "string", "minLength": 1 }, "clock": { "type": "string", "format": "date-time" },
+        "budget": { "type": "object" }, "network": { "const": "disabled" }, "credentials": { "const": "disabled" }
+      }
+    },
+    "livePolicy": {
+      "type": "object", "additionalProperties": false, "required": ["credentialReference", "publicationRequired", "timeoutMs", "budget"],
+      "properties": { "credentialReference": { "type": "string", "minLength": 1 }, "publicationRequired": { "type": "boolean" }, "timeoutMs": { "type": "integer", "minimum": 1 }, "budget": { "type": "object" } }
+    }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "distribution": {
+      "type": "object", "additionalProperties": false, "required": ["binary", "version", "distributionIdentity", "distributionDigest", "mode"],
+      "properties": { "binary": { "type": "string", "minLength": 1 }, "version": { "type": "string", "minLength": 1 }, "distributionIdentity": { "type": "string", "minLength": 1 }, "distributionDigest": { "$ref": "#/$defs/digest" }, "mode": { "const": "native" } }
+    },
+    "validator": {
+      "type": "object", "additionalProperties": false, "required": ["command", "version", "distributionIdentity", "distributionDigest"],
+      "properties": { "command": { "type": "string", "minLength": 1 }, "version": { "type": "string", "minLength": 1 }, "distributionIdentity": { "type": "string", "minLength": 1 }, "distributionDigest": { "$ref": "#/$defs/digest" } }
+    },
+    "capabilityArray": { "type": "array", "uniqueItems": true, "items": { "enum": ["nativeArtifactLoad", "contextInjection", "deterministicProviderAttempt", "receiptBinding", "restartReconcile", "resume", "forkSwitch", "uninstall"] } }
+  }
+}

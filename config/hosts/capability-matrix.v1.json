@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "HostCapabilityMatrixV1",
+  "hosts": {
+    "pi": {
+      "fixture": "tests/fixtures/hosts/pi/manifest.v1.json",
+      "validator": "scripts/host-feasibility/pi/validate.mjs",
+      "native": { "version": "0.73.1", "distributionDigest": "sha256:ab93d8ab31f61078171c7949ba25abad3fd341615040a999e64a5bcc44e86e42" },
+      "officialValidator": { "version": "0.73.1", "distributionDigest": "sha256:942d6f16db4964daf6c60abd93dd0e62543f1099e1165c6b295bc21ea714b648" },
+      "capabilities": { "nativeArtifactLoad": true, "contextInjection": true, "deterministicProviderAttempt": true, "receiptBinding": true, "restartReconcile": true, "resume": true, "forkSwitch": true, "uninstall": true }
+    },
+    "omp": {
+      "fixture": "tests/fixtures/hosts/omp/manifest.v1.json",
+      "validator": "scripts/host-feasibility/omp/validate.mjs",
+      "native": { "version": "17.2.15", "distributionDigest": "sha256:e52b9ee5b34179367bfb6f0a25c226b66280bc700bb1d059274fae53c2cac0ea" },
+      "officialValidator": { "version": "17.2.15", "distributionDigest": "sha256:82063ce996eb84fe15cc35e3aa57d132e7c6dc35b01bcfa720fb42f8c419d604" },
+      "capabilities": { "nativeArtifactLoad": true, "contextInjection": true, "deterministicProviderAttempt": true, "receiptBinding": true, "restartReconcile": true, "resume": true, "forkSwitch": true, "uninstall": true }
+    },
+    "claude": {
+      "fixture": "tests/fixtures/hosts/claude/manifest.v1.json",
+      "validator": "scripts/host-feasibility/claude/validate.mjs",
+      "native": { "version": "2.1.228", "distributionDigest": "sha256:d6b6eb68c4a973ac29e616b068320c334bae2d3a74ed85a73e42fb975ceee007" },
+      "officialValidator": { "version": "2.1.228", "distributionDigest": "sha256:d6b6eb68c4a973ac29e616b068320c334bae2d3a74ed85a73e42fb975ceee007" },
+      "capabilities": { "nativeArtifactLoad": true, "contextInjection": true, "deterministicProviderAttempt": true, "receiptBinding": true, "restartReconcile": true, "resume": true, "forkSwitch": true, "uninstall": true }
+    },
+    "codex": {
+      "fixture": "tests/fixtures/hosts/codex/manifest.v1.json",
+      "validator": "scripts/host-feasibility/codex/validate.mjs",
+      "native": { "version": "0.144.1", "distributionDigest": "sha256:8edbdcb51a6979a26a283299d928f60a306ae94cd6b4b514a5c5e1f29fb918d9" },
+      "officialValidator": { "version": "0.144.1", "distributionDigest": "sha256:9eee3e147603af046f5ed75fa7bd8533058f88d43ff3c6e7228d57dd3e0f801b" },
+      "capabilities": { "nativeArtifactLoad": true, "contextInjection": true, "deterministicProviderAttempt": true, "receiptBinding": true, "restartReconcile": true, "resume": true, "forkSwitch": true, "uninstall": true }
+    }
+  },
+  "credentialedLivePolicy": { "absentCredential": "skip-local-fail-publication", "configuredCredentialFailure": "fail", "secretHandling": "opaque-reference-only" },
+  "deterministicProvider": { "identity": "horseness-local-deterministic-provider-v1", "clock": "2026-01-01T00:00:00Z", "network": "disabled", "credentials": "disabled", "requestFixture": "tests/fixtures/hosts/provider/request.v1.json", "responseFixture": "tests/fixtures/hosts/provider/response.v1.json" }
+}

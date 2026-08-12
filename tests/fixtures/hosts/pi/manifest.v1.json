@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "HostFixtureManifestV1",
+  "host": "pi",
+  "native": {
+    "binary": "artifacts/pi-native.mjs",
+    "version": "0.73.1",
+    "distributionIdentity": "npm:@mariozechner/pi-coding-agent@0.73.1#dist/cli.js",
+    "distributionDigest": "sha256:ab93d8ab31f61078171c7949ba25abad3fd341615040a999e64a5bcc44e86e42",
+    "mode": "native"
+  },
+  "officialValidator": {
+    "command": "artifacts/pi-official-validator.mjs",
+    "version": "0.73.1",
+    "distributionIdentity": "npm:@mariozechner/pi-coding-agent@0.73.1#native-extension-contract",
+    "distributionDigest": "sha256:942d6f16db4964daf6c60abd93dd0e62543f1099e1165c6b295bc21ea714b648"
+  },
+  "capabilities": {
+    "required": ["nativeArtifactLoad", "contextInjection", "deterministicProviderAttempt", "receiptBinding", "restartReconcile", "resume", "forkSwitch", "uninstall"],
+    "supported": ["nativeArtifactLoad", "contextInjection", "deterministicProviderAttempt", "receiptBinding", "restartReconcile", "resume", "forkSwitch", "uninstall"]
+  },
+  "resume": {"supported": true, "bindingPreserved": true, "operationReattached": true},
+  "provider": {
+    "identity": "horseness-local-pi-v1",
+    "requestFixture": "provider-request.json",
+    "responseFixture": "provider-response.json",
+    "clock": "2026-01-01T00:00:00Z",
+    "budget": 4096,
+    "network": "disabled",
+    "credentials": "disabled"
+  },
+  "livePolicy": {"credentialReference": "HORSENESS_PI_CREDENTIAL_REF", "publicationRequired": false, "timeoutMs": 30000, "budget": 4096}
+}

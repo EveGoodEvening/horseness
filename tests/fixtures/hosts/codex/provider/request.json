@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "CodexProviderRequestV1",
+  "context": "horseness deterministic context v1",
+  "session": "codex-thread-0001",
+  "resumeCursor": "codex-turn-0007",
+  "binding": "fork-pin-main-v1",
+  "forkBinding": "fork-pin-feature-v1"
+}

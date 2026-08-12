@@ -18,6 +18,12 @@
     "lint": "pnpm -r --if-present run lint && eslint scripts/*.mjs eslint.config.js --max-warnings=0",
     "test": "pnpm -r --if-present run test",
     "boundaries:check": "node scripts/boundaries-check.mjs",
+    "host:validate:pi": "node scripts/host-feasibility/pi/validate.mjs --fixture tests/fixtures/hosts/pi/manifest.v1.json --mode hermetic",
+    "host:validate:omp": "node scripts/host-feasibility/omp/validate.mjs --fixture tests/fixtures/hosts/omp/manifest.v1.json --mode hermetic",
+    "host:validate:claude": "node scripts/host-feasibility/claude/validate.mjs --fixture tests/fixtures/hosts/claude/manifest.v1.json --mode hermetic",
+    "host:validate:codex": "node scripts/host-feasibility/codex/validate.mjs --fixture tests/fixtures/hosts/codex/manifest.v1.json --mode hermetic",
+    "host:harness:test": "node --test tests/host-feasibility/*.test.mjs tests/host-feasibility/**/*.test.mjs",
+    "hosts:matrix:verify": "node scripts/host-feasibility/verify-matrix.mjs",
     "acceptance": "node scripts/acceptance.mjs",
     "progress:cas": "node scripts/progress-cas.mjs"
   },

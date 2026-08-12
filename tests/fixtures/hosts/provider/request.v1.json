@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "DeterministicProviderRequestV1",
+  "attemptId": "attempt-host-feasibility-0001",
+  "messages": [
+    { "role": "system", "content": "Return the frozen feasibility response." },
+    { "role": "user", "content": "prove native host integration" }
+  ],
+  "maxOutputBytes": 256
+}

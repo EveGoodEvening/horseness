@@ -1,8 +1,8 @@
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 
-const root = await realpath(process.cwd());
 const groups = ["packages", "apps", "adapters"];
 const layers = new Map([
   ["@horseness/domain", 0], ["@horseness/protocol", 1], ["@horseness/policy", 1],
@@ -11,18 +11,35 @@ const layers = new Map([
   ["@horseness/cli", 4], ["@horseness/adapter-pi", 4], ["@horseness/adapter-omp", 4],
   ["@horseness/adapter-claude", 4], ["@horseness/adapter-codex", 4]
 ]);
-const errors = [];
-const manifests = [];
-for (const group of groups) {
-  for (const entry of await readdir(path.join(root, group), { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const dir = path.join(root, group, entry.name);
-    const manifest = JSON.parse(await readFile(path.join(dir, "package.json"), "utf8"));
-    manifests.push({ dir, group, manifest });
+export function importBoundaryError({ file, packageDir, specifier, workspaceNames }) {
+  if (specifier.startsWith(".")) {
+    const resolved = path.resolve(path.dirname(file), specifier);
+    const relative = path.relative(packageDir, resolved);
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      return `deep or escaping import ${specifier}`;
+    }
+    return null;
   }
+  for (const name of workspaceNames) {
+    if (specifier.startsWith(`${name}/`)) return `cross-package deep import ${specifier}`;
+  }
+  return null;
 }
-const names = new Set(manifests.map(({ manifest }) => manifest.name));
-for (const { dir, group, manifest } of manifests) {
+
+export async function checkBoundaries(cwd = process.cwd()) {
+ const root = await realpath(cwd);
+ const errors = [];
+ const manifests = [];
+ for (const group of groups) {
+  for (const entry of await readdir(path.join(root, group), { withFileTypes: true })) {
+   if (!entry.isDirectory()) continue;
+   const dir = path.join(root, group, entry.name);
+   const manifest = JSON.parse(await readFile(path.join(dir, "package.json"), "utf8"));
+   manifests.push({ dir, group, manifest });
+  }
+ }
+ const names = new Set(manifests.map(({ manifest }) => manifest.name));
+ for (const { dir, group, manifest } of manifests) {
   if (!layers.has(manifest.name)) errors.push(`${manifest.name}: unknown workspace boundary`);
   if (manifest.private !== true || manifest.type !== "module") errors.push(`${manifest.name}: must be private ESM`);
   if (manifest.exports?.["."]?.import !== "./src/index.ts") errors.push(`${manifest.name}: public import must be src/index.ts`);
@@ -39,13 +56,20 @@ for (const { dir, group, manifest } of manifests) {
     const source = await readFile(file, "utf8");
     for (const match of source.matchAll(/(?:from\s+|import\s*\()(["'])([^"']+)\1/g)) {
       const specifier = match[2];
-      if (specifier.includes("/src/") || specifier.startsWith("../") && specifier.split("/").includes("..")) errors.push(`${path.relative(root, file)}: deep or escaping import ${specifier}`);
+      const boundaryError = importBoundaryError({ file, packageDir: dir, specifier, workspaceNames: names });
+      if (boundaryError) errors.push(`${path.relative(root, file)}: ${boundaryError}`);
     }
   }
+ }
+ if (manifests.length !== layers.size) errors.push(`expected ${layers.size} workspace packages, found ${manifests.length}`);
+ return { errors, packageCount: manifests.length };
 }
-if (manifests.length !== layers.size) errors.push(`expected ${layers.size} workspace packages, found ${manifests.length}`);
-if (errors.length) { console.error(errors.join("\n")); process.exit(1); }
-console.log(`Boundary check passed for ${manifests.length} packages`);
+
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+ const result = await checkBoundaries();
+ if (result.errors.length) { console.error(result.errors.join("\n")); process.exit(1); }
+ console.log(`Boundary check passed for ${result.packageCount} packages`);
+}
 
 async function walk(dir) {
   const files = [];
