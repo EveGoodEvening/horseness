@@ -1,1 +1,1 @@
-{"kind":"HorsenessImportFixtureV1","expected":"reject","reason":"workspace identity conflict","workspaceId":"workspace-a","sourceSchemaVersion":2,"targetSchemaVersion":2}
+{"kind":"HorsenessImportFixtureV1","expected":"quarantined-remap","reason":"foreign workspace identities are never merged directly","sourceWorkspaceId":"workspace-a","localWorkspaceIdMustDiffer":true,"sourceSchemaVersion":2,"targetSchemaVersion":2}

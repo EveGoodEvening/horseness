@@ -18,6 +18,6 @@ This migration has no downgrade. Backup, restore, import, upgrade, and retention
 
 ## SQLite migration 0002 — recovery and retention
 
-Migration 0002 adds durable retention intents and artifact tombstones. The upgrader authenticates raw event bytes and their complete chains, stream heads, SQLite integrity and all artifact references before executing any upcast or schema mutation. It rejects unknown newer versions and conflicting migration identities.
+Migration 0002 adds a durable retention state machine (`pending` → `deleting` → `deleted`), artifact tombstones, and database triggers that reject new references or pins as soon as an intent exists. The upgrader authenticates raw event bytes and complete chains, including every duplicated SQL event column and the enclosing workspace, stream kind, and stream ID, before any upcast or schema mutation. It rejects transplanted rows, unknown newer versions, and conflicting migration identities.
 
-The version-2 schema is backward-compatible only while its retention ledger is empty. `requireLosslessDowngrade` enforces that invariant; populated retention history or an unknown target requires an explicit major-version migration rather than silently discarding data. Backup manifests record the authority schema version, and isolated imports require exact schema equality.
+Storage schema v2 has no in-place downgrade to v1. `requireLosslessDowngrade` always returns an explicit major-version gate for a v2→v1 request, even when the retention ledger is empty; a real downgrade requires a separately implemented and verified authority-unit migration. Backup manifests record the authority schema version, and isolated imports require exact schema equality.

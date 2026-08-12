@@ -1,14 +1,155 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { SQLiteAuthority } from "../../src/sqlite-authority.js";
+import test from "node:test";
 import { createBackup } from "../../src/backup/index.js";
 import { upgradeAuthority } from "../../src/migrations/index.js";
-import { recoverInterruptedRestore, restoreBackup } from "../../src/restore/index.js";
-import { verifyAuthority } from "../../src/recovery/index.js";
+import {
+  recoverInterruptedRestore,
+  restoreBackup,
+  type RestoreCrashPoint,
+} from "../../src/restore/index.js";
+import { SQLiteAuthority } from "../../src/sqlite-authority.js";
 
-test("restore stages, verifies and atomically replaces authority",()=>{const root=mkdtempSync(join(tmpdir(),"horseness-restore-"));const sourceDb=join(root,"source.sqlite"),sourceArtifacts=join(root,"source-artifacts");new SQLiteAuthority(sourceDb,sourceArtifacts).close();const source=new DatabaseSync(sourceDb);upgradeAuthority(source,sourceArtifacts);const backup=join(root,"backup");createBackup(source,sourceArtifacts,backup);source.close();const targetDb=join(root,"target.sqlite"),targetArtifacts=join(root,"target-artifacts");restoreBackup(backup,targetDb,targetArtifacts);const target=new DatabaseSync(targetDb);assert.deepEqual(verifyAuthority(target,targetArtifacts),{streams:0,events:0,artifacts:0});target.close();rmSync(root,{recursive:true,force:true});});
-test("startup recovery rolls an interrupted swap back",()=>{const root=mkdtempSync(join(tmpdir(),"horseness-recover-"));const db=join(root,"a.sqlite"),artifacts=join(root,"artifacts"),oldDb=`${db}.old-x`,oldArtifacts=`${artifacts}.old-x`,stageDb=`${db}.stage`,stageArtifacts=`${artifacts}.stage`;writeFileSync(oldDb,"old");writeFileSync(`${db}.restore-intent.json`,JSON.stringify({databasePath:db,artifactRoot:artifacts,oldDatabase:oldDb,oldArtifacts,stageDatabase:stageDb,stageArtifacts}));recoverInterruptedRestore(db,artifacts);assert.equal(readFileSync(db,"utf8"),"old");assert.equal(existsSync(`${db}.restore-intent.json`),false);rmSync(root,{recursive:true,force:true});});
+const journal = (databasePath: string): string => `${databasePath}.restore-intent.json`;
+
+function makeAuthority(root: string, name: string, generation: string): { database: string; artifacts: string } {
+  const database = join(root, `${name}.sqlite`);
+  const artifacts = join(root, `${name}-artifacts`);
+  const authority = new SQLiteAuthority(database, artifacts);
+  upgradeAuthority(authority.db, artifacts);
+  authority.db.exec("CREATE TABLE restore_generation(value TEXT NOT NULL, artifact_digest TEXT NOT NULL)");
+  const record = authority.artifacts.publishAndRegister(generation, "text/plain");
+  authority.db.prepare("INSERT INTO restore_generation(value, artifact_digest) VALUES (?, ?)").run(generation, record.digest);
+  authority.close();
+  return { database, artifacts };
+}
+
+function pairGeneration(database: string, artifacts: string): { database: string; artifacts: string } {
+  assert.equal(existsSync(database), true, "database path must exist after reopen recovery");
+  assert.equal(existsSync(artifacts), true, "artifact root must exist after reopen recovery");
+  const db = new DatabaseSync(database);
+  try {
+    const row = db.prepare("SELECT value, artifact_digest FROM restore_generation").get();
+    assert.ok(row && typeof row === "object" && "value" in row && typeof row.value === "string");
+    assert.ok("artifact_digest" in row && typeof row.artifact_digest === "string");
+    const artifact = db.prepare("SELECT relative_path FROM artifacts WHERE digest=?").get(row.artifact_digest);
+    assert.ok(artifact && typeof artifact === "object" && "relative_path" in artifact && typeof artifact.relative_path === "string");
+    return { database: row.value, artifacts: readFileSync(join(artifacts, artifact.relative_path), "utf8") };
+  } finally { db.close(); }
+}
+function durableJournalPhase(database: string): string | undefined {
+  const path = journal(database);
+  if (!existsSync(path)) return undefined;
+  const value: unknown = JSON.parse(readFileSync(path, "utf8"));
+  if (!value || typeof value !== "object" || !("phase" in value) || typeof value.phase !== "string") {
+    throw new Error("invalid test restore journal");
+  }
+  return value.phase;
+}
+
+
+function prepareCase(prefix: string): { root: string; backup: string; database: string; artifacts: string } {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  const source = makeAuthority(root, "source", "new");
+  const sourceDb = new DatabaseSync(source.database);
+  const backup = join(root, "backup");
+  createBackup(sourceDb, source.artifacts, backup);
+  sourceDb.close();
+  const target = makeAuthority(root, "target", "old");
+  return { root, backup, database: target.database, artifacts: target.artifacts };
+}
+
+test("restore records committed authority generation and removes its journal", () => {
+  const state = prepareCase("horseness-restore-");
+  try {
+    restoreBackup(state.backup, state.database, state.artifacts);
+    assert.deepEqual(pairGeneration(state.database, state.artifacts), { database: "new", artifacts: "new" });
+    assert.equal(existsSync(journal(state.database)), false);
+  } finally { rmSync(state.root, { recursive: true, force: true }); }
+});
+
+test("restore crash matrix never reopens a mixed database/artifact generation", () => {
+  const observed: RestoreCrashPoint[] = [];
+  const discovery = prepareCase("horseness-restore-discovery-");
+  try {
+    restoreBackup(discovery.backup, discovery.database, discovery.artifacts, point => { observed.push(point); });
+  } finally { rmSync(discovery.root, { recursive: true, force: true }); }
+  assert.ok(observed.length > 0);
+
+  for (let crashIndex = 0; crashIndex < observed.length; crashIndex += 1) {
+    const state = prepareCase("horseness-restore-crash-");
+    let visit = 0;
+    try {
+      assert.throws(
+        () => restoreBackup(state.backup, state.database, state.artifacts, point => {
+          if (visit === crashIndex) throw new Error(`crash:${point}:${crashIndex}`);
+          visit += 1;
+        }),
+        /crash:restore\./,
+      );
+      const durablePhase = durableJournalPhase(state.database);
+      recoverInterruptedRestore(state.database, state.artifacts);
+      const pair = pairGeneration(state.database, state.artifacts);
+      assert.equal(pair.database, pair.artifacts, `mixed authority after ${observed[crashIndex]}`);
+      if (durablePhase !== undefined) assert.equal(pair.database, durablePhase === "committed" ? "new" : "old", `wrong recovery direction after ${observed[crashIndex]}`);
+      assert.equal(existsSync(journal(state.database)), false);
+    } finally { rmSync(state.root, { recursive: true, force: true }); }
+  }
+});
+
+test("recovery itself is idempotent across every rename and removal interruption", () => {
+  const points = new Set<RestoreCrashPoint>();
+  const discovery = prepareCase("horseness-recovery-discovery-");
+  try {
+    assert.throws(() => restoreBackup(discovery.backup, discovery.database, discovery.artifacts, point => {
+      if (point === "restore.remove.old-database.before") throw new Error("stop-after-commit");
+    }), /stop-after-commit/);
+    recoverInterruptedRestore(discovery.database, discovery.artifacts, point => { points.add(point); });
+  } finally { rmSync(discovery.root, { recursive: true, force: true }); }
+
+  for (const crashPoint of points) {
+    const state = prepareCase("horseness-recovery-crash-");
+    try {
+      assert.throws(() => restoreBackup(state.backup, state.database, state.artifacts, point => {
+        if (point === "restore.remove.old-database.before") throw new Error("stop-after-commit");
+      }), /stop-after-commit/);
+      let crashed = false;
+      assert.throws(() => recoverInterruptedRestore(state.database, state.artifacts, point => {
+        if (!crashed && point === crashPoint) { crashed = true; throw new Error(`recovery-crash:${point}`); }
+      }), /recovery-crash:/);
+      recoverInterruptedRestore(state.database, state.artifacts);
+      assert.deepEqual(pairGeneration(state.database, state.artifacts), { database: "new", artifacts: "new" });
+      assert.equal(existsSync(journal(state.database)), false);
+    } finally { rmSync(state.root, { recursive: true, force: true }); }
+  }
+});
+
+test("rollback recovery is idempotent across every rename and removal interruption", () => {
+  const points = new Set<RestoreCrashPoint>();
+  const discovery = prepareCase("horseness-rollback-discovery-");
+  try {
+    assert.throws(() => restoreBackup(discovery.backup, discovery.database, discovery.artifacts, point => {
+      if (point === "restore.rename.database-activate.before") throw new Error("stop-before-commit");
+    }), /stop-before-commit/);
+    recoverInterruptedRestore(discovery.database, discovery.artifacts, point => { points.add(point); });
+  } finally { rmSync(discovery.root, { recursive: true, force: true }); }
+
+  for (const crashPoint of points) {
+    const state = prepareCase("horseness-rollback-crash-");
+    try {
+      assert.throws(() => restoreBackup(state.backup, state.database, state.artifacts, point => {
+        if (point === "restore.rename.database-activate.before") throw new Error("stop-before-commit");
+      }), /stop-before-commit/);
+      let crashed = false;
+      assert.throws(() => recoverInterruptedRestore(state.database, state.artifacts, point => {
+        if (!crashed && point === crashPoint) { crashed = true; throw new Error(`rollback-crash:${point}`); }
+      }), /rollback-crash:/);
+      recoverInterruptedRestore(state.database, state.artifacts);
+      assert.deepEqual(pairGeneration(state.database, state.artifacts), { database: "old", artifacts: "old" });
+      assert.equal(existsSync(journal(state.database)), false);
+    } finally { rmSync(state.root, { recursive: true, force: true }); }
+  }
+});

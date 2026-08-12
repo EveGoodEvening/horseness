@@ -3,8 +3,10 @@ import { verifyAuthority } from "../recovery/index.js";
 
 export const CURRENT_STORAGE_SCHEMA=2;
 const V2=`
-CREATE TABLE retention_intents(intent_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, digest TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('pending','deleted')), created_at TEXT NOT NULL, completed_at TEXT, UNIQUE(workspace_id,digest));
-CREATE TABLE artifact_tombstones(digest TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, deleted_at TEXT NOT NULL, intent_id TEXT NOT NULL UNIQUE, FOREIGN KEY(intent_id) REFERENCES retention_intents(intent_id));`;
+CREATE TABLE retention_intents(intent_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, digest TEXT NOT NULL UNIQUE, state TEXT NOT NULL CHECK(state IN ('pending','deleting','deleted')), created_at TEXT NOT NULL, delete_committed_at TEXT, completed_at TEXT);
+CREATE TABLE artifact_tombstones(digest TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, deleted_at TEXT NOT NULL, intent_id TEXT NOT NULL UNIQUE, FOREIGN KEY(intent_id) REFERENCES retention_intents(intent_id));
+CREATE TRIGGER retention_blocks_refs BEFORE INSERT ON artifact_refs WHEN EXISTS(SELECT 1 FROM retention_intents WHERE digest=NEW.digest) BEGIN SELECT RAISE(ABORT,'artifact is under retention'); END;
+CREATE TRIGGER retention_blocks_pins BEFORE INSERT ON artifact_pins WHEN EXISTS(SELECT 1 FROM retention_intents WHERE digest=NEW.digest) BEGIN SELECT RAISE(ABORT,'artifact is under retention'); END;`;
 export function upgradeAuthority(db:DatabaseSync,artifactRoot:string):number[]{
   verifyAuthority(db,artifactRoot,{allowPendingRetentionMissing:true}); // Raw chains and references are authenticated before any upcast/schema write; only a durable unreferenced deletion intent may explain an absent object.
   const rows=db.prepare("SELECT version,name FROM schema_migrations ORDER BY version").all() as {version:number;name:string}[];
@@ -14,8 +16,9 @@ export function upgradeAuthority(db:DatabaseSync,artifactRoot:string):number[]{
   return (db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as {version:number}[]).map(r=>r.version);
 }
 export function requireLosslessDowngrade(db:DatabaseSync,targetVersion:number):void{
-  const current=Math.max(...(db.prepare("SELECT version FROM schema_migrations").all() as {version:number}[]).map(r=>r.version));
+  const versions=(db.prepare("SELECT version FROM schema_migrations").all() as {version:number}[]).map(row=>row.version);
+  const current=versions.length===0?0:Math.max(...versions);
   if(targetVersion===current)return;
-  if(targetVersion===1){const live=(db.prepare("SELECT count(*) AS count FROM retention_intents").get() as {count:number}).count;if(live!==0)throw new Error("major-version gate: downgrade would lose retention intent data");return;}
+  if(current===2&&targetVersion===1)throw new Error("major-version gate: storage schema v2 cannot be downgraded to v1 in place");
   throw new Error("major-version gate: unsupported downgrade");
 }
