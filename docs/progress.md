@@ -4,10 +4,10 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 
 ## Global status
 
-- **Planning state:** C00, C01, C02, C03, and C04 are complete; F001/F002 are closed; R001/R002 are complete; C05 is in progress
-- **Active claims:** C05 from integrated base `4513730`; tracker claim commit `6259949` was integrated before source edits
-- **Next eligible:** none while C05 is active and its full-chunk review remains pending
-- **Active blockers:** none; the two prior C05 blockers were resolved by `f7acb74` and independently reviewed clean
+- **Planning state:** C00, C01, C02, C03, C04, and C05 are complete; F001/F002 are closed; R001/R002 are complete
+- **Active claims:** none
+- **Next eligible:** C06 only
+- **Active blockers:** none
 - **Last integrated receipt:** immutable C01 `docs/checkpoints/C01/final/1.json`, envelope digest `17ddd75b49e35d3bf6f432c8c6acca30b4a66512229453aca4fc63e7f427ea7d`, indexed at A01 commit `223023330cb000b759d8a8b2419514638c1aa179`; receipt/index bytes must not be overwritten
 - **Release readiness:** not started
 - **Base chunk count:** 26 (`C00`–`C25`)
@@ -28,8 +28,8 @@ For C02 onward: commit the two tracker files to claim a dependency-ready chunk; 
 | C02 | Domain and transition contracts | C01 | complete; final candidate `fd100bf`; 40 tests and 61 vectors green |
 | C03 | Protocol | C02 | complete; final candidate `2998e4f`; 23 package tests and 1,377 conformance checks green |
 | C04 | Policy/admission evaluator | C03 | complete; claim `a5ad6fa`; implementation `385449c`; review fixes/final candidate `44f99b9`, `489345b`; typecheck and 10 tests green; clean final review |
-| C05 | SQLite 0001/artifacts | C04 | in-progress; claim `6259949` integrated before source edits; blocker fixes `f7acb74`; Node 22 gates green: typecheck exit 0, migration 7/7, crash matrix 38/38; focused blocker re-review clean; full-chunk review pending |
-| C06 | Recovery/import/retention | C05 | ineligible; blocked on C05 completion and clean full-chunk review |
+| C05 | SQLite 0001/artifacts | C04 | complete; claim `6259949`; implementation `13e765e`; review fixes `0adcd98`, `f7acb74`, `ef4a921`, `6f587c8`; relevant tracker commit `bd44a2b`; final candidate `6f587c8`; Node 22 gates green: typecheck exit 0, migration 9/9, crash matrix 43/43; two definitive reviews clean |
+| C06 | Recovery/import/retention | C05 | next eligible |
 | C07 | Admission service | C06 | not-started |
 | C08 | Task/fork projections | C07 | not-started |
 | C09 | Context reconstruction | C08 | not-started |
@@ -58,8 +58,8 @@ F001/R001 established the accepted `v4:C01-remediation` candidate and immutable 
 
 C04 is complete. Its tracker-only claim began at base `33550d0` with claim commit `a5ad6fa`; implementation commit `385449c` and review-fix commits `44f99b9` and `489345b` are integrated, with final candidate `489345b`. Both literal C04 gates ran in order under Node 22 with exact environment `CI=1 TZ=UTC LANG=C NODE_OPTIONS=--unhandled-rejections=strict`: typecheck exit 0; 10 package tests exit 0. The final blocker-only review was clean and all C04 checklist items are checked.
 
-C05 is claimed and remains in progress. Tracker claim commit `6259949` was integrated before source edits. Commit `f7acb74` resolved the two current blockers—non-genesis append-slice validation and workspace-scoped authenticated artifact-reference binding—and an independent focused review found both fixes clean. All three exact gates ran under Node 22 with `CI=1 TZ=UTC LANG=C NODE_OPTIONS=--unhandled-rejections=strict`: typecheck exit 0; migration 7/7; crash matrix 38/38. A clean full-chunk review is still pending, so C06 and every later chunk remain ineligible.
+C05 is complete. Tracker claim commit `6259949` preceded source edits; implementation commit `13e765e`, review-fix commits `0adcd98`, `f7acb74`, `ef4a921`, and `6f587c8`, and relevant tracker commit `bd44a2b` are integrated, with final candidate `6f587c8`. All three literal C05 gates ran in order under Node 22 with exact environment `CI=1 TZ=UTC LANG=C NODE_OPTIONS=--unhandled-rejections=strict`: typecheck exit 0; migration 9/9; crash matrix 43/43. Two independent definitive reviews were clean, all C05 checklist items are checked, and C06 is the sole next eligible chunk.
 
 ## Planning review status
 
-The bootstrap workflow blocker remains closed. C02, C03, and C04 are complete with all review findings resolved and exact acceptance evidence recorded. C05 is the sole active conventional tracker claim: claim commit `6259949` preceded source edits, its two current blockers were resolved by `f7acb74` and independently reviewed clean, and its exact Node 22 gates passed (typecheck exit 0, migration 7/7, crash matrix 38/38). C05 remains in progress pending a clean full-chunk review; C06 and all later chunks remain ineligible, and no recursive development-attestation work is required.
+The bootstrap workflow blocker remains closed. C02, C03, C04, and C05 are complete with all accepted review findings resolved and exact acceptance evidence recorded. C05 completed at final candidate `6f587c8` after claim `6259949`, implementation `13e765e`, review fixes `0adcd98`, `f7acb74`, `ef4a921`, and `6f587c8`, and relevant tracker commit `bd44a2b`; its exact Node 22 gates passed with typecheck exit 0, migration 9/9, and crash matrix 43/43, and two definitive reviews were clean. C06 is the sole next eligible chunk, every later chunk remains dependency-ineligible, and no recursive development-attestation work is required.
