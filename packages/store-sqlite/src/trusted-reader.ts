@@ -75,13 +75,25 @@ export class TrustedAuthorityReader {
     return copy;
   }
 
-  readEventBoundArtifact(workspaceId: string, eventId: string, digest: string): Uint8Array {
+  readEventBoundArtifact(
+    workspaceId: string,
+    expectedRunId: string,
+    maximumRunSequence: number,
+    eventId: string,
+    digest: string,
+  ): Readonly<{ bytes: Uint8Array; ownerRunSequence: number }> {
     requireReader(this);
     if (workspaceId !== this.session.workspaceId) throw new StoreIntegrityError("trusted authority reader workspace/session mismatch");
-    const event = this.authority.db.prepare("SELECT 1 FROM events WHERE workspace_id=? AND event_id=?").get(workspaceId, eventId);
+    if (!Number.isSafeInteger(maximumRunSequence) || maximumRunSequence < 1) throw new StoreIntegrityError("invalid maximum authenticated run sequence");
+    const owner = this.authority.replay(workspaceId, "run", expectedRunId).find((event) => event.envelope.eventId === eventId);
     const reference = this.authority.db.prepare("SELECT 1 FROM artifact_refs WHERE workspace_id=? AND owner_kind='event' AND owner_id=? AND digest=?").get(workspaceId, eventId, digest);
-    if (!event || !reference) throw new StoreIntegrityError("artifact is not bound to an authenticated workspace event");
-    return new Uint8Array(this.authority.artifacts.readReferenced(digest));
+    if (!owner || owner.envelope.sequence > maximumRunSequence || !reference) {
+      throw new StoreIntegrityError("artifact is not bound to an authenticated source-run event at or before the pin");
+    }
+    return Object.freeze({
+      bytes: new Uint8Array(this.authority.artifacts.readReferenced(digest)),
+      ownerRunSequence: owner.envelope.sequence,
+    });
   }
 }
 
