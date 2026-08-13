@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { deterministicReplay, reduceWorkspaceState, type HashedEventEnvelopeV1, type WorkspaceOperationalEvent, type WorkspaceState } from "@horseness/domain";
 import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -24,6 +25,10 @@ export interface ImportResult {readonly importId:string;readonly quarantinePath:
 function safeChild(root:string,...parts:string[]):string {const base=resolve(root),path=resolve(base,...parts);if(path===base||!path.startsWith(`${base}${sep}`))throw new Error("import path containment failure");return path;}
 function canonicalBytes(value:unknown):Buffer {return Buffer.from(`${JSON.stringify(value)}\n`,"utf8");}
 function sourceManifestDigest(root:string):string {return createHash("sha256").update(readFileSync(join(root,"manifest.json"))).digest("hex");}
+function verifySemanticReplay(db:Database):void {
+  const streams=db.prepare("SELECT workspace_id,stream_kind,stream_id FROM streams ORDER BY workspace_id,stream_kind,stream_id").all() as {workspace_id:string;stream_kind:"workspace"|"run";stream_id:string}[];
+  for(const stream of streams){const rows=db.prepare("SELECT envelope_json FROM events WHERE workspace_id=? AND stream_kind=? AND stream_id=? ORDER BY sequence").all(stream.workspace_id,stream.stream_kind,stream.stream_id) as {envelope_json:string}[];const envelopes:HashedEventEnvelopeV1<unknown>[]=rows.map(row=>JSON.parse(row.envelope_json) as HashedEventEnvelopeV1<unknown>);if(stream.stream_kind==="run"){deterministicReplay(envelopes);continue;}let state:WorkspaceState|null=null;for(const item of envelopes){const payload=item.envelope.payload;if(payload===null||typeof payload!=="object"||!("eventType" in payload)||!("workspaceId" in payload)||typeof payload.workspaceId!=="string")throw new Error("invalid workspace replay payload");if(payload.eventType==="WorkspaceCreatedV1"){if(!("authorityPrincipalId" in payload)||typeof payload.authorityPrincipalId!=="string"||!("initialGrantDigest" in payload)||typeof payload.initialGrantDigest!=="string"||!("authorityConsumptionMarker" in payload)||typeof payload.authorityConsumptionMarker!=="string"||!("activePolicyDigest" in payload)||typeof payload.activePolicyDigest!=="string")throw new Error("invalid workspace genesis replay payload");const event:WorkspaceOperationalEvent={eventType:"WorkspaceCreatedV1",sequence:item.envelope.sequence,workspaceId:payload.workspaceId,authorityPrincipalId:payload.authorityPrincipalId,initialGrantDigest:payload.initialGrantDigest,authorityConsumptionMarker:payload.authorityConsumptionMarker,activePolicyDigest:payload.activePolicyDigest};state=reduceWorkspaceState(state,event);}else if(payload.eventType==="PolicyReferenceChangedV1"){if(!("activePolicyDigest" in payload)||typeof payload.activePolicyDigest!=="string")throw new Error("invalid policy replay payload");state=reduceWorkspaceState(state,{eventType:"PolicyReferenceChangedV1",sequence:item.envelope.sequence,workspaceId:payload.workspaceId,activePolicyDigest:payload.activePolicyDigest});}else throw new Error(`unsupported workspace replay event: ${String(payload.eventType)}`);}}
+}
 
 export function importBackup(db:Database,artifactRoot:string,backupRoot:string):ImportResult {
   const manifest=verifyBackup(backupRoot);
@@ -35,7 +40,7 @@ export function importBackup(db:Database,artifactRoot:string,backupRoot:string):
   for(const item of manifest.artifacts){const relative=item.path.slice("artifacts/".length);const target=safeChild(join(quarantinePath,"artifacts"),...relative.split("/"));mkdirSync(dirname(target),{recursive:true,mode:0o700});copyFileSync(containedBackupPath(backupRoot,item.path),target,constants.COPYFILE_EXCL);}
   const source=new DatabaseSync(databasePath,{readOnly:true});
   let sourceWorkspaceIds:readonly string[];let events:number;
-  try {verifyAuthority(source,join(quarantinePath,"artifacts"));sourceWorkspaceIds=(source.prepare("SELECT DISTINCT workspace_id FROM streams ORDER BY workspace_id").all() as {workspace_id:string}[]).map(row=>row.workspace_id);events=(source.prepare("SELECT count(*) AS count FROM events").get() as {count:number}).count;} finally {source.close();}
+  try {verifyAuthority(source,join(quarantinePath,"artifacts"));verifySemanticReplay(source);sourceWorkspaceIds=(source.prepare("SELECT DISTINCT workspace_id FROM streams ORDER BY workspace_id").all() as {workspace_id:string}[]).map(row=>row.workspace_id);events=(source.prepare("SELECT count(*) AS count FROM events").get() as {count:number}).count;} finally {source.close();}
   const workspaceMappings=sourceWorkspaceIds.map(sourceWorkspaceId=>({sourceWorkspaceId,localWorkspaceId:randomUUID()}));
   const provenance:ImportProvenanceV1={kind:"HorsenessImportProvenanceV1",schemaVersion:1,importId,sourceManifestDigest:sourceManifestDigest(backupRoot),importedAt:new Date().toISOString(),state:"quarantined",databasePath:"db/authority.sqlite",artifactPath:"artifacts",workspaceMappings};
   writeFileSync(join(quarantinePath,"provenance.json"),canonicalBytes(provenance),{flag:"wx",mode:0o400});
@@ -56,7 +61,7 @@ export function promoteImportedBackup(quarantinePath:string,review:{readonly rev
   const provenancePath=safeChild(quarantinePath,"provenance.json");const provenance=parseProvenance(provenancePath);if(provenance.state!=="quarantined")throw new Error("import namespace is not quarantined");
   const databasePath=safeChild(quarantinePath,"db","authority.sqlite"),artifactPath=safeChild(quarantinePath,"artifacts");
   if(!existsSync(databasePath)||!existsSync(artifactPath))throw new Error("quarantined authority unit is incomplete");
-  const source=new DatabaseSync(databasePath,{readOnly:true});try{verifyAuthority(source,artifactPath);}finally{source.close();}
+  const source=new DatabaseSync(databasePath,{readOnly:true});try{verifyAuthority(source,artifactPath);verifySemanticReplay(source);}finally{source.close();}
   const promoted:ImportProvenanceV1={...provenance,state:"promoted",promotion:{reviewedBy:review.reviewedBy,reviewedAt:new Date().toISOString(),reviewEvidence:review.reviewEvidence}};
   const staged=safeChild(quarantinePath,"provenance.promoted.json");writeFileSync(staged,canonicalBytes(promoted),{flag:"wx",mode:0o400});renameSync(staged,provenancePath);return promoted;
 }
