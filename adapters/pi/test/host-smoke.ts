@@ -10,7 +10,7 @@ import { AdmissionService, loadRevision, type AdmissionCurrentAuthorityV1, type 
 import { sealPolicyDocument, type PolicyEffectV1 } from "../../../packages/policy/src/index.js";
 import { SQLiteAuthority } from "../../../packages/store-sqlite/src/index.js";
 import type { BoundAdapterOperationV1, WorkerReturnV1 } from "@horseness/protocol";
-import { createPiAdapterV1, createPiNativeContributionRuntimeV1, createPiRetainedDeliveryAuthorityV1, PI_ADAPTER_ID, PI_INSTALL_CONTRIBUTIONS, PI_NATIVE_PACKAGE_METADATA, type PiNativeAttemptV1, type PiNativeRuntimeV1 } from "../src/index.js";
+import { createPiAdapterV1, createPiNativeContributionRuntimeV1, createPiRetainedDeliveryAuthorityV1, PI_ADAPTER_ID, PI_INSTALL_CONTRIBUTIONS, PI_NATIVE_PACKAGE_METADATA, type PiNativeAttemptV1, type PiNativeRuntimeV1, type PiRetainedDeliveryAuthorityV1, type PiRetainedDeliveryPhaseV1, type PiRetainedDeliveryV1 } from "../src/index.js";
 
 async function resolvePackageRoot(packageName: string): Promise<{ packageRoot: string; packageJson: Record<string, unknown> }> {
   let candidate = dirname(fileURLToPath(import.meta.resolve(packageName)));
@@ -30,6 +30,21 @@ type ExtensionTool = { definition: unknown };
 type Extension = { tools: Map<string, ExtensionTool>; handlers: Map<string, Array<(event: unknown, context: unknown) => Promise<unknown>>> };
 const emit = async (extension: Extension, name: string, event: unknown) => { const results = []; for (const handler of extension.handlers.get(name) ?? []) results.push(await handler(event, Object.freeze({}))); return results; };
 const jsonWireValue = (value: unknown): JsonValue => { const wire: unknown = JSON.parse(JSON.stringify(value)); assertJsonValue(wire); return wire; };
+class CrashableRetainedDeliveryAuthority implements PiRetainedDeliveryAuthorityV1 {
+  private crashAfter: PiRetainedDeliveryPhaseV1 | null = null;
+  private readonly retained = createPiRetainedDeliveryAuthorityV1();
+  injectAfter(phase: PiRetainedDeliveryPhaseV1 | null): void { this.crashAfter = phase; }
+  load(attemptKey: string): PiRetainedDeliveryV1 | undefined { return this.retained.load(attemptKey); }
+  create(attemptKey: string, value: PiRetainedDeliveryV1): boolean { return this.retained.create(attemptKey, value); }
+  compareAndSet(attemptKey: string, expectedPhase: PiRetainedDeliveryPhaseV1, value: PiRetainedDeliveryV1): boolean {
+    const stored = this.retained.compareAndSet(attemptKey, expectedPhase, value);
+    if (stored && value.phase === this.crashAfter) { this.crashAfter = null; throw new Error(`simulated native host crash after ${value.phase}`); }
+    return stored;
+  }
+  runExclusive<T>(attemptKey: string, operation: () => Promise<T>): Promise<T> { return this.retained.runExclusive(attemptKey, operation); }
+  close(): void { this.retained.close(); }
+  clear(): void { this.retained.clear(); }
+}
 
 let extension: Extension | null = null;
 const root = await mkdtemp(join(tmpdir(), "horseness-pi-smoke-"));
@@ -113,32 +128,33 @@ try {
   {
     const workerReturn = acceptedReturn!;
     const binding = workerReturn.binding;
-    const retained = createPiRetainedDeliveryAuthorityV1();
-    let publishes = 0;
-    let receipts = 0;
-    let proposals = 0;
-    const resumeTokens: Array<string | null> = [];
-    const client: WorkerReturnClientV1 = {
-      async publishObject() { publishes++; },
-      async submitReceipt(receipt) { receipts++; return receipt.receiptDigest; },
-      async submitProposal(proposal) { proposals++; return { proposalId: proposal.proposalId, proposalDigest: proposal.proposalDigest }; },
-      async subscribeDecision(input) {
-        resumeTokens.push(input.resumeToken);
-        return input.resumeToken === null
-          ? { resumeToken: "authority-restart-token", decision: "accepted" }
-          : { resumeToken: "authority-final-token", decision: "accepted" };
-      },
-    };
     const runtime: PiNativeRuntimeV1 = { async launch() { throw new Error("not used"); }, async cancel() { return null; }, async reconcile() { return null; }, async resume() { return null; }, async collect() { return { providerOperationId: workerReturn.receipt.providerOperationId, nativeSessionId: "restart-session", startedAt: workerReturn.receipt.startedAt, finishedAt: workerReturn.receipt.finishedAt, outcome: workerReturn.receipt.outcome, outputDigest: workerReturn.receipt.outputDigest, evidence: workerReturn.receipt.evidence.map(item => ({ digest: item.digest, mediaType: item.mediaType, size: item.size })), provenance: workerReturn.receipt.provenance }; } };
     const adapter = createPiAdapterV1({ binding, credential: { schemaVersion: "1", kind: "host-reference", reference: "pi.provider.restart", scope: { workspaceId: binding.workspaceId, adapterId: PI_ADAPTER_ID, purpose: "pi-provider-auth" } }, runtime, producerPrincipalId: workerReturn.receipt.producerPrincipalId, producerGrantDigest: workerReturn.receipt.producerGrantDigest });
-    const registration = { capabilityReference: binding.attemptCapability, binding, adapter, authority: { client, async sealProposal() { return workerReturn.proposal; } }, subscriptionId: workerReturn.decisionResume.subscriptionId };
-    const output = { digest: workerReturn.publications[0]!.digest, mediaType: "text/plain", byteLength: Buffer.byteLength("output-accepted") }; const evidence = { digest: workerReturn.publications[1]!.digest, mediaType: "application/json", byteLength: Buffer.byteLength("evidence-accepted") };
-    const interrupted = createPiNativeContributionRuntimeV1([registration], { retained, afterDecisionCheckpoint() { throw new Error("simulated native host interruption"); } });
-    await assert.rejects(() => interrupted.deliver(binding.attemptCapability, output, evidence), /simulated native host interruption/);
-    const restarted = createPiNativeContributionRuntimeV1([registration], { retained });
-    const resumedDelivery = await restarted.deliver(binding.attemptCapability, output, evidence);
-    assert.equal(resumedDelivery.delivery.decision, "accepted"); assert.equal(resumedDelivery.delivery.resumeToken, "authority-final-token");
-    assert.deepEqual(resumeTokens, [null, "authority-restart-token"]); assert.deepEqual([publishes, receipts, proposals], [2, 1, 1]);
+    const output = { digest: workerReturn.publications[0]!.digest, mediaType: "text/plain", byteLength: Buffer.byteLength("output-accepted") };
+    const evidence = { digest: workerReturn.publications[1]!.digest, mediaType: "application/json", byteLength: Buffer.byteLength("evidence-accepted") };
+    const crashPhases: readonly PiRetainedDeliveryPhaseV1[] = ["publication:0", "publication:1", "receipt", "proposal", "decision-resume", "decision"];
+    for (const crashPhase of crashPhases) {
+      const retained = new CrashableRetainedDeliveryAuthority();
+      const published = new Set<string>(); const submittedReceipts = new Set<string>(); const submittedProposals = new Set<string>();
+      let publishes = 0; let receipts = 0; let proposals = 0; let seals = 0;
+      const resumeTokens: Array<string | null> = [];
+      const client: WorkerReturnClientV1 = {
+        async publishObject(digest) { if (!published.has(digest)) { published.add(digest); publishes++; } },
+        async submitReceipt(receipt) { if (!submittedReceipts.has(receipt.receiptDigest)) { submittedReceipts.add(receipt.receiptDigest); receipts++; } return receipt.receiptDigest; },
+        async submitProposal(proposal) { if (!submittedProposals.has(proposal.proposalDigest)) { submittedProposals.add(proposal.proposalDigest); proposals++; } return { proposalId: proposal.proposalId, proposalDigest: proposal.proposalDigest }; },
+        async subscribeDecision(input) { resumeTokens.push(input.resumeToken); return input.resumeToken === null ? { resumeToken: "authority-restart-token", decision: "accepted" } : { resumeToken: "authority-final-token", decision: "accepted" }; },
+      };
+      const registration = { capabilityReference: binding.attemptCapability, binding, adapter, authority: { client, async sealProposal() { seals++; return workerReturn.proposal; } }, subscriptionId: workerReturn.decisionResume.subscriptionId };
+      retained.injectAfter(crashPhase);
+      const interrupted = createPiNativeContributionRuntimeV1([registration], { retained });
+      await assert.rejects(() => interrupted.deliver(binding.attemptCapability, output, evidence), new RegExp(`simulated native host crash after ${crashPhase}`));
+      const restarted = createPiNativeContributionRuntimeV1([registration], { retained });
+      const [first, duplicate] = await Promise.all([restarted.deliver(binding.attemptCapability, output, evidence), restarted.deliver(binding.attemptCapability, output, evidence)]);
+      assert.deepEqual(duplicate, first); assert.equal(first.delivery.decision, "accepted"); assert.equal(first.delivery.resumeToken, crashPhase === "decision-resume" ? "authority-final-token" : "authority-restart-token");
+      assert.deepEqual([publishes, receipts, proposals, seals], [2, 1, 1, 1]);
+      if (crashPhase === "decision-resume") assert.deepEqual(resumeTokens, [null, "authority-restart-token"]); else assert.deepEqual(resumeTokens, [null]);
+      await assert.rejects(() => restarted.deliver(binding.attemptCapability, { ...output, digest: createHash("sha256").update(`substituted-${crashPhase}`).digest("hex") }, evidence), /does not match the bound Pi attempt receipt|substituted the canonical output\/evidence tuple/);
+    }
   }
   assert.deepEqual(observed, outcomes); assert.equal(acceptedRevision, 1); assert.deepEqual(acceptedDocument, { value: 2 }); assert.ok(acceptedReturn);
 

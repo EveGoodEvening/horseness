@@ -45,4 +45,15 @@ export class SecureWorkerAdapterV1 implements WorkerAdapterV1{
 }
 
 export interface WorkerReturnClientV1{publishObject(digest:string,kind:"artifact"|"evidence"):Promise<void>;submitReceipt(receipt:WorkerReturnV1["receipt"],binding:BoundAdapterOperationV1):Promise<string>;submitProposal(proposal:WorkerReturnV1["proposal"],binding:BoundAdapterOperationV1):Promise<{proposalId:string;proposalDigest:string}>;subscribeDecision(input:{proposalId:string;proposalDigest:string;subscriptionId:string;resumeToken:string|null}):Promise<{resumeToken:string|null;decision:"accepted"|"rejected"|"conflicted"|"quarantined"|"approval_required"}>}
-export async function deliverWorkerReturn(workerReturn:WorkerReturnV1,client:WorkerReturnClientV1):Promise<{receiptDigest:string;decision:string;resumeToken:string|null}>{const guard=createBindingGuard(workerReturn.binding);guard.assert(workerReturn.binding);for(const publication of workerReturn.publications)await client.publishObject(digest(publication.digest,"WORKER_RETURN_INVALID"),publication.kind);const receiptDigest=await client.submitReceipt(workerReturn.receipt,guard.binding);const proposal=await client.submitProposal(workerReturn.proposal,guard.binding);if(proposal.proposalId!==workerReturn.decisionResume.proposalId||proposal.proposalDigest!==workerReturn.decisionResume.proposalDigest)fail("DECISION_SCOPE_MISMATCH","proposal decision subscription substituted");const decision=await client.subscribeDecision(workerReturn.decisionResume);return Object.freeze({receiptDigest,decision:decision.decision,resumeToken:decision.resumeToken})}
+export type WorkerReturnDeliveryStepV1=`publication:${number}`|"receipt"|"proposal"|"decision";
+export interface WorkerReturnDeliveryAuthorityV1{perform<T>(step:WorkerReturnDeliveryStepV1,operation:()=>Promise<T>):Promise<T>}
+export async function deliverWorkerReturn(workerReturn:WorkerReturnV1,client:WorkerReturnClientV1,authority?:WorkerReturnDeliveryAuthorityV1):Promise<{receiptDigest:string;decision:string;resumeToken:string|null}>{
+ const guard=createBindingGuard(workerReturn.binding);guard.assert(workerReturn.binding);
+ const perform=<T>(step:WorkerReturnDeliveryStepV1,operation:()=>Promise<T>)=>authority===undefined?operation():authority.perform(step,operation);
+ for(const [index,publication] of workerReturn.publications.entries())await perform(`publication:${index}` as WorkerReturnDeliveryStepV1,()=>client.publishObject(digest(publication.digest,"WORKER_RETURN_INVALID"),publication.kind));
+ const receiptDigest=await perform("receipt",()=>client.submitReceipt(workerReturn.receipt,guard.binding));
+ const proposal=await perform("proposal",()=>client.submitProposal(workerReturn.proposal,guard.binding));
+ if(proposal.proposalId!==workerReturn.decisionResume.proposalId||proposal.proposalDigest!==workerReturn.decisionResume.proposalDigest)fail("DECISION_SCOPE_MISMATCH","proposal decision subscription substituted");
+ const decision=await perform("decision",()=>client.subscribeDecision(workerReturn.decisionResume));
+ return Object.freeze({receiptDigest,decision:decision.decision,resumeToken:decision.resumeToken});
+}

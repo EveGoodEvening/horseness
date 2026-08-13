@@ -1,4 +1,4 @@
-import { createBindingGuard, parseCredentialReferenceV1, parseDoctorProbeResultV1, parseInstallContributionV1, SecureWorkerAdapterV1, type CredentialReferenceV1, type InstallContributionV1, type WorkerReturnClientV1 } from "@horseness/adapter-kit";
+import { createBindingGuard, deliverWorkerReturn, parseCredentialReferenceV1, parseDoctorProbeResultV1, parseInstallContributionV1, SecureWorkerAdapterV1, type CredentialReferenceV1, type InstallContributionV1, type WorkerReturnClientV1, type WorkerReturnDeliveryAuthorityV1, type WorkerReturnDeliveryStepV1 } from "@horseness/adapter-kit";
 import { sealAttemptReceipt, type AttemptReceiptEnvelopeV1, type JsonValue, type ProposalEnvelopeV1 } from "@horseness/domain";
 import type { AdapterCapabilitiesV1, AdapterCancelRequestV1, AdapterLaunchRequestV1, AdapterOperationResultV1, AdapterReconcileRequestV1, AdapterResumeRequestV1, BoundAdapterOperationV1, DoctorProbeResultV1, NativePackageMetadataV1, WorkerAdapterV1, WorkerReturnV1 } from "@horseness/protocol";
 
@@ -66,37 +66,60 @@ export interface PiWorkerReturnRegistrationV1 {
   readonly authority: PiWorkerReturnAuthorityV1;
   readonly subscriptionId: string;
 }
+export type PiRetainedDeliveryPhaseV1 = "prepared" | "publication:0" | "publication:1" | "receipt" | "proposal" | "decision-resume" | "decision";
 export interface PiRetainedDeliveryV1 {
   readonly workerReturn: WorkerReturnV1;
-  readonly receiptDigest: string;
-  readonly proposalSubmitted: boolean;
+  readonly phase: PiRetainedDeliveryPhaseV1;
+  readonly receiptDigest: string | null;
   readonly resumeToken: string | null;
   readonly decision: string | null;
 }
 export interface PiRetainedDeliveryAuthorityV1 {
   load(attemptKey: string): PiRetainedDeliveryV1 | undefined;
-  store(attemptKey: string, value: PiRetainedDeliveryV1): void;
+  create(attemptKey: string, value: PiRetainedDeliveryV1): boolean;
+  compareAndSet(attemptKey: string, expectedPhase: PiRetainedDeliveryPhaseV1, value: PiRetainedDeliveryV1): boolean;
+  runExclusive<T>(attemptKey: string, operation: () => Promise<T>): Promise<T>;
+  close(): void;
   clear(): void;
 }
 export function createPiRetainedDeliveryAuthorityV1(): PiRetainedDeliveryAuthorityV1 {
   const records = new Map<string, PiRetainedDeliveryV1>();
+  const pending = new Map<string, Promise<void>>();
   return Object.freeze({
     load(key: string) {
       const value = records.get(key);
       return value === undefined ? undefined : structuredClone(value);
     },
-    store(key: string, value: PiRetainedDeliveryV1) {
+    create(key: string, value: PiRetainedDeliveryV1) {
+      if (records.has(key)) return false;
       records.set(key, structuredClone(value));
+      return true;
     },
+    compareAndSet(key: string, expectedPhase: PiRetainedDeliveryPhaseV1, value: PiRetainedDeliveryV1) {
+      if (records.get(key)?.phase !== expectedPhase) return false;
+      records.set(key, structuredClone(value));
+      return true;
+    },
+    async runExclusive<T>(key: string, operation: () => Promise<T>) {
+      const prior = pending.get(key) ?? Promise.resolve();
+      const { promise: release, resolve } = Promise.withResolvers<void>();
+      const queued = prior.then(() => release);
+      pending.set(key, queued);
+      await prior;
+      try { return await operation(); }
+      finally {
+        resolve();
+        if (pending.get(key) === queued) pending.delete(key);
+      }
+    },
+    close() {},
     clear() {
       records.clear();
+      pending.clear();
     },
   });
 }
-export interface PiNativeContributionRuntimeOptionsV1 {
-  readonly retained?: PiRetainedDeliveryAuthorityV1;
-  readonly afterDecisionCheckpoint?: () => void;
-}
+export interface PiNativeContributionRuntimeOptionsV1 { readonly retained?: PiRetainedDeliveryAuthorityV1 }
 export interface PiNativeContributionRuntimeV1 {
   deliver(capabilityReference: string, output: { readonly digest: string; readonly mediaType: string; readonly byteLength: number }, evidence: { readonly digest: string; readonly mediaType: string; readonly byteLength: number }): Promise<{ workerReturn: WorkerReturnV1; delivery: PiWorkerReturnDeliveryV1 }>;
   state(): Promise<{ readonly attemptKeys: readonly string[] }>;
@@ -104,6 +127,55 @@ export interface PiNativeContributionRuntimeV1 {
 }
 function attemptKey(binding: BoundAdapterOperationV1): string {
   return `${binding.workspaceId}:${binding.runId}:${binding.taskId}:${binding.attemptId}:${binding.generation}`;
+}
+const DELIVERY_PHASES: readonly PiRetainedDeliveryPhaseV1[] = ["prepared", "publication:0", "publication:1", "receipt", "proposal", "decision-resume", "decision"];
+const publicationPhase = (step: WorkerReturnDeliveryStepV1): PiRetainedDeliveryPhaseV1 => {
+  if (step !== "publication:0" && step !== "publication:1") throw new Error("Pi retained delivery received an unsupported publication phase");
+  return step;
+};
+const completedPhase = (step: WorkerReturnDeliveryStepV1): PiRetainedDeliveryPhaseV1 => step === "decision" ? "decision" : step === "receipt" || step === "proposal" ? step : publicationPhase(step);
+const hasCompleted = (record: PiRetainedDeliveryV1, step: WorkerReturnDeliveryStepV1): boolean => DELIVERY_PHASES.indexOf(record.phase) >= DELIVERY_PHASES.indexOf(completedPhase(step));
+class PiRetainedWorkerReturnDeliveryV1 implements WorkerReturnDeliveryAuthorityV1 {
+  constructor(private readonly retained: PiRetainedDeliveryAuthorityV1, private readonly key: string) {}
+  async perform<T>(step: WorkerReturnDeliveryStepV1, operation: () => Promise<T>): Promise<T> {
+    const record = this.record();
+    if (hasCompleted(record, step)) return this.completed<T>(record, step);
+    const result = await operation();
+    if (step === "decision") {
+      const observed = result as { resumeToken: string | null; decision: string };
+      if (observed.resumeToken === null) throw new Error("Pi decision authority did not issue a resumable token");
+      const workerReturn = { ...record.workerReturn, decisionResume: { ...record.workerReturn.decisionResume, resumeToken: observed.resumeToken } };
+      const resumed = { ...record, workerReturn, phase: "decision-resume" as const, resumeToken: observed.resumeToken };
+      if (!this.retained.compareAndSet(this.key, record.phase, resumed)) throw new Error("Pi retained decision-resume compare-and-set conflict");
+      if (!this.retained.compareAndSet(this.key, "decision-resume", { ...resumed, phase: "decision", decision: observed.decision })) throw new Error("Pi retained decision compare-and-set conflict");
+      return result;
+    }
+    const next = { ...record, phase: completedPhase(step) };
+    if (step === "receipt") next.receiptDigest = result as string;
+    if (!this.retained.compareAndSet(this.key, record.phase, next)) throw new Error("Pi retained delivery phase compare-and-set conflict");
+    return result;
+  }
+  private record(): PiRetainedDeliveryV1 {
+    const record = this.retained.load(this.key);
+    if (record === undefined) throw new Error("Pi retained worker return is unavailable");
+    return record;
+  }
+  private completed<T>(record: PiRetainedDeliveryV1, step: WorkerReturnDeliveryStepV1): T {
+    if (step === "receipt") {
+      if (record.receiptDigest === null) throw new Error("Pi retained receipt digest is unavailable");
+      return record.receiptDigest as T;
+    }
+    if (step === "proposal") return { proposalId: record.workerReturn.proposal.proposalId, proposalDigest: record.workerReturn.proposal.proposalDigest } as T;
+    if (step === "decision") {
+      if (record.resumeToken === null || record.decision === null) throw new Error("Pi retained decision is unavailable");
+      return { resumeToken: record.resumeToken, decision: record.decision } as T;
+    }
+    return undefined as T;
+  }
+}
+function assertCanonicalTuple(record: PiRetainedDeliveryV1, receipt: AttemptReceiptEnvelopeV1, outputDigest: string, evidenceDigest: string): void {
+  const publications = record.workerReturn.publications;
+  if (record.workerReturn.receipt.receiptDigest !== receipt.receiptDigest || publications.length !== 2 || publications[0]?.kind !== "artifact" || publications[0].digest !== outputDigest || publications[1]?.kind !== "evidence" || publications[1].digest !== evidenceDigest) throw new Error("replayed Pi worker return substituted the canonical output/evidence tuple");
 }
 export function createPiNativeContributionRuntimeV1(registrations: readonly PiWorkerReturnRegistrationV1[], options: PiNativeContributionRuntimeOptionsV1 = {}): PiNativeContributionRuntimeV1 {
   const active = new Map<string, PiWorkerReturnRegistrationV1>();
@@ -119,37 +191,24 @@ export function createPiNativeContributionRuntimeV1(registrations: readonly PiWo
       const registration = active.get(capabilityReference);
       if (registration === undefined) throw new Error("unknown or revoked Pi attempt capability reference");
       const key = attemptKey(registration.binding);
-      const receipt = await registration.adapter.collectReceipt(registration.binding);
-      if (receipt.outputDigest !== output.digest || receipt.evidence.length !== 1 || receipt.evidence[0]?.digest !== evidence.digest || receipt.evidence[0]?.mediaType !== evidence.mediaType || receipt.evidence[0]?.size !== evidence.byteLength) throw new Error("provider output does not match the bound Pi attempt receipt");
-      let record = retained.load(key);
-      if (record !== undefined) {
-        const publications = record.workerReturn.publications;
-        if (record.workerReturn.receipt.receiptDigest !== receipt.receiptDigest || publications.length !== 2 || publications[0]?.kind !== "artifact" || publications[0].digest !== output.digest || publications[1]?.kind !== "evidence" || publications[1].digest !== evidence.digest) throw new Error("replayed Pi worker return substituted the canonical output/evidence tuple");
-      } else {
-        const proposal = await registration.authority.sealProposal(registration.binding, receipt);
-        const workerReturn: WorkerReturnV1 = { schemaVersion: "1", binding: registration.binding, receipt, proposal, publications: [{ digest: output.digest, kind: "artifact" }, { digest: evidence.digest, kind: "evidence" }], decisionResume: { proposalId: proposal.proposalId, proposalDigest: proposal.proposalDigest, subscriptionId: registration.subscriptionId, resumeToken: null } };
-        for (const publication of workerReturn.publications) await registration.authority.client.publishObject(publication.digest, publication.kind);
-        const receiptDigest = await registration.authority.client.submitReceipt(receipt, registration.binding);
-        const submitted = await registration.authority.client.submitProposal(proposal, registration.binding);
-        if (submitted.proposalId !== proposal.proposalId || submitted.proposalDigest !== proposal.proposalDigest) throw new Error("Pi proposal submission returned a substituted binding");
-        record = { workerReturn, receiptDigest, proposalSubmitted: true, resumeToken: null, decision: null };
-        retained.store(key, record);
-      }
-      if (record.decision === null) {
-        const observed = await registration.authority.client.subscribeDecision({ proposalId: record.workerReturn.proposal.proposalId, proposalDigest: record.workerReturn.proposal.proposalDigest, subscriptionId: registration.subscriptionId, resumeToken: record.resumeToken });
-        if (observed.resumeToken === null) throw new Error("Pi decision authority did not issue a resumable token");
-        if (options.afterDecisionCheckpoint !== undefined) {
-          record = { ...record, resumeToken: observed.resumeToken };
-          retained.store(key, record);
-          options.afterDecisionCheckpoint();
-        }
-        record = { ...record, resumeToken: observed.resumeToken, decision: observed.decision };
-        retained.store(key, record);
-      }
-      return structuredClone({ workerReturn: record.workerReturn, delivery: { receiptDigest: record.receiptDigest, decision: record.decision!, resumeToken: record.resumeToken } });
+      return retained.runExclusive(key, async () => {
+        const receipt = await registration.adapter.collectReceipt(registration.binding);
+        if (receipt.outputDigest !== output.digest || receipt.evidence.length !== 1 || receipt.evidence[0]?.digest !== evidence.digest || receipt.evidence[0]?.mediaType !== evidence.mediaType || receipt.evidence[0]?.size !== evidence.byteLength) throw new Error("provider output does not match the bound Pi attempt receipt");
+        let record = retained.load(key);
+        if (record === undefined) {
+          const proposal = await registration.authority.sealProposal(registration.binding, receipt);
+          const workerReturn: WorkerReturnV1 = { schemaVersion: "1", binding: registration.binding, receipt, proposal, publications: [{ digest: output.digest, kind: "artifact" }, { digest: evidence.digest, kind: "evidence" }], decisionResume: { proposalId: proposal.proposalId, proposalDigest: proposal.proposalDigest, subscriptionId: registration.subscriptionId, resumeToken: null } };
+          record = { workerReturn, phase: "prepared", receiptDigest: null, resumeToken: null, decision: null };
+          if (!retained.create(key, record)) throw new Error("Pi retained worker return create conflict");
+        } else assertCanonicalTuple(record, receipt, output.digest, evidence.digest);
+        const delivery = await deliverWorkerReturn(record.workerReturn, registration.authority.client, new PiRetainedWorkerReturnDeliveryV1(retained, key));
+        record = retained.load(key);
+        if (record === undefined || record.phase !== "decision") throw new Error("Pi retained worker return did not reach a terminal decision");
+        return structuredClone({ workerReturn: record.workerReturn, delivery });
+      });
     },
     async state() { return { attemptKeys: registrations.map(registration => attemptKey(registration.binding)).filter(key => retained.load(key) !== undefined) }; },
-    async shutdown() { active.clear(); retained.clear(); },
+    async shutdown() { active.clear(); retained.close(); },
   });
 }
 
