@@ -1,0 +1,9 @@
+# OMP native integration
+
+`@horseness/adapter-omp` supports the exact `@oh-my-pi/pi-coding-agent@17.2.15` distribution. The shipped read-only extension uses OMP-native `registerTool`, `registerCommand`, and `agent_start`/session lifecycle registrations. C11 remains the provenance authority for registry integrity, archive SHA-256, executable digest, and the verified same-distribution Bun `loadExtensions` interface at `src/extensibility/extensions/loader.ts`.
+
+The adapter accepts only opaque host credential references scoped to the immutable workspace and OMP adapter identity. The native worker-return tool validates bounded output and evidence descriptors, obtains the binding-valid receipt from the public adapter surface, asks the authority to seal the proposal, constructs the complete `WorkerReturnV1`, and delegates publication, receipt, proposal, and two-step resumable decision delivery to adapter-kit.
+
+A private durable retained authority serializes the exact workspace/run/task/attempt/generation tuple across processes. It persists every publication, receipt, proposal, subscription, and decision checkpoint with compare-and-set transitions, rejects tuple substitution, deduplicates concurrent callbacks, and resumes after crashes without repeating completed authority operations.
+
+Run `pnpm run host:smoke:omp`. The adapter-owned smoke verifies the real package version and loader digest, loads the shipped extension through Bun and the same-distribution `loadExtensions` interface, checks native tools, command, and `agent_start` registration, exercises all five authority-produced outcomes, proves accepted canonical revision advance, covers crash recovery and cross-instance concurrency, reconciles/resumes/fork-switches, and verifies uninstall revokes the native credential and removes discovery.

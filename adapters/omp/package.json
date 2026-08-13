@@ -4,19 +4,34 @@
   "private": true,
   "type": "module",
   "sideEffects": false,
+  "files": [
+    "src",
+    "native"
+  ],
   "exports": {
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
-    }
+    },
+    "./native/omp-package.json": "./native/omp-package.json",
+    "./native/extensions/horseness-omp.mjs": "./native/extensions/horseness-omp.mjs"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p ../../tsconfig.base.json",
-    "lint": "eslint src --max-warnings=0",
-    "test": "node --test"
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
+    "lint": "eslint src test --max-warnings=0",
+    "test": "node --import tsx --test test/*.test.ts",
+    "host:smoke": "node --import tsx test/host-smoke.ts"
   },
   "dependencies": {
     "@horseness/adapter-kit": "workspace:*",
-    "@horseness/sdk": "workspace:*"
+    "@horseness/domain": "workspace:*",
+    "@horseness/orchestrator": "workspace:*",
+    "@horseness/policy": "workspace:*",
+    "@horseness/protocol": "workspace:*",
+    "@horseness/sdk": "workspace:*",
+    "@horseness/store-sqlite": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "4.20.5"
   }
 }

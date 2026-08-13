@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "1",
+  "name": "@horseness/adapter-omp-native",
+  "adapterId": "horseness-omp-v1",
+  "adapterVersion": "0.1.0",
+  "host": {
+    "id": "omp",
+    "package": "@oh-my-pi/pi-coding-agent",
+    "version": "17.2.15",
+    "extensionLoader": "src/extensibility/extensions/loader.ts",
+    "extensionLoaderSha256": "sha256:c0076ad052d435ee1075abfa0682e83ad4a075a1415c720bbbdf71d9affcc48f"
+  },
+  "contributions": [
+    {
+      "kind": "extension",
+      "relativePath": "extensions/horseness-omp.mjs",
+      "mode": "read-only"
+    }
+  ],
+  "authorityBoundary": {
+    "credentials": "opaque-scoped-references-only",
+    "hostWrites": false,
+    "shellExecution": false,
+    "proposalSynthesis": "native-bound-public-domain-callback",
+    "storeAccess": false,
+    "orchestratorAccess": false
+  }
+}

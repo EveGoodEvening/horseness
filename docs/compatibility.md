@@ -54,6 +54,12 @@ The Pi lifecycle is a thin `WorkerAdapterV1` over adapter-kit. It accepts only o
 
 The adapter-owned `host:smoke:pi` gate resolves the real installed Pi 0.73.1 package, verifies the frozen loader digest, loads the native contribution through Pi's own loader, exercises deterministic provider output/evidence and binding-valid receipt/proposal delivery through `@horseness/sdk`, resumes all five canonical decision states, proves accepted canonical revision advance, observes restart/reconcile/resume and ForkPin switch, and uninstalls the contribution. C11 registry integrity, archive SHA-256, member SHA-256, cache revalidation, and official-interface provenance remain mandatory and unchanged.
 
+## OMP adapter v1 implementation train
+
+OMP support is pinned to `@oh-my-pi/pi-coding-agent@17.2.15` and its same-distribution Bun extension loader (`src/extensibility/extensions/loader.ts`, SHA-256 `c0076ad052d435ee1075abfa0682e83ad4a075a1415c720bbbdf71d9affcc48f`). The shipped native contribution uses OMP `registerTool`, `registerCommand`, and `agent_start` plus session branch/start/shutdown events; Pi names, paths, and lifecycle assumptions are not compatibility aliases.
+
+The `host:smoke:omp` gate proves a native-origin complete `WorkerReturnV1`, durable tuple-bound cross-instance deduplication, resumable decision-subscription checkpoints, all five authority outcomes, accepted canonical advance, restart/reconcile/reattach/resume, branch-bound ForkPin switch, and uninstall discovery and credential revocation.
+
 ## Daemon v1 implementation train
 
 `@horseness/daemon` serves the local authority through versioned stdio, Unix-domain socket, and Windows named-pipe endpoints. Stdio is process-inherited; filesystem endpoints require an owner-only parent and endpoint. TCP is not a v1 transport and remains disabled by default. Transport implementations authenticate peers and frame newline-delimited JSON-RPC 2.0 messages, while daemon services alone own bootstrap, grants, dispatch, and authority mutations.
