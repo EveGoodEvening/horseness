@@ -44,8 +44,16 @@ export class SecureWorkerAdapterV1 implements WorkerAdapterV1{
  collectReceipt(binding:BoundAdapterOperationV1):Promise<AttemptReceiptEnvelopeV1>{this.#guard.assert(binding);return this.#delegate.collectReceipt(binding)}
 }
 
-export interface WorkerReturnClientV1{publishObject(digest:string,kind:"artifact"|"evidence"):Promise<void>;submitReceipt(receipt:WorkerReturnV1["receipt"],binding:BoundAdapterOperationV1):Promise<string>;submitProposal(proposal:WorkerReturnV1["proposal"],binding:BoundAdapterOperationV1):Promise<{proposalId:string;proposalDigest:string}>;subscribeDecision(input:{proposalId:string;proposalDigest:string;subscriptionId:string;resumeToken:string|null}):Promise<{resumeToken:string|null;decision:"accepted"|"rejected"|"conflicted"|"quarantined"|"approval_required"}>}
-export type WorkerReturnDeliveryStepV1=`publication:${number}`|"receipt"|"proposal"|"decision";
+export type WorkerReturnDecisionV1="accepted"|"rejected"|"conflicted"|"quarantined"|"approval_required";
+export interface WorkerReturnClientV1{
+ publishObject(digest:string,kind:"artifact"|"evidence"):Promise<void>;
+ submitReceipt(receipt:WorkerReturnV1["receipt"],binding:BoundAdapterOperationV1):Promise<string>;
+ submitProposal(proposal:WorkerReturnV1["proposal"],binding:BoundAdapterOperationV1):Promise<{proposalId:string;proposalDigest:string}>;
+ subscribeDecision?(input:{proposalId:string;proposalDigest:string;subscriptionId:string;resumeToken:string|null}):Promise<{resumeToken:string|null;decision:WorkerReturnDecisionV1}>;
+ startDecisionSubscription?(input:{proposalId:string;proposalDigest:string;subscriptionId:string;resumeToken:string|null}):Promise<{resumeToken:string}>;
+ observeDecision?(input:{proposalId:string;proposalDigest:string;subscriptionId:string;resumeToken:string}):Promise<{resumeToken:string;decision:WorkerReturnDecisionV1}>;
+}
+export type WorkerReturnDeliveryStepV1=`publication:${number}`|"receipt"|"proposal"|"decision-subscription"|"decision";
 export interface WorkerReturnDeliveryAuthorityV1{perform<T>(step:WorkerReturnDeliveryStepV1,operation:()=>Promise<T>):Promise<T>}
 export async function deliverWorkerReturn(workerReturn:WorkerReturnV1,client:WorkerReturnClientV1,authority?:WorkerReturnDeliveryAuthorityV1):Promise<{receiptDigest:string;decision:string;resumeToken:string|null}>{
  const guard=createBindingGuard(workerReturn.binding);guard.assert(workerReturn.binding);
@@ -54,6 +62,12 @@ export async function deliverWorkerReturn(workerReturn:WorkerReturnV1,client:Wor
  const receiptDigest=await perform("receipt",()=>client.submitReceipt(workerReturn.receipt,guard.binding));
  const proposal=await perform("proposal",()=>client.submitProposal(workerReturn.proposal,guard.binding));
  if(proposal.proposalId!==workerReturn.decisionResume.proposalId||proposal.proposalDigest!==workerReturn.decisionResume.proposalDigest)fail("DECISION_SCOPE_MISMATCH","proposal decision subscription substituted");
- const decision=await perform("decision",()=>client.subscribeDecision(workerReturn.decisionResume));
+ if(client.startDecisionSubscription!==undefined&&client.observeDecision!==undefined){
+  const subscription=await perform("decision-subscription",()=>client.startDecisionSubscription!({...workerReturn.decisionResume}));
+  const decision=await perform("decision",()=>client.observeDecision!({...workerReturn.decisionResume,resumeToken:subscription.resumeToken}));
+  return Object.freeze({receiptDigest,decision:decision.decision,resumeToken:decision.resumeToken});
+ }
+ if(client.subscribeDecision===undefined)fail("WORKER_RETURN_INVALID","decision client does not implement a complete delivery protocol");
+ const decision=await perform("decision",()=>client.subscribeDecision!(workerReturn.decisionResume));
  return Object.freeze({receiptDigest,decision:decision.decision,resumeToken:decision.resumeToken});
 }

@@ -1,3 +1,5 @@
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createBindingGuard, deliverWorkerReturn, parseCredentialReferenceV1, parseDoctorProbeResultV1, parseInstallContributionV1, SecureWorkerAdapterV1, type CredentialReferenceV1, type InstallContributionV1, type WorkerReturnClientV1, type WorkerReturnDeliveryAuthorityV1, type WorkerReturnDeliveryStepV1 } from "@horseness/adapter-kit";
 import { sealAttemptReceipt, type AttemptReceiptEnvelopeV1, type JsonValue, type ProposalEnvelopeV1 } from "@horseness/domain";
 import type { AdapterCapabilitiesV1, AdapterCancelRequestV1, AdapterLaunchRequestV1, AdapterOperationResultV1, AdapterReconcileRequestV1, AdapterResumeRequestV1, BoundAdapterOperationV1, DoctorProbeResultV1, NativePackageMetadataV1, WorkerAdapterV1, WorkerReturnV1 } from "@horseness/protocol";
@@ -82,44 +84,43 @@ export interface PiRetainedDeliveryAuthorityV1 {
   close(): void;
   clear(): void;
 }
-export function createPiRetainedDeliveryAuthorityV1(): PiRetainedDeliveryAuthorityV1 {
-  const records = new Map<string, PiRetainedDeliveryV1>();
+export function createPiRetainedDeliveryAuthorityV1(stateDirectory: string): PiRetainedDeliveryAuthorityV1 {
+  if (!isAbsolute(stateDirectory)) throw new Error("Pi retained state directory must be absolute");
+  mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
+  const root = realpathSync(stateDirectory);
+  const file = join(root, "retained-delivery-v1.json");
+  const confined = (candidate: string): string => {
+    const resolved = resolve(candidate); const rel = relative(root, resolved);
+    if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error("Pi retained state path escapes its private directory");
+    return resolved;
+  };
+  confined(file);
+  let closed = false;
   const pending = new Map<string, Promise<void>>();
+  const assertOpen = () => { if (closed) throw new Error("Pi retained delivery authority is closed"); };
+  const readRecords = (): Record<string, PiRetainedDeliveryV1> => {
+    assertOpen();
+    try { return JSON.parse(readFileSync(file, "utf8")) as Record<string, PiRetainedDeliveryV1>; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return {}; throw error; }
+  };
+  const publish = (records: Record<string, PiRetainedDeliveryV1>) => {
+    assertOpen();
+    const temporary = confined(join(root, `.${basename(file)}.${process.pid}.${crypto.randomUUID()}.tmp`));
+    const descriptor = openSync(temporary, "wx", 0o600);
+    try { writeFileSync(descriptor, JSON.stringify(records), "utf8"); fsyncSync(descriptor); } finally { closeSync(descriptor); }
+    renameSync(temporary, file);
+    const directory = openSync(dirname(file), "r"); try { fsyncSync(directory); } finally { closeSync(directory); }
+  };
   return Object.freeze({
-    load(key: string) {
-      const value = records.get(key);
-      return value === undefined ? undefined : structuredClone(value);
-    },
-    create(key: string, value: PiRetainedDeliveryV1) {
-      if (records.has(key)) return false;
-      records.set(key, structuredClone(value));
-      return true;
-    },
-    compareAndSet(key: string, expectedPhase: PiRetainedDeliveryPhaseV1, value: PiRetainedDeliveryV1) {
-      if (records.get(key)?.phase !== expectedPhase) return false;
-      records.set(key, structuredClone(value));
-      return true;
-    },
-    async runExclusive<T>(key: string, operation: () => Promise<T>) {
-      const prior = pending.get(key) ?? Promise.resolve();
-      const { promise: release, resolve } = Promise.withResolvers<void>();
-      const queued = prior.then(() => release);
-      pending.set(key, queued);
-      await prior;
-      try { return await operation(); }
-      finally {
-        resolve();
-        if (pending.get(key) === queued) pending.delete(key);
-      }
-    },
-    close() {},
-    clear() {
-      records.clear();
-      pending.clear();
-    },
+    load(key: string) { const value = readRecords()[key]; return value === undefined ? undefined : structuredClone(value); },
+    create(key: string, value: PiRetainedDeliveryV1) { const records = readRecords(); if (records[key] !== undefined) return false; records[key] = structuredClone(value); publish(records); return true; },
+    compareAndSet(key: string, expectedPhase: PiRetainedDeliveryPhaseV1, value: PiRetainedDeliveryV1) { const records = readRecords(); if (records[key]?.phase !== expectedPhase) return false; records[key] = structuredClone(value); publish(records); return true; },
+    async runExclusive<T>(key: string, operation: () => Promise<T>) { assertOpen(); const prior = pending.get(key) ?? Promise.resolve(); const { promise: release, resolve: releaseLock } = Promise.withResolvers<void>(); const queued = prior.then(() => release); pending.set(key, queued); await prior; try { return await operation(); } finally { releaseLock(); if (pending.get(key) === queued) pending.delete(key); } },
+    close() { closed = true; pending.clear(); },
+    clear() { assertOpen(); rmSync(file, { force: true }); const directory = openSync(root, "r"); try { fsyncSync(directory); } finally { closeSync(directory); } },
   });
 }
-export interface PiNativeContributionRuntimeOptionsV1 { readonly retained?: PiRetainedDeliveryAuthorityV1 }
+export interface PiNativeContributionRuntimeOptionsV1 { readonly retained: PiRetainedDeliveryAuthorityV1 }
 export interface PiNativeContributionRuntimeV1 {
   deliver(capabilityReference: string, output: { readonly digest: string; readonly mediaType: string; readonly byteLength: number }, evidence: { readonly digest: string; readonly mediaType: string; readonly byteLength: number }): Promise<{ workerReturn: WorkerReturnV1; delivery: PiWorkerReturnDeliveryV1 }>;
   state(): Promise<{ readonly attemptKeys: readonly string[] }>;
@@ -133,7 +134,7 @@ const publicationPhase = (step: WorkerReturnDeliveryStepV1): PiRetainedDeliveryP
   if (step !== "publication:0" && step !== "publication:1") throw new Error("Pi retained delivery received an unsupported publication phase");
   return step;
 };
-const completedPhase = (step: WorkerReturnDeliveryStepV1): PiRetainedDeliveryPhaseV1 => step === "decision" ? "decision" : step === "receipt" || step === "proposal" ? step : publicationPhase(step);
+const completedPhase = (step: WorkerReturnDeliveryStepV1): PiRetainedDeliveryPhaseV1 => step === "decision-subscription" ? "decision-resume" : step === "decision" ? "decision" : step === "receipt" || step === "proposal" ? step : publicationPhase(step);
 const hasCompleted = (record: PiRetainedDeliveryV1, step: WorkerReturnDeliveryStepV1): boolean => DELIVERY_PHASES.indexOf(record.phase) >= DELIVERY_PHASES.indexOf(completedPhase(step));
 class PiRetainedWorkerReturnDeliveryV1 implements WorkerReturnDeliveryAuthorityV1 {
   constructor(private readonly retained: PiRetainedDeliveryAuthorityV1, private readonly key: string) {}
@@ -141,17 +142,20 @@ class PiRetainedWorkerReturnDeliveryV1 implements WorkerReturnDeliveryAuthorityV
     const record = this.record();
     if (hasCompleted(record, step)) return this.completed<T>(record, step);
     const result = await operation();
-    if (step === "decision") {
-      const observed = result as { resumeToken: string | null; decision: string };
-      if (observed.resumeToken === null) throw new Error("Pi decision authority did not issue a resumable token");
-      const workerReturn = { ...record.workerReturn, decisionResume: { ...record.workerReturn.decisionResume, resumeToken: observed.resumeToken } };
-      const resumed = { ...record, workerReturn, phase: "decision-resume" as const, resumeToken: observed.resumeToken };
-      if (!this.retained.compareAndSet(this.key, record.phase, resumed)) throw new Error("Pi retained decision-resume compare-and-set conflict");
-      if (!this.retained.compareAndSet(this.key, "decision-resume", { ...resumed, phase: "decision", decision: observed.decision })) throw new Error("Pi retained decision compare-and-set conflict");
-      return result;
-    }
     const next = { ...record, phase: completedPhase(step) };
     if (step === "receipt") next.receiptDigest = result as string;
+    if (step === "decision-subscription") {
+      const issued = result as { resumeToken: string };
+      if (issued.resumeToken.length === 0) throw new Error("Pi decision authority did not issue a resumable token");
+      next.resumeToken = issued.resumeToken;
+      next.workerReturn = { ...record.workerReturn, decisionResume: { ...record.workerReturn.decisionResume, resumeToken: issued.resumeToken } };
+    }
+    if (step === "decision") {
+      const observed = result as { resumeToken: string; decision: string };
+      if (record.resumeToken === null || observed.resumeToken.length === 0) throw new Error("Pi decision observation lacks a retained resume token");
+      next.resumeToken = observed.resumeToken; next.decision = observed.decision;
+      next.workerReturn = { ...record.workerReturn, decisionResume: { ...record.workerReturn.decisionResume, resumeToken: observed.resumeToken } };
+    }
     if (!this.retained.compareAndSet(this.key, record.phase, next)) throw new Error("Pi retained delivery phase compare-and-set conflict");
     return result;
   }
@@ -161,15 +165,10 @@ class PiRetainedWorkerReturnDeliveryV1 implements WorkerReturnDeliveryAuthorityV
     return record;
   }
   private completed<T>(record: PiRetainedDeliveryV1, step: WorkerReturnDeliveryStepV1): T {
-    if (step === "receipt") {
-      if (record.receiptDigest === null) throw new Error("Pi retained receipt digest is unavailable");
-      return record.receiptDigest as T;
-    }
+    if (step === "receipt") { if (record.receiptDigest === null) throw new Error("Pi retained receipt digest is unavailable"); return record.receiptDigest as T; }
     if (step === "proposal") return { proposalId: record.workerReturn.proposal.proposalId, proposalDigest: record.workerReturn.proposal.proposalDigest } as T;
-    if (step === "decision") {
-      if (record.resumeToken === null || record.decision === null) throw new Error("Pi retained decision is unavailable");
-      return { resumeToken: record.resumeToken, decision: record.decision } as T;
-    }
+    if (step === "decision-subscription") { if (record.resumeToken === null) throw new Error("Pi retained decision subscription is unavailable"); return { resumeToken: record.resumeToken } as T; }
+    if (step === "decision") { if (record.resumeToken === null || record.decision === null) throw new Error("Pi retained decision is unavailable"); return { resumeToken: record.resumeToken, decision: record.decision } as T; }
     return undefined as T;
   }
 }
@@ -177,9 +176,10 @@ function assertCanonicalTuple(record: PiRetainedDeliveryV1, receipt: AttemptRece
   const publications = record.workerReturn.publications;
   if (record.workerReturn.receipt.receiptDigest !== receipt.receiptDigest || publications.length !== 2 || publications[0]?.kind !== "artifact" || publications[0].digest !== outputDigest || publications[1]?.kind !== "evidence" || publications[1].digest !== evidenceDigest) throw new Error("replayed Pi worker return substituted the canonical output/evidence tuple");
 }
-export function createPiNativeContributionRuntimeV1(registrations: readonly PiWorkerReturnRegistrationV1[], options: PiNativeContributionRuntimeOptionsV1 = {}): PiNativeContributionRuntimeV1 {
+export function createPiNativeContributionRuntimeV1(registrations: readonly PiWorkerReturnRegistrationV1[], options: PiNativeContributionRuntimeOptionsV1): PiNativeContributionRuntimeV1 {
+  if (options?.retained === undefined) throw new Error("Pi native contribution runtime requires a durable retained delivery authority");
   const active = new Map<string, PiWorkerReturnRegistrationV1>();
-  const retained = options.retained ?? createPiRetainedDeliveryAuthorityV1();
+  const retained = options.retained;
   for (const registration of registrations) {
     const reference = parseCredentialReferenceV1({ schemaVersion: "1", kind: "host-reference", reference: registration.capabilityReference, scope: { workspaceId: registration.binding.workspaceId, adapterId: PI_ADAPTER_ID, purpose: "pi-attempt-return" } });
     if (reference.reference !== registration.binding.attemptCapability) throw new Error("Pi attempt capability reference does not match immutable binding");
