@@ -21,7 +21,7 @@
     "credentials": "opaque-scoped-references-only",
     "hostWrites": false,
     "shellExecution": false,
-    "proposalSynthesis": false,
+    "proposalSynthesis": "native-bound-public-domain-callback",
     "storeAccess": false,
     "orchestratorAccess": false
   }

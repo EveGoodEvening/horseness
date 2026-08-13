@@ -1,100 +1,165 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { attemptContextBindingDigest, contextManifestCoreDigest, domainDigest, reduceCanonicalDocument, sealAttemptReceipt, sealForkPin, sealProposal, verifyAttemptReceipt, verifyProposal, type CompositeCursorV1, type ContextManifestCoreV1 } from "@horseness/domain";
-import { CoordinatorClientV1, WorkerClientV1, type AuthorizedProtocolTransportV1, type OpaqueCredentialReferenceV1, type WorkerBindingV1 } from "@horseness/sdk";
-import { successResponse, type JsonRpcRequestV1, type JsonRpcResponseV1 } from "@horseness/protocol";
-import { PI_NATIVE_PACKAGE_METADATA } from "../src/index.js";
+import type { WorkerReturnClientV1 } from "@horseness/adapter-kit";
+import { NO_POLICY_DIGEST, NO_POLICY_V1, assertJsonValue, attemptContextBindingDigest, contextManifestCoreDigest, createRunGenesis, createWorkspaceGenesis, deltaAuthorityScopeDigest, jsonValueDigest, sealEventEnvelope, sealForkPin, sealProposal, type CapabilityV1, type CompositeCursorV1, type ContextManifestCoreV1, type DeltaAuthorityScopeV1, type JsonValue, type ProposalEnvelopeCoreV1 } from "@horseness/domain";
+import { AdmissionService, loadRevision, type AdmissionCurrentAuthorityV1, type AdmissionRequestV1 } from "../../../packages/orchestrator/src/index.js";
+import { sealPolicyDocument, type PolicyEffectV1 } from "../../../packages/policy/src/index.js";
+import { SQLiteAuthority } from "../../../packages/store-sqlite/src/index.js";
+import type { BoundAdapterOperationV1, WorkerReturnV1 } from "@horseness/protocol";
+import { createPiAdapterV1, createPiNativeContributionRuntimeV1, createPiRetainedDeliveryAuthorityV1, PI_ADAPTER_ID, PI_INSTALL_CONTRIBUTIONS, PI_NATIVE_PACKAGE_METADATA, type PiNativeAttemptV1, type PiNativeRuntimeV1 } from "../src/index.js";
 
 async function resolvePackageRoot(packageName: string): Promise<{ packageRoot: string; packageJson: Record<string, unknown> }> {
   let candidate = dirname(fileURLToPath(import.meta.resolve(packageName)));
   while (true) {
-    const packageJsonPath = join(candidate, "package.json");
-    try {
-      const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as Record<string, unknown>;
-      if (packageJson.name === packageName) return { packageRoot: candidate, packageJson };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    const parent = dirname(candidate);
-    if (parent === candidate) throw new Error(`Could not locate installed package root for ${packageName}`);
-    candidate = parent;
+    try { const packageJson = JSON.parse(await readFile(join(candidate, "package.json"), "utf8")) as Record<string, unknown>; if (packageJson.name === packageName) return { packageRoot: candidate, packageJson }; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    const parent = dirname(candidate); if (parent === candidate) throw new Error(`Could not locate ${packageName}`); candidate = parent;
   }
 }
+const digestFile = async (path: string) => `sha256:${createHash("sha256").update(await readFile(path)).digest("hex")}`;
+const packageDigest = (extensionDigest: string, manifestDigest: string) => `sha256:${createHash("sha256").update(`horseness-pi-shipped-artifact-v1\nextensions/horseness-pi.mjs\0${extensionDigest}\npi-package.json\0${manifestDigest}\n`).digest("hex")}`;
 
+type WorkerToolDetails = { workerReturn: WorkerReturnV1; delivery: { decision: string; resumeToken: string | null } };
+type NativeTool = { execute(id: string, input: unknown): Promise<{ details: WorkerToolDetails }> };
+type StateTool = { execute(id: string, input: unknown): Promise<{ details: { activeForkPinDigest: string | null } }> };
+type ExtensionTool = { definition: unknown };
+type Extension = { tools: Map<string, ExtensionTool>; handlers: Map<string, Array<(event: unknown, context: unknown) => Promise<unknown>>> };
+const emit = async (extension: Extension, name: string, event: unknown) => { const results = []; for (const handler of extension.handlers.get(name) ?? []) results.push(await handler(event, Object.freeze({}))); return results; };
+const jsonWireValue = (value: unknown): JsonValue => { const wire: unknown = JSON.parse(JSON.stringify(value)); assertJsonValue(wire); return wire; };
+
+let extension: Extension | null = null;
 const root = await mkdtemp(join(tmpdir(), "horseness-pi-smoke-"));
 try {
   const { packageRoot, packageJson: upstream } = await resolvePackageRoot("@mariozechner/pi-coding-agent");
-  assert.equal(upstream.name, "@mariozechner/pi-coding-agent");
   assert.equal(upstream.version, "0.73.1");
   const loaderPath = join(packageRoot, "dist/core/extensions/loader.js");
-  const loaderDigest = `sha256:${createHash("sha256").update(await readFile(loaderPath)).digest("hex")}`;
+  const loaderDigest = await digestFile(loaderPath);
   assert.equal(loaderDigest, "sha256:0ffd7839e5626779e4e4d20cd55e647a7a9234a293025c6f1f361e7107e62a6b");
-
   const extensionSource = fileURLToPath(new URL("../native/extensions/horseness-pi.mjs", import.meta.url));
-  const installedExtension = join(root, "extensions", "horseness-pi.mjs");
-  await cp(extensionSource, installedExtension);
+  const manifestSource = fileURLToPath(new URL("../native/pi-package.json", import.meta.url));
+  const extensionDigest = await digestFile(extensionSource); const manifestDigest = await digestFile(manifestSource);
+  assert.deepEqual([extensionDigest, manifestDigest], PI_NATIVE_PACKAGE_METADATA.contributions.map(item => item.digest));
+  assert.equal(packageDigest(extensionDigest, manifestDigest), PI_NATIVE_PACKAGE_METADATA.packageDigest);
+
+  const installedExtension = join(root, "extensions", "horseness-pi.mjs"); await cp(extensionSource, installedExtension);
   const { loadExtensions } = await import(pathToFileURL(loaderPath).href);
-  const loaded = await loadExtensions([installedExtension], root);
-  assert.deepEqual(loaded.errors, []);
-  assert.equal(loaded.extensions.length, 1);
-  const extension = loaded.extensions[0];
-  const nativeTool = extension.tools.get("horseness_worker_return")?.definition;
-  assert.ok(nativeTool);
+  let nativeTool: NativeTool | undefined; let stateTool: StateTool | undefined;
 
-  const cursor: CompositeCursorV1 = { schemaVersion: "1", kind: "composite", workspaceId: "pi-workspace", workspaceSequence: 1, workspaceEnvelopeHash: "workspace-head", workspaceContextEpoch: 1, runId: "pi-run", runSequence: 1, runEnvelopeHash: "run-head", runContextEpoch: 1 };
-  const contextVersion = { schemaVersion: "1", kind: "composite", workspaceContextEpoch: 1, runContextEpoch: 1, observationCursor: cursor } as const;
-  const fork = sealForkPin({ schemaVersion: "1", forkId: "pi-fork", pinVersion: 1, workspaceId: "pi-workspace", runId: "pi-run", parentForkPinDigest: null, refreshesForkPinDigest: null, canonicalRevision: 0, canonicalStateHash: "pi-state-0", canonicalizerVersion: "jcs-v1", hashVersion: "sha256-v1", sourceObservationCursor: cursor, sourceContextVersion: contextVersion, dependencyJoinSnapshotDigest: "pi-join", deltaAuthorityScopeDigest: "pi-scope", pinnedPolicyDigest: "pi-policy", ancestry: [], createdByPrincipalId: "pi-worker", createdByGrantDigest: "pi-grant" });
-  const manifest: ContextManifestCoreV1 = { schemaVersion: "1", workspaceId: "pi-workspace", runId: "pi-run", attemptId: "pi-attempt", generation: 1, forkPinDigest: fork.forkPinDigest, sourceObservationCursor: cursor, sourceContextVersion: contextVersion, authorizationObservationCursor: cursor, authorizationContextVersion: contextVersion, authorizationOverlayV1: { policyDigest: "pi-policy", grantDigest: "pi-grant", quotaDigest: "pi-quota", result: "allowed" }, canonicalRevision: 0, canonicalStateHash: "pi-state-0", canonicalizerVersion: "jcs-v1", hashVersion: "sha256-v1", sources: [], rendererVersion: "1", omissions: [], selectedBytes: 0, byteBudget: 4096, tokenizerMetadata: { schemaVersion: "1", tokenizerId: "bytes", tokenizerVersion: "1", estimatedTokens: 0 }, renderedOutputDigest: "pi-rendered" };
-  const contextBinding = { schemaVersion: "1", attemptId: "pi-attempt", generation: 1, forkPinDigest: fork.forkPinDigest, contextManifestCoreDigest: contextManifestCoreDigest(manifest), sourceObservationCursor: cursor, sourceContextVersion: contextVersion, authorizationObservationCursor: cursor, authorizationContextVersion: contextVersion, providerIdempotencyKey: "pi-provider-key", expectedReceiptSchemaVersion: "1", allowedProducerPrincipalId: "pi-worker", allowedProducerGrantDigest: "pi-grant" } as const;
-  const binding: WorkerBindingV1 = { schemaVersion: "1", workspaceId: "pi-workspace", runId: "pi-run", taskId: "pi-task", attemptId: "pi-attempt", generation: 1, forkPin: fork, manifest, contextBinding, providerId: "pi-native-provider-v1", providerIdempotencyKeyDigest: "pi-provider-key-digest", observationCursor: cursor, dispatchId: "pi-dispatch" };
-  const receipt = sealAttemptReceipt({ schemaVersion: "1", workspaceId: binding.workspaceId, runId: binding.runId, taskId: binding.taskId, attemptId: binding.attemptId, generation: binding.generation, attemptContextBindingDigest: attemptContextBindingDigest(contextBinding), contextManifestCoreDigest: contextManifestCoreDigest(manifest), forkPinDigest: fork.forkPinDigest, providerId: binding.providerId, providerOperationId: "pi-operation-1", providerIdempotencyKeyDigest: binding.providerIdempotencyKeyDigest, producerPrincipalId: "pi-worker", producerGrantDigest: "pi-grant", adapterId: "horseness-pi-v1", adapterVersion: "0.1.0", hostId: "pi", hostVersion: "0.73.1", outcome: "succeeded", startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:00:01Z", outputDigest: "sha256:pi-output", evidence: [{ digest: "sha256:pi-evidence", mediaType: "application/json", size: 64 }], provenance: { artifactIdentity: "npm:@mariozechner/pi-coding-agent@0.73.1", loaderDigest }, nonce: "pi-receipt-1" });
-  const proposal = sealProposal({ schemaVersion: "1", workspaceId: binding.workspaceId, runId: binding.runId, authorPrincipalId: "pi-worker", authorGrantDigest: "pi-grant", attemptId: binding.attemptId, receiptDigests: [receipt.receiptDigest], forkPinDigest: fork.forkPinDigest, deltaAuthorityScopeDigest: "pi-scope", baseRevision: 0, baseStateHash: "pi-state-0", canonicalizerVersion: "jcs-v1", hashVersion: "sha256-v1", proposalSealingObservationCursor: cursor, proposalSealingContextVersion: contextVersion, operations: [], evidenceClaims: [{ digest: "sha256:pi-evidence", claim: "deterministic Pi provider evidence" }], pinnedPolicyDigest: "pi-policy", currentPolicyDigest: "pi-policy", nonce: "pi-proposal-1", predecessorProposalDigest: null, predecessorReason: null });
-  verifyAttemptReceipt(receipt); verifyProposal(proposal);
-  await nativeTool.execute("tool-call-1", { binding: { schemaVersion: "1", workspaceId: binding.workspaceId, runId: binding.runId, taskId: binding.taskId, attemptId: binding.attemptId, generation: binding.generation, forkPinDigest: fork.forkPinDigest, contextManifestCoreDigest: contextManifestCoreDigest(manifest), attemptContextBindingDigest: attemptContextBindingDigest(contextBinding), providerIdempotencyKeyDigest: binding.providerIdempotencyKeyDigest, attemptCapability: "opaque-capability-ref" }, output: { digest: "sha256:pi-output" }, evidence: { digest: "sha256:pi-evidence" }, receipt, proposal });
+  const outcomes = ["accepted", "rejected", "conflicted", "quarantined", "approval_required"] as const;
+  const observed: string[] = []; let acceptedRevision = 0; let acceptedDocument: JsonValue = null; let acceptedReturn: WorkerReturnV1 | null = null;
+  for (const desired of outcomes) {
+    const scenarioRoot = join(root, desired); await mkdir(scenarioRoot, { recursive: true }); const authority = new SQLiteAuthority(join(scenarioRoot, "authority.sqlite"), join(scenarioRoot, "artifacts"));
+    try {
+      const workspaceId = `pi-${desired}`; const runId = "run"; const taskId = "task"; const attemptId = "attempt";
+      const workspace = createWorkspaceGenesis({ workspaceId, authorityPrincipalId: "authority", initialGrantDigest: "grant", authorityConsumptionMarker: "marker", activePolicyDigest: NO_POLICY_DIGEST, commandId: "workspace" });
+      authority.appendAtomic({ commandId: "workspace", workspace: { streamKind: "workspace", workspaceId, streamId: workspaceId, expectedSequence: 0, expectedEnvelopeHash: null, events: [workspace.event] } });
+      const absent = { schemaVersion: "1", kind: "absent-run-genesis", workspaceId, workspaceSequence: 1, workspaceEnvelopeHash: workspace.event.envelopeHash, workspaceContextEpoch: 0, runId, expectedRunHead: "absent" } as const;
+      const run = createRunGenesis({ observationCursor: absent, initialDocument: { value: 1 }, principalId: "worker", commandId: "run" }); authority.appendAtomic({ commandId: "run", runGenesis: { observationCursor: absent, event: run.event } });
+      const cursor: CompositeCursorV1 = run.resultCursor; const revision = loadRevision(authority, workspaceId, runId);
+      const scope: DeltaAuthorityScopeV1 = { schemaVersion: "1", workspaceId, runId, taskId, roots: ["/value"] };
+      const effect: PolicyEffectV1 = desired === "rejected" ? "rejected" : desired === "approval_required" ? "approval_required" : "accepted";
+      const policy = effect === "accepted" ? NO_POLICY_V1 : sealPolicyDocument({ schemaVersion: "1", kind: "policy", policyId: `policy-${desired}`, revision: 0, predecessorDigest: null, rules: [{ ruleId: "rule", subject: { action: null, pathPrefix: null, version: null }, effect, constraints: [], evidence: [] }] });
+      const policyDigest = "policyDigest" in policy ? policy.policyDigest : NO_POLICY_DIGEST;
+      const stale = desired === "conflicted";
+      const fork = sealForkPin({ schemaVersion: "1", forkId: `fork-${desired}`, pinVersion: 1, workspaceId, runId, parentForkPinDigest: null, refreshesForkPinDigest: null, canonicalRevision: stale ? revision.revision + 1 : revision.revision, canonicalStateHash: stale ? "stale-state" : revision.stateHash, canonicalizerVersion: "jcs-v1", hashVersion: "sha256-v1", sourceObservationCursor: cursor, sourceContextVersion: { schemaVersion: "1", kind: "composite", workspaceContextEpoch: 0, runContextEpoch: 0, observationCursor: cursor }, dependencyJoinSnapshotDigest: "join", deltaAuthorityScopeDigest: deltaAuthorityScopeDigest(scope), pinnedPolicyDigest: policyDigest, ancestry: [], createdByPrincipalId: "worker", createdByGrantDigest: "grant" });
+      const manifest: ContextManifestCoreV1 = { schemaVersion: "1", workspaceId, runId, attemptId, generation: 1, forkPinDigest: fork.forkPinDigest, sourceObservationCursor: cursor, sourceContextVersion: fork.core.sourceContextVersion, authorizationObservationCursor: cursor, authorizationContextVersion: fork.core.sourceContextVersion, authorizationOverlayV1: { policyDigest, grantDigest: "grant", quotaDigest: "quota-digest", result: "allowed" }, canonicalRevision: revision.revision, canonicalStateHash: revision.stateHash, canonicalizerVersion: "jcs-v1", hashVersion: "sha256-v1", sources: [], rendererVersion: "1", omissions: [], selectedBytes: 0, byteBudget: 4096, tokenizerMetadata: { schemaVersion: "1", tokenizerId: "bytes", tokenizerVersion: "1", estimatedTokens: 0, bytesPerTokenNumerator: 1, bytesPerTokenDenominator: 1 }, renderedOutputDigest: "rendered" };
+      const contextBinding = { schemaVersion: "1", attemptId, generation: 1, forkPinDigest: fork.forkPinDigest, contextManifestCoreDigest: contextManifestCoreDigest(manifest), sourceObservationCursor: cursor, sourceContextVersion: fork.core.sourceContextVersion, authorizationObservationCursor: cursor, authorizationContextVersion: fork.core.sourceContextVersion, providerIdempotencyKey: `provider-${desired}`, expectedReceiptSchemaVersion: "1", allowedProducerPrincipalId: "worker", allowedProducerGrantDigest: "grant" } as const;
+      const binding: BoundAdapterOperationV1 = { schemaVersion: "1", workspaceId, runId, taskId, attemptId, generation: 1, forkPinDigest: fork.forkPinDigest, contextManifestCoreDigest: contextManifestCoreDigest(manifest), attemptContextBindingDigest: attemptContextBindingDigest(contextBinding), providerIdempotencyKeyDigest: `provider-digest-${desired}`, attemptCapability: `pi-attempt-capability-${desired}` };
+      const output = { digest: createHash("sha256").update(`output-${desired}`).digest("hex"), mediaType: "text/plain", byteLength: Buffer.byteLength(`output-${desired}`) };
+      const evidence = { digest: createHash("sha256").update(`evidence-${desired}`).digest("hex"), mediaType: "application/json", byteLength: Buffer.byteLength(`evidence-${desired}`), claim: `Pi ${desired} evidence` };
+      const attempt: PiNativeAttemptV1 = { providerOperationId: `operation-${desired}`, nativeSessionId: `session-${desired}`, startedAt: "2026-08-13T00:00:00Z", finishedAt: "2026-08-13T00:00:01Z", outcome: "succeeded", outputDigest: output.digest, evidence: [{ digest: evidence.digest, mediaType: evidence.mediaType, size: evidence.byteLength }], provenance: { host: "pi", version: "0.73.1" } };
+      let deliveredDecision: typeof desired | null = null;
+      let authorityCursor: CompositeCursorV1 | null = null;
+      const publicationKinds: string[] = [];
+      const delivery = {
+        subscriptionId: `subscription-${desired}`,
+        sealProposal: (core: ProposalEnvelopeCoreV1, receipt: WorkerReturnV1["receipt"]) => {
+          const head = authority.replay(workspaceId, "run", runId).at(-1)!;
+          const payload = { eventType: "AttemptReceiptRecordedV1", workspaceId, runId, receiptId: receipt.receiptId, receiptDigest: receipt.receiptDigest, outcome: receipt.outcome } as const;
+          const event = sealEventEnvelope({ schemaVersion: "1", streamKind: "run", workspaceId, streamId: runId, sequence: head.envelope.sequence + 1, priorEnvelopeHash: head.envelopeHash, eventId: `receipt-${desired}`, eventType: payload.eventType, payload, principalId: "worker", causationId: `receipt-${desired}`, correlationId: `receipt-${desired}`, idempotencyKey: `receipt-${desired}` });
+          authorityCursor = { ...cursor, runSequence: event.envelope.sequence, runEnvelopeHash: event.envelopeHash, runContextEpoch: event.envelope.sequence - 1 };
+          const capability: CapabilityV1 = { schemaVersion: "1", workspaceId, runId, commands: ["submit-proposal"], issuer: "authority", delegatee: "worker", issuedObservationSequence: 1, expiresObservationSequence: 100, nonce: `cap-${desired}`, revocationSequence: null };
+          const current: AdmissionCurrentAuthorityV1 = { schemaVersion: "1", evaluationObservationCursor: authorityCursor, currentPolicy: policy, authorization: { role: "worker", capabilityId: "capability", capability, grantDigest: "grant", revoked: false }, quota: { id: "quota", digest: "quota-digest", available: desired !== "quarantined" }, authenticatedApproverPrincipalId: "approver", authorityTime: "2026-08-13T00:00:02Z" };
+          authority.publishAndAppendAtomic({ commandId: `receipt-${desired}`, run: { streamKind: "run", workspaceId, streamId: runId, expectedSequence: head.envelope.sequence, expectedEnvelopeHash: head.envelopeHash, events: [event] }, artifacts: [], snapshots: [
+            { workspaceId, streamKind: "run", streamId: runId, sequence: authorityCursor.runSequence, envelopeHash: authorityCursor.runEnvelopeHash, projectionName: "admission-sealing", projectionVersion: "1", state: jsonWireValue({ schemaVersion: "1", observationCursor: authorityCursor, fork, scope, receipts: [receipt], pinnedPolicy: policy, evidence: [] }) },
+            { workspaceId, streamKind: "run", streamId: runId, sequence: authorityCursor.runSequence, envelopeHash: authorityCursor.runEnvelopeHash, projectionName: "admission-current", projectionVersion: "1", state: jsonWireValue(current) },
+          ] });
+          const sealingContextVersion = { schemaVersion: "1", kind: "composite", workspaceContextEpoch: authorityCursor.workspaceContextEpoch, runContextEpoch: authorityCursor.runContextEpoch, observationCursor: authorityCursor } as const;
+          return sealProposal({ ...core, receiptDigests: [receipt.receiptDigest], evidenceClaims: [], proposalSealingObservationCursor: authorityCursor, proposalSealingContextVersion: sealingContextVersion });
+        },
+        async publishObject(digest: string, kind: "artifact" | "evidence") { publicationKinds.push(kind); const isEvidence = kind === "evidence"; const content = isEvidence ? `evidence-${desired}` : `output-${desired}`; const record = authority.artifacts.publishAndRegister(content, isEvidence ? evidence.mediaType : output.mediaType); assert.equal(record.digest, digest); },
+        async submitReceipt(receipt: WorkerReturnV1["receipt"]) { return receipt.receiptDigest; },
+        async submitProposal(proposal: WorkerReturnV1["proposal"]) { assert.ok(authorityCursor); const request: AdmissionRequestV1 = { schemaVersion: "1", commandId: `admit-${desired}`, proposal, scopeDigest: proposal.core.deltaAuthorityScopeDigest, forkPinDigest: proposal.core.forkPinDigest, receiptDigests: proposal.core.receiptDigests, evidenceIds: [], policyDigest, quotaId: "quota", evaluationClock: { schemaVersion: "1", authorityTime: "2026-08-13T00:00:02Z", observationCursor: authorityCursor }, approval: null, authorization: { capabilityId: "capability" }, action: "apply-delta", version: "1" }; const authorityResult = new AdmissionService(authority).evaluateAndApply(request); deliveredDecision = authorityResult.state; return { proposalId: proposal.proposalId, proposalDigest: proposal.proposalDigest }; },
+        async subscribeDecision(input: { resumeToken: string | null }) { assert.equal(input.resumeToken, null); assert.equal(deliveredDecision, desired); return { resumeToken: `authority-resume-${desired}`, decision: deliveredDecision! }; },
+      };
+      const proposalCore: ProposalEnvelopeCoreV1 = { schemaVersion: "1", workspaceId, runId, authorPrincipalId: "worker", authorGrantDigest: "grant", attemptId, receiptDigests: [], forkPinDigest: fork.forkPinDigest, deltaAuthorityScopeDigest: deltaAuthorityScopeDigest(scope), baseRevision: fork.core.canonicalRevision, baseStateHash: fork.core.canonicalStateHash, canonicalizerVersion: "jcs-v1", hashVersion: "sha256-v1", proposalSealingObservationCursor: cursor, proposalSealingContextVersion: { schemaVersion: "1", kind: "composite", workspaceContextEpoch: 0, runContextEpoch: 0, observationCursor: cursor }, operations: [{ op: "replace", path: "/value", expectedValueDigest: jsonValueDigest(1), value: 2 }], evidenceClaims: [], pinnedPolicyDigest: policyDigest, currentPolicyDigest: policyDigest, nonce: `proposal-${desired}`, predecessorProposalDigest: null, predecessorReason: null };
+      const providerRuntime: PiNativeRuntimeV1 = { async launch() { return attempt; }, async cancel() { return attempt; }, async reconcile() { return attempt; }, async resume() { return attempt; }, async collect() { return attempt; } };
+      const adapter = createPiAdapterV1({ binding, credential: { schemaVersion: "1", kind: "host-reference", reference: "pi.provider.ref", scope: { workspaceId, adapterId: PI_ADAPTER_ID, purpose: "pi-provider-auth" } }, runtime: providerRuntime, producerPrincipalId: "worker", producerGrantDigest: "grant" });
+      await adapter.launch({ ...binding, operation: "launch", renderedContextDigest: "rendered", providerOptions: {} });
+      Object.defineProperty(globalThis, Symbol.for("horseness.adapter.pi.native-runtime.v1"), { configurable: true, value: createPiNativeContributionRuntimeV1([{ capabilityReference: binding.attemptCapability, binding, adapter, authority: { client: delivery as WorkerReturnClientV1, async sealProposal(_binding, receipt) { return delivery.sealProposal(proposalCore, receipt); } }, subscriptionId: delivery.subscriptionId }]), writable: true });
+      const loaded = await loadExtensions([installedExtension], root); assert.deepEqual(loaded.errors, []); assert.equal(loaded.extensions.length, 1); extension = loaded.extensions[0] as Extension; nativeTool = extension.tools.get("horseness_worker_return")?.definition as NativeTool | undefined; stateTool = extension.tools.get("horseness_native_state")?.definition as StateTool | undefined; assert.ok(nativeTool); assert.ok(stateTool);
+      const native = await nativeTool.execute(`tool-${desired}`, { attemptCapabilityReference: binding.attemptCapability, output, evidence }); observed.push(native.details.delivery.decision);
+      assert.equal(native.details.workerReturn.schemaVersion, "1"); assert.equal(native.details.workerReturn.binding.attemptCapability, binding.attemptCapability); assert.equal(native.details.delivery.resumeToken, `authority-resume-${desired}`); assert.deepEqual(publicationKinds, ["artifact", "evidence"]);
+      const duplicate = await nativeTool.execute(`tool-${desired}-duplicate`, { attemptCapabilityReference: binding.attemptCapability, output, evidence }); assert.deepEqual(duplicate.details, native.details);
+      await assert.rejects(() => nativeTool!.execute(`tool-${desired}-substituted`, { attemptCapabilityReference: binding.attemptCapability, output: { ...output, digest: createHash("sha256").update(`substituted-output-${desired}`).digest("hex") }, evidence }), /does not match the bound Pi attempt receipt|substituted the canonical output\/evidence tuple/);
+      if (desired === "accepted") { const canonical = loadRevision(authority, workspaceId, runId); acceptedRevision = canonical.revision; acceptedDocument = canonical.document; acceptedReturn = native.details.workerReturn; assert.deepEqual(canonical.document, { value: 2 }); }
+    } finally { authority.close(); }
+  }
 
-  const decisions = ["accepted", "rejected", "conflicted", "quarantined", "approval_required"] as const;
-  let decisionIndex = 0;
-  const credential: OpaqueCredentialReferenceV1 = { schemaVersion: "1", kind: "host-reference", reference: "pi.coordinator.ref", scope: { workspaceId: binding.workspaceId, adapterId: "horseness-pi-v1", purpose: "worker-grant" } };
-  const transport: AuthorizedProtocolTransportV1 = {
-    async request(request: JsonRpcRequestV1, received): Promise<JsonRpcResponseV1> {
-      assert.deepEqual(received, credential);
-      const input = request.params.body.input.value as Readonly<Record<string, unknown>>;
-      const value = request.method === "artifact.publish.v1"
-        ? { outcomeId: "artifact-outcome", status: "accepted", artifactId: input.artifactId, publishedDigest: input.contentDigest, immutableReference: "pi-object" }
-        : request.method === "receipt.submit.v1" || request.method === "proposal.submit.v1"
-          ? { schemaVersion: "1", resultType: "RunCommandResultV1", commandId: `pi-command:${request.method}`, resultCursor: cursor, resultContextVersion: contextVersion }
-          : request.method === "admission.subscribe.v1"
-            ? { outcomeId: "decision-outcome", status: "accepted", subscriptionId: "pi-decisions", events: [{ state: decisions[decisionIndex++], proposalId: proposal.proposalId, proposalDigest: proposal.proposalDigest }], resumeToken: `pi-resume-${decisionIndex}` }
-            : { outcomeId: "context-outcome", status: "accepted" };
-      const nextCursor = { ...cursor, workspaceSequence: cursor.workspaceSequence + decisionIndex + 1, runSequence: cursor.runSequence + decisionIndex + 1, workspaceEnvelopeHash: `workspace-${decisionIndex}`, runEnvelopeHash: `run-${decisionIndex}` };
-      return successResponse(request.id, request.method, { schemaVersion: "1", resultType: request.method, value } as never, null, request.method === "admission.subscribe.v1" ? { subscription: { schemaVersion: "1", subscriptionId: "pi-decisions", afterObservationCursor: nextCursor, resumeToken: `pi-resume-${decisionIndex}`, emittedResultCursor: null } } : {});
-    }
-  };
-  const worker = new WorkerClientV1(new CoordinatorClientV1(transport, credential), binding);
-  await worker.publishOutput({ operationId: "publish-output", artifactId: "pi-output", mediaType: "text/plain", contentDigest: "sha256:pi-output", byteLength: 22, storageReference: "attempt-output" });
-  await worker.publishEvidence({ operationId: "publish-evidence", artifactId: "pi-evidence", mediaType: "application/json", contentDigest: "sha256:pi-evidence", byteLength: 64, storageReference: "attempt-evidence" }, "deterministic Pi provider evidence");
-  await worker.submitReceipt(receipt, "pi-receipt-submit");
-  await worker.submitProposal(proposal, "pi-proposal-submit");
-  let resume;
-  const observed: string[] = [];
-  for (let index = 0; index < decisions.length; index++) { const batch = await worker.subscribeDecisions(proposal, `pi-decision-${index}`, resume); observed.push(...batch.events.map(event => event.state)); resume = batch.resume; }
-  assert.deepEqual(observed, decisions);
+  {
+    const workerReturn = acceptedReturn!;
+    const binding = workerReturn.binding;
+    const retained = createPiRetainedDeliveryAuthorityV1();
+    let publishes = 0;
+    let receipts = 0;
+    let proposals = 0;
+    const resumeTokens: Array<string | null> = [];
+    const client: WorkerReturnClientV1 = {
+      async publishObject() { publishes++; },
+      async submitReceipt(receipt) { receipts++; return receipt.receiptDigest; },
+      async submitProposal(proposal) { proposals++; return { proposalId: proposal.proposalId, proposalDigest: proposal.proposalDigest }; },
+      async subscribeDecision(input) {
+        resumeTokens.push(input.resumeToken);
+        return input.resumeToken === null
+          ? { resumeToken: "authority-restart-token", decision: "accepted" }
+          : { resumeToken: "authority-final-token", decision: "accepted" };
+      },
+    };
+    const runtime: PiNativeRuntimeV1 = { async launch() { throw new Error("not used"); }, async cancel() { return null; }, async reconcile() { return null; }, async resume() { return null; }, async collect() { return { providerOperationId: workerReturn.receipt.providerOperationId, nativeSessionId: "restart-session", startedAt: workerReturn.receipt.startedAt, finishedAt: workerReturn.receipt.finishedAt, outcome: workerReturn.receipt.outcome, outputDigest: workerReturn.receipt.outputDigest, evidence: workerReturn.receipt.evidence.map(item => ({ digest: item.digest, mediaType: item.mediaType, size: item.size })), provenance: workerReturn.receipt.provenance }; } };
+    const adapter = createPiAdapterV1({ binding, credential: { schemaVersion: "1", kind: "host-reference", reference: "pi.provider.restart", scope: { workspaceId: binding.workspaceId, adapterId: PI_ADAPTER_ID, purpose: "pi-provider-auth" } }, runtime, producerPrincipalId: workerReturn.receipt.producerPrincipalId, producerGrantDigest: workerReturn.receipt.producerGrantDigest });
+    const registration = { capabilityReference: binding.attemptCapability, binding, adapter, authority: { client, async sealProposal() { return workerReturn.proposal; } }, subscriptionId: workerReturn.decisionResume.subscriptionId };
+    const output = { digest: workerReturn.publications[0]!.digest, mediaType: "text/plain", byteLength: Buffer.byteLength("output-accepted") }; const evidence = { digest: workerReturn.publications[1]!.digest, mediaType: "application/json", byteLength: Buffer.byteLength("evidence-accepted") };
+    const interrupted = createPiNativeContributionRuntimeV1([registration], { retained, afterDecisionCheckpoint() { throw new Error("simulated native host interruption"); } });
+    await assert.rejects(() => interrupted.deliver(binding.attemptCapability, output, evidence), /simulated native host interruption/);
+    const restarted = createPiNativeContributionRuntimeV1([registration], { retained });
+    const resumedDelivery = await restarted.deliver(binding.attemptCapability, output, evidence);
+    assert.equal(resumedDelivery.delivery.decision, "accepted"); assert.equal(resumedDelivery.delivery.resumeToken, "authority-final-token");
+    assert.deepEqual(resumeTokens, [null, "authority-restart-token"]); assert.deepEqual([publishes, receipts, proposals], [2, 1, 1]);
+  }
+  assert.deepEqual(observed, outcomes); assert.equal(acceptedRevision, 1); assert.deepEqual(acceptedDocument, { value: 2 }); assert.ok(acceptedReturn);
 
-  const genesis = reduceCanonicalDocument(null, { eventType: "RunCreatedV1", sequence: 1, workspaceId: binding.workspaceId, runId: binding.runId, initialDocument: { status: "before" } });
-  const resultingDocument = { status: "accepted", output: "PI_NATIVE_BUNDLE_OK" };
-  const advanced = reduceCanonicalDocument(genesis, { eventType: "DeltaAcceptedV1", sequence: 2, workspaceId: binding.workspaceId, runId: binding.runId, proposalId: proposal.proposalId, priorStateHash: genesis.stateHash, resultingStateHash: domainDigest("horseness.canonical-document.v1", resultingDocument), resultingDocument });
-  assert.equal(advanced.revision, 1);
-  assert.equal((advanced.document as { status: string }).status, "accepted");
+  const lifecycleCalls: string[] = []; const nativeAttempt: PiNativeAttemptV1 = { providerOperationId: "pi-operation", nativeSessionId: "pi-session", startedAt: "2026-08-13T00:00:00Z", finishedAt: "2026-08-13T00:00:01Z", outcome: "succeeded", outputDigest: "output", evidence: [], provenance: {} };
+  const runtime: PiNativeRuntimeV1 = { async launch() { lifecycleCalls.push("launch"); return nativeAttempt; }, async cancel() { lifecycleCalls.push("cancel"); return nativeAttempt; }, async reconcile() { lifecycleCalls.push("reconcile"); return nativeAttempt; }, async resume(request) { lifecycleCalls.push(request.operation); return nativeAttempt; }, async collect() { lifecycleCalls.push("collect"); return nativeAttempt; } };
+  const lifecycleBinding = acceptedReturn!.binding;
+  const adapterOptions = { binding: lifecycleBinding, credential: { schemaVersion: "1" as const, kind: "host-reference" as const, reference: "pi.provider.ref", scope: { workspaceId: lifecycleBinding.workspaceId, adapterId: PI_ADAPTER_ID, purpose: "pi-provider-auth" } }, runtime, producerPrincipalId: "worker", producerGrantDigest: "grant" };
+  const launched = await createPiAdapterV1(adapterOptions).launch({ ...lifecycleBinding, operation: "launch", renderedContextDigest: "rendered", providerOptions: {} });
+  assert.equal(launched.providerOperationId, nativeAttempt.providerOperationId); assert.equal(launched.nativeSessionId, nativeAttempt.nativeSessionId);
+  const restartedAdapter = createPiAdapterV1(adapterOptions);
+  const reconciled = await restartedAdapter.reconcile({ ...lifecycleBinding, operation: "reconcile", providerOperationId: nativeAttempt.providerOperationId });
+  const reattached = await restartedAdapter.resume({ ...lifecycleBinding, operation: "reattach", providerOperationId: nativeAttempt.providerOperationId, nativeSessionId: nativeAttempt.nativeSessionId });
+  const resumed = await restartedAdapter.resume({ ...lifecycleBinding, operation: "resume", providerOperationId: nativeAttempt.providerOperationId, nativeSessionId: nativeAttempt.nativeSessionId });
+  const collected = await restartedAdapter.collectReceipt(lifecycleBinding);
+  assert.deepEqual([reconciled.providerOperationId, reattached.nativeSessionId, resumed.nativeSessionId], [nativeAttempt.providerOperationId, nativeAttempt.nativeSessionId, nativeAttempt.nativeSessionId]); assert.equal(collected.providerOperationId, nativeAttempt.providerOperationId);
+  assert.deepEqual(lifecycleCalls, ["launch", "reconcile", "reattach", "resume", "collect"]);
+  assert.ok(extension); assert.ok(stateTool); assert.ok(nativeTool);
+  const nextFork = `sha256:${createHash("sha256").update("active-fork-2").digest("hex")}`; await emit(extension, "session_before_fork", { type: "session_before_fork", entryId: "fork-entry", nextForkPinDigest: nextFork }); await emit(extension, "session_start", { type: "session_start", reason: "fork", forkPinDigest: nextFork });
+  const switched = await stateTool.execute("state", {}); assert.equal(switched.details.activeForkPinDigest, nextFork);
+  await emit(extension, "session_shutdown", { type: "session_shutdown", reason: "uninstall" }); await rm(installedExtension); const rediscovered = await loadExtensions([installedExtension], root); assert.equal(rediscovered.extensions.length, 0); assert.equal(rediscovered.errors.length, 1); await assert.rejects(() => nativeTool.execute("after-uninstall", {}), /credential is disabled/);
+  assert.deepEqual(PI_INSTALL_CONTRIBUTIONS.map(item => item.contributionId), ["horseness-pi-extension", "horseness-pi-manifest"]);
 
-  const lifecycle = { restart: true, reconcile: true, resume: true, forkSwitch: fork.forkPinDigest !== sealForkPin({ ...fork.core, forkId: "pi-fork-2", pinVersion: 2, parentForkPinDigest: fork.forkPinDigest, ancestry: [fork.forkPinDigest] }).forkPinDigest, uninstall: false };
-  await writeFile(join(root, "smoke-evidence.json"), `${JSON.stringify({ package: upstream.name, version: upstream.version, loaderDigest, nativeContribution: PI_NATIVE_PACKAGE_METADATA.packageDigest, deterministicProviderAttempt: "PI_NATIVE_BUNDLE_OK", receiptDigest: receipt.receiptDigest, proposalDigest: proposal.proposalDigest, decisions: observed, canonicalRevision: advanced.revision, lifecycle })}\n`);
-  await rm(installedExtension);
-  lifecycle.uninstall = true;
-  process.stdout.write(`${JSON.stringify({ schemaVersion: "PiHostSmokeResultV1", status: "pass", host: "pi", version: upstream.version, loaderDigest, receiptDigest: receipt.receiptDigest, proposalDigest: proposal.proposalDigest, decisions: observed, canonicalRevision: advanced.revision, lifecycle })}\n`);
-} finally {
-  await rm(root, { recursive: true, force: true });
-}
+  process.stdout.write(`${JSON.stringify({ schemaVersion: "PiHostSmokeResultV1", host: "pi", version: upstream.version, loaderDigest, packageDigest: PI_NATIVE_PACKAGE_METADATA.packageDigest, receiptDigest: acceptedReturn!.receipt.receiptDigest, proposalDigest: acceptedReturn!.proposal.proposalDigest, decisions: observed, canonicalRevision: acceptedRevision, canonicalDocument: acceptedDocument, lifecycle: { calls: lifecycleCalls, activeForkPinDigest: nextFork, uninstallDiscovery: "disabled", credential: "revoked" } })}\n`);
+} finally { await rm(root, { recursive: true, force: true }); }
