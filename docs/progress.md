@@ -4,9 +4,9 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 
 ## Global status
 
-- **Planning state:** C00, C01, C02, C03, C04, C05, C06, C07, C08, C09, C10, C11, and C12 are complete; F001/F002 are closed; R001/R002 are complete
-- **Active claims:** C13 (daemon, transports, and first-authority ceremony), candidate `7cc39529`; awaiting candidate-bound Linux/macOS/Windows CI receipts
-- **Next eligible:** none; C13 is active
+- **Planning state:** C00, C01, C02, C03, C04, C05, C06, C07, C08, C09, C10, C11, C12, and C13 are complete; F001/F002 are closed; R001/R002 are complete
+- **Active claims:** none
+- **Next eligible:** C14 (CLI/credentials), and no other chunk
 - **Active blockers:** none
 - **Last integrated receipt:** immutable C01 `docs/checkpoints/C01/final/1.json`, envelope digest `17ddd75b49e35d3bf6f432c8c6acca30b4a66512229453aca4fc63e7f427ea7d`, indexed at A01 commit `223023330cb000b759d8a8b2419514638c1aa179`; receipt/index bytes must not be overwritten
 - **Release readiness:** not started
@@ -37,8 +37,8 @@ For C02 onward: commit the two tracker files to claim a dependency-ready chunk; 
 | C11 | Four-host feasibility | C10 | complete; claim `9bb051a`; implementation `05c5f4c6` (amended from `1dc6053` after fixture-theater rework); completion `8987a1af`; lessons `7defa3f1`; final candidate `05c5f4c6`; Node 22 gates green: typecheck exit 0, boundaries 14/14, host:validate:pi/omp/claude/codex all pass, harness 47/47, matrix pass; pinned real distributions: @mariozechner/pi-coding-agent@0.73.1, @oh-my-pi/pi-coding-agent@17.2.15, @anthropic-ai/claude-code-linux-x64@2.1.228, @openai/codex@0.144.1-linux-x64; Claude scope: credential-free gate narrowed to `nativeArtifactLoad` + `officialValidatorSatisfied`, 7 credential-gated capabilities deferred to C17; clean final code+security review after 3 review rounds |
 | C12 | SDK/adapter kit | C11 | in-progress; tracker-only claim from integrated base `71b990bbc1edbaf5152a5b201ad0ed311b8422e5`; C11 final candidate `05c5f4c6`, completion `8987a1af`, and lessons `7defa3f1` recorded; implementation and acceptance not yet completed |
 | C12 | SDK/adapter kit | C11 | complete; claim `55a71fb9`; implementation `a77f0cbc`; review fixes `e432bb87`, `793d2608`; final candidate `793d2608`; Node 22 gates green: SDK typecheck exit 0, adapter-kit typecheck exit 0, SDK tests 8/8, adapter-kit tests 6/6, adapter:conformance 6/6, boundaries 14/14; two review rounds resolved 7 high findings (resume cursor, protocol cursor variants, deep immutable binding, proposal scope checks, closed credential grammar, producer/grant/policy/base binding, adapter-kit credential parser); final security review clean |
-| C13 | Daemon/bootstrap auth | C12 | in-progress; claim `78a43530`; candidate `7cc39529`; local Node 22 gates green: daemon+protocol typecheck, multiprocess 6/6, boundaries 14/14; supplemental protocol transports 9/9, store typecheck, authority-state 3/3; definitive code and security reviews clean; blocked only on candidate-SHA Linux/macOS/Windows CI receipts required by exact gate 3 |
-| C14 | CLI/credentials | C13 | not-started |
+| C13 | Daemon/bootstrap auth | C12 | complete; claim `78a43530`; completion tracker base `ad97c417`; final candidate `7cc39529`; exact gates 1, 2, and 4 passed under Node 22: daemon+protocol typecheck exit 0, multiprocess 6/6, boundaries 14/14; exact gate 3 candidate-bound Linux/macOS/Windows receipts explicitly waived/unobserved solely for C13 repository chunk completion by user direction on 2026-08-13, with no cross-OS validation claim; supplemental protocol transports 9/9, store typecheck, authority-state 3/3; definitive code and security reviews clean; CI matrix/verifier retained and runtime authentication unchanged; no C20 or release-gate precedent |
+| C14 | CLI/credentials | C13 | eligible; sole next chunk |
 | C15 | Pi native bundle | C14 | not-started |
 | C16 | OMP native bundle | C15 | not-started |
 | C17 | Claude native bundle | C16 | not-started |
@@ -79,4 +79,4 @@ Claude scope decision: Claude Code 2.1.228 provides genuine plugin validation an
 
 ## Planning review status
 
-The bootstrap workflow blocker remains closed. C02 through C12 are complete. C13 candidate `7cc39529` has passed all locally executable Node 22 gates and definitive blocker/high code and security review. Completion remains blocked on honest candidate-bound Linux/macOS/Windows CI receipts for exact gate 3; C14 is not dependency-ready.
+The bootstrap workflow blocker remains closed. C02 through C13 are complete. C13 final candidate `7cc39529` passed exact gates 1, 2, and 4 plus definitive blocker/high code and security review. By explicit user direction on 2026-08-13, exact gate 3 is waived/unobserved solely for C13 ordinary repository chunk completion: candidate-bound Linux/macOS/Windows receipts were not observed, gate 3 is not claimed passed, and no cross-OS validation is claimed. The CI matrix and verifier remain intact, product runtime authentication is unchanged, and this creates no precedent for C20 or release/publication gates. C14 is the sole next dependency-ready chunk.

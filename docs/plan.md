@@ -518,3 +518,9 @@ For every C02–C25 chunk, the exact sequence is:
 4. Commit `chore(progress): complete <ID>` with only the two tracker files; record final candidate commit, green gates, completed review findings, and next eligible chunk.
 
 Dependencies after C01 are satisfied by the integrated tracker completion state and Git ancestry. `docs/claims/**`, `docs/checkpoints/**`, and their indexes are not generic development outputs after C01. C22–C25 still create the product/release side-effect evidence explicitly required by their delivery contracts; those records authenticate external publication effects and are not development-claim closure machinery.
+
+### C13 repository-completion waiver (2026-08-13)
+
+By explicit user direction on 2026-08-13, C13 exact gate 3 (`corepack pnpm run ci:require-os-receipts -- C13 linux macos windows`) is waived solely for the ordinary repository chunk-completion decision for final candidate `7cc39529`. The Linux, macOS, and Windows candidate-bound receipts were not observed, and this correction does not state or imply that gate 3 passed or that cross-OS validation occurred. C13 may be recorded complete with exact gates 1, 2, and 4 passed and gate 3 conspicuously recorded as waived/unobserved.
+
+This waiver is narrow to C13 repository chunk completion. It does not remove or weaken the CI matrix or `ci:require-os-receipts` verifier, alter daemon or protocol runtime authentication and authorization requirements, waive any product evidence contract, or establish precedent for C20, release, publication, promotion, or any other chunk gate. Future candidate-bound evidence may still be collected by the retained matrix and verifier.
