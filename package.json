@@ -26,6 +26,7 @@
     "host:harness:test": "node --test tests/host-feasibility/*.test.mjs tests/host-feasibility/**/*.test.mjs",
     "hosts:matrix:verify": "node scripts/host-feasibility/verify-matrix.mjs",
     "ci:require-os-receipts": "node scripts/ci-require-os-receipts.mjs",
+    "host:smoke:pi": "pnpm --filter @horseness/adapter-pi run host:smoke",
     "acceptance": "node scripts/acceptance.mjs",
     "progress:cas": "node scripts/progress-cas.mjs"
   },

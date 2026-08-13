@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "1",
+  "name": "@horseness/adapter-pi-native",
+  "adapterId": "horseness-pi-v1",
+  "adapterVersion": "0.1.0",
+  "host": {
+    "id": "pi",
+    "package": "@mariozechner/pi-coding-agent",
+    "version": "0.73.1",
+    "extensionLoader": "dist/core/extensions/loader.js",
+    "extensionLoaderSha256": "sha256:0ffd7839e5626779e4e4d20cd55e647a7a9234a293025c6f1f361e7107e62a6b"
+  },
+  "contributions": [
+    {
+      "kind": "extension",
+      "relativePath": "extensions/horseness-pi.mjs",
+      "mode": "read-only"
+    }
+  ],
+  "authorityBoundary": {
+    "credentials": "opaque-scoped-references-only",
+    "hostWrites": false,
+    "shellExecution": false,
+    "proposalSynthesis": false,
+    "storeAccess": false,
+    "orchestratorAccess": false
+  }
+}

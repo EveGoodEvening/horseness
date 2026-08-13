@@ -68,9 +68,19 @@ importers:
       '@horseness/adapter-kit':
         specifier: workspace:*
         version: link:../../packages/adapter-kit
+      '@horseness/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@horseness/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       '@horseness/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
+    devDependencies:
+      tsx:
+        specifier: 4.20.5
+        version: 4.20.5
 
   apps/cli:
     dependencies:

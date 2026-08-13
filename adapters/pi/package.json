@@ -4,19 +4,31 @@
   "private": true,
   "type": "module",
   "sideEffects": false,
+  "files": [
+    "src",
+    "native"
+  ],
   "exports": {
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
-    }
+    },
+    "./native/pi-package.json": "./native/pi-package.json",
+    "./native/extensions/horseness-pi.mjs": "./native/extensions/horseness-pi.mjs"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p ../../tsconfig.base.json",
-    "lint": "eslint src --max-warnings=0",
-    "test": "node --test"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint src test --max-warnings=0",
+    "test": "node --import tsx --test test/*.test.ts",
+    "host:smoke": "node --import tsx test/host-smoke.ts"
   },
   "dependencies": {
     "@horseness/adapter-kit": "workspace:*",
+    "@horseness/domain": "workspace:*",
+    "@horseness/protocol": "workspace:*",
     "@horseness/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "4.20.5"
   }
 }

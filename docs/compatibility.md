@@ -46,6 +46,14 @@ Credentials cross the adapter boundary only as versioned opaque references scope
 
 The executable adapter conformance suite covers capability detection, lifecycle recovery, immutable binding retention, callback deduplication, credential/reference exclusion, scope rejection, executable/cwd and symlink confinement, bounded/redacted output, declarative install and doctor validation, and a `WorkerReturnV1` artifact/receipt/proposal/decision-resume loop through an SDK-compatible client fake. The repository root `adapter:conformance` command is the focused gate for this contract.
 
+## Pi adapter v1 implementation train
+
+`@horseness/adapter-pi` supports exactly `@mariozechner/pi-coding-agent@0.73.1` and binds the upstream native extension loader member digest. Its shipped contribution and package manifest are immutable, declarative, read-only resources; the adapter does not install into host targets or expose mutation hooks.
+
+The Pi lifecycle is a thin `WorkerAdapterV1` over adapter-kit. It accepts only opaque credential references scoped to the bound workspace, `horseness-pi-v1`, and `pi-provider-auth`; retains the complete immutable attempt binding; and delegates provider launch, cancellation, restart reconciliation, reattachment, native resume, and receipt collection without store, orchestrator, SQLite, shell, scheduling, admission, or proposal-synthesis authority.
+
+The adapter-owned `host:smoke:pi` gate resolves the real installed Pi 0.73.1 package, verifies the frozen loader digest, loads the native contribution through Pi's own loader, exercises deterministic provider output/evidence and binding-valid receipt/proposal delivery through `@horseness/sdk`, resumes all five canonical decision states, proves accepted canonical revision advance, observes restart/reconcile/resume and ForkPin switch, and uninstalls the contribution. C11 registry integrity, archive SHA-256, member SHA-256, cache revalidation, and official-interface provenance remain mandatory and unchanged.
+
 ## Daemon v1 implementation train
 
 `@horseness/daemon` serves the local authority through versioned stdio, Unix-domain socket, and Windows named-pipe endpoints. Stdio is process-inherited; filesystem endpoints require an owner-only parent and endpoint. TCP is not a v1 transport and remains disabled by default. Transport implementations authenticate peers and frame newline-delimited JSON-RPC 2.0 messages, while daemon services alone own bootstrap, grants, dispatch, and authority mutations.
