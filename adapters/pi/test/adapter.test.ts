@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { setImmediate } from "node:timers/promises";
 import test from "node:test";
 import { verifyAttemptReceipt } from "@horseness/domain";
-import { createPiAdapterV1, PI_ADAPTER_ID, PI_INSTALL_CONTRIBUTIONS, PI_NATIVE_PACKAGE_METADATA, PI_PROVIDER_ID, piDoctorV1, type PiNativeAttemptV1, type PiNativeRuntimeV1 } from "../src/index.js";
+import { createPiAdapterV1, createPiRetainedDeliveryAuthorityV1, PI_ADAPTER_ID, PI_INSTALL_CONTRIBUTIONS, PI_NATIVE_PACKAGE_METADATA, PI_PROVIDER_ID, piDoctorV1, type PiNativeAttemptV1, type PiNativeRuntimeV1 } from "../src/index.js";
 
 const binding = { schemaVersion: "1", workspaceId: "ws", runId: "run", taskId: "task", attemptId: "attempt", generation: 1, forkPinDigest: "sha256:fork", contextManifestCoreDigest: "sha256:manifest", attemptContextBindingDigest: "sha256:binding", providerIdempotencyKeyDigest: "sha256:key", attemptCapability: "capability-ref" } as const;
 const attempt: PiNativeAttemptV1 = { providerOperationId: "pi-operation", nativeSessionId: "pi-session", startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:00:01Z", outcome: "succeeded", outputDigest: "sha256:output", evidence: [{ digest: "sha256:evidence", mediaType: "application/json", size: 42 }], provenance: { package: "@mariozechner/pi-coding-agent", version: "0.73.1", loaderDigest: "sha256:0ffd7839e5626779e4e4d20cd55e647a7a9234a293025c6f1f361e7107e62a6b" } };
@@ -13,3 +18,34 @@ test("Pi package exposes meaningful immutable native contributions", () => { ass
 test("Pi lifecycle retains binding, reconciles, resumes and seals a valid receipt", async () => { const capabilities = await adapter.detectCapabilities(); assert.equal(capabilities.providerId, PI_PROVIDER_ID); const launched = await adapter.launch({ ...binding, operation: "launch", renderedContextDigest: "sha256:rendered", providerOptions: {} }); assert.equal(launched.providerOperationId, "pi-operation"); await adapter.reconcile({ ...binding, operation: "reconcile", providerOperationId: "pi-operation" }); await adapter.resume({ ...binding, operation: "reattach", providerOperationId: "pi-operation", nativeSessionId: "pi-session" }); await adapter.resume({ ...binding, operation: "resume", providerOperationId: "pi-operation", nativeSessionId: "pi-session" }); const receipt = await adapter.collectReceipt(binding); verifyAttemptReceipt(receipt); assert.equal(receipt.providerId, PI_PROVIDER_ID); assert.deepEqual(calls, ["launch", "reconcile", "reattach", "resume", "collect"]); });
 test("Pi rejects binding and credential scope substitution", () => { assert.throws(() => createPiAdapterV1({ binding, credential: { schemaVersion: "1", kind: "host-reference", reference: "pi.provider.ref", scope: { workspaceId: "other", adapterId: PI_ADAPTER_ID, purpose: "pi-provider-auth" } }, runtime, producerPrincipalId: "worker", producerGrantDigest: "grant" })); assert.throws(() => adapter.launch({ ...binding, generation: 2, operation: "launch", renderedContextDigest: "sha256:rendered", providerOptions: {} })); });
 test("Pi doctor binds exact upstream loader and package resources", () => { assert.deepEqual(piDoctorV1({ nativePackageVersion: "0.73.1", loaderDigest: "sha256:0ffd7839e5626779e4e4d20cd55e647a7a9234a293025c6f1f361e7107e62a6b", contributionDigests: PI_NATIVE_PACKAGE_METADATA.contributions.map(item => item.digest) }).checks.map(check => check.status), ["ok", "ok", "ok"]); });
+
+test("Pi retained authority reclaims only a mismatched process incarnation", async () => {
+  if (process.platform !== "linux") return;
+  const root = await mkdtemp(join(tmpdir(), "horseness-pi-lock-incarnation-"));
+  try {
+    const key = "pid-reuse";
+    const lock = join(root, "locks", createHash("sha256").update(key).digest("hex"));
+    await mkdir(lock, { recursive: true, mode: 0o700 });
+    const stat = await readFile(`/proc/${process.pid}/stat`, "utf8");
+    const commandEnd = stat.lastIndexOf(")");
+    const incarnation = stat.slice(commandEnd + 2).trim().split(/\s+/)[19]!;
+    await writeFile(join(lock, "owner.json"), JSON.stringify({ pid: process.pid, nonce: randomUUID(), incarnation: `${BigInt(incarnation) + 1n}` }), { mode: 0o600 });
+    const reclaimed = createPiRetainedDeliveryAuthorityV1(root);
+    let entered = false;
+    await reclaimed.runExclusive(key, async () => { entered = true; });
+    assert.equal(entered, true);
+
+    const peer = createPiRetainedDeliveryAuthorityV1(root);
+    let release: (() => void) | undefined;
+    const held = reclaimed.runExclusive("current-owner", async () => { await new Promise<void>(resolve => { release = resolve; }); });
+    while (release === undefined) await setImmediate();
+    let peerEntered = false;
+    const waiting = peer.runExclusive("current-owner", async () => { peerEntered = true; });
+    for (let turn = 0; turn < 5; turn++) await setImmediate();
+    assert.equal(peerEntered, false);
+    release();
+    await Promise.all([held, waiting]);
+    assert.equal(peerEntered, true);
+    reclaimed.close(); peer.close();
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

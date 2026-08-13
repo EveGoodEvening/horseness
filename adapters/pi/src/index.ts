@@ -99,7 +99,8 @@ export function createPiRetainedDeliveryAuthorityV1(stateDirectory: string): PiR
     if (details.isSymbolicLink() || !details.isDirectory() || (details.mode & 0o077) !== 0 || dirname(realpathSync(directory)) !== root) throw new Error("Pi retained state path must be a private, non-symlink directory");
   }
   let closed = false;
-  const held = new Map<string, string>();
+  type LockOwner = { readonly pid: number; readonly nonce: string; readonly incarnation: string };
+  const held = new Map<string, LockOwner>();
   const assertOpen = () => { if (closed) throw new Error("Pi retained delivery authority is closed"); };
   const nameFor = (key: string) => createHash("sha256").update(key).digest("hex");
   const recordPath = (key: string) => join(records, `${nameFor(key)}.json`);
@@ -123,50 +124,74 @@ export function createPiRetainedDeliveryAuthorityV1(stateDirectory: string): PiR
     renameSync(temporary, path);
     syncDirectory(records);
   };
-  const ownerAlive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; } };
-  const acquire = async (key: string): Promise<string> => {
+  const linuxProcessIncarnation = (pid: number): string => {
+    if (process.platform !== "linux") throw new Error("Pi retained delivery locks require verifiable process incarnation identity");
+    let stat: string;
+    try { stat = readFileSync(`/proc/${pid}/stat`, "utf8"); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("Pi retained delivery lock owner process is absent");
+      throw new Error("Pi retained delivery lock process incarnation could not be verified", { cause: error });
+    }
+    const commandEnd = stat.lastIndexOf(")");
+    if (commandEnd < 2 || stat[commandEnd + 1] !== " ") throw new Error("Pi retained delivery lock process incarnation is invalid");
+    const fields = stat.slice(commandEnd + 2).trim().split(/\s+/);
+    const starttime = fields[19];
+    if (starttime === undefined || !/^[0-9]+$/.test(starttime)) throw new Error("Pi retained delivery lock process incarnation is invalid");
+    return starttime;
+  };
+  const readOwner = (path: string): LockOwner => {
+    assertRegularPrivateFile(path);
+    const owner = JSON.parse(readFileSync(path, "utf8")) as LockOwner;
+    if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0 || typeof owner.nonce !== "string" || owner.nonce.length === 0 || typeof owner.incarnation !== "string" || !/^[0-9]+$/.test(owner.incarnation)) throw new Error("Pi retained delivery lock owner is invalid");
+    return owner;
+  };
+  const ownersMatch = (left: LockOwner, right: LockOwner): boolean => left.pid === right.pid && left.nonce === right.nonce && left.incarnation === right.incarnation;
+  const ownerIsCurrent = (owner: LockOwner): boolean => {
+    try { return linuxProcessIncarnation(owner.pid) === owner.incarnation; }
+    catch (error) { if ((error as Error).message === "Pi retained delivery lock owner process is absent") return false; throw error; }
+  };
+  const acquire = async (key: string): Promise<LockOwner> => {
     assertOpen();
     const path = lockPath(key);
-    const nonce = randomUUID();
+    const owner = { pid: process.pid, nonce: randomUUID(), incarnation: linuxProcessIncarnation(process.pid) } satisfies LockOwner;
     const deadline = Date.now() + 10_000;
     while (true) {
       try {
         mkdirSync(path, { mode: 0o700 });
-        writeFileSync(join(path, "owner.json"), JSON.stringify({ pid: process.pid, nonce }), { encoding: "utf8", flag: "wx", mode: 0o600 });
+        writeFileSync(join(path, "owner.json"), JSON.stringify(owner), { encoding: "utf8", flag: "wx", mode: 0o600 });
         syncDirectory(path); syncDirectory(locks);
-        return nonce;
+        return owner;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
         const details = lstatSync(path);
         if (details.isSymbolicLink() || !details.isDirectory() || (details.mode & 0o077) !== 0) throw new Error("Pi retained lock path must be a private, non-symlink directory");
-        let owner: { pid: number; nonce: string };
-        try { assertRegularPrivateFile(join(path, "owner.json")); owner = JSON.parse(readFileSync(join(path, "owner.json"), "utf8")) as { pid: number; nonce: string }; }
+        let existing: LockOwner;
+        try { existing = readOwner(join(path, "owner.json")); }
         catch (ownerError) {
           if (Date.now() - statSync(path).mtimeMs > 1_000) { rmSync(path, { recursive: true }); syncDirectory(locks); continue; }
           if (Date.now() >= deadline) throw new Error("Pi retained delivery lock acquisition timed out");
           const { promise: wait, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, 10); await wait; continue;
         }
-        if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0 || typeof owner.nonce !== "string") throw new Error("Pi retained delivery lock owner is invalid");
-        if (!ownerAlive(owner.pid)) {
-          const reread = JSON.parse(readFileSync(join(path, "owner.json"), "utf8")) as { pid: number; nonce: string };
-          if (reread.pid === owner.pid && reread.nonce === owner.nonce) { rmSync(path, { recursive: true }); syncDirectory(locks); continue; }
+        if (!ownerIsCurrent(existing)) {
+          const reread = readOwner(join(path, "owner.json"));
+          if (ownersMatch(reread, existing)) { rmSync(path, { recursive: true }); syncDirectory(locks); continue; }
         }
         if (Date.now() >= deadline) throw new Error("Pi retained delivery lock acquisition timed out");
         const { promise: wait, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, 10); await wait;
       }
     }
   };
-  const release = (key: string, nonce: string) => {
+  const release = (key: string, expected: LockOwner) => {
     const path = lockPath(key);
-    const owner = JSON.parse(readFileSync(join(path, "owner.json"), "utf8")) as { pid: number; nonce: string };
-    if (owner.pid !== process.pid || owner.nonce !== nonce) throw new Error("Pi retained delivery lock ownership changed before release");
+    const owner = readOwner(join(path, "owner.json"));
+    if (!ownersMatch(owner, expected)) throw new Error("Pi retained delivery lock ownership changed before release");
     rmSync(path, { recursive: true }); syncDirectory(locks);
   };
   return Object.freeze({
     load(key: string) { const value = readRecord(key); return value === undefined ? undefined : structuredClone(value); },
     create(key: string, value: PiRetainedDeliveryV1) { if (held.get(key) === undefined) throw new Error("Pi retained create requires the attempt lock"); if (readRecord(key) !== undefined) return false; publish(key, structuredClone(value)); return true; },
     compareAndSet(key: string, expectedPhase: PiRetainedDeliveryPhaseV1, value: PiRetainedDeliveryV1) { if (held.get(key) === undefined) throw new Error("Pi retained compare-and-set requires the attempt lock"); if (readRecord(key)?.phase !== expectedPhase) return false; publish(key, structuredClone(value)); return true; },
-    async runExclusive<T>(key: string, operation: () => Promise<T>) { assertOpen(); const nonce = await acquire(key); held.set(key, nonce); try { return await operation(); } finally { held.delete(key); release(key, nonce); } },
+    async runExclusive<T>(key: string, operation: () => Promise<T>) { assertOpen(); const owner = await acquire(key); held.set(key, owner); try { return await operation(); } finally { held.delete(key); release(key, owner); } },
     close() { closed = true; },
     clear() { assertOpen(); for (const directory of [records, locks]) { rmSync(directory, { recursive: true }); mkdirSync(directory, { mode: 0o700 }); } syncDirectory(root); },
   });
