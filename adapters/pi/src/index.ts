@@ -1,5 +1,6 @@
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { dirname, isAbsolute, join } from "node:path";
 import { createBindingGuard, deliverWorkerReturn, parseCredentialReferenceV1, parseDoctorProbeResultV1, parseInstallContributionV1, SecureWorkerAdapterV1, type CredentialReferenceV1, type InstallContributionV1, type WorkerReturnClientV1, type WorkerReturnDeliveryAuthorityV1, type WorkerReturnDeliveryStepV1 } from "@horseness/adapter-kit";
 import { sealAttemptReceipt, type AttemptReceiptEnvelopeV1, type JsonValue, type ProposalEnvelopeV1 } from "@horseness/domain";
 import type { AdapterCapabilitiesV1, AdapterCancelRequestV1, AdapterLaunchRequestV1, AdapterOperationResultV1, AdapterReconcileRequestV1, AdapterResumeRequestV1, BoundAdapterOperationV1, DoctorProbeResultV1, NativePackageMetadataV1, WorkerAdapterV1, WorkerReturnV1 } from "@horseness/protocol";
@@ -87,37 +88,87 @@ export interface PiRetainedDeliveryAuthorityV1 {
 export function createPiRetainedDeliveryAuthorityV1(stateDirectory: string): PiRetainedDeliveryAuthorityV1 {
   if (!isAbsolute(stateDirectory)) throw new Error("Pi retained state directory must be absolute");
   mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
+  const stateStat = lstatSync(stateDirectory);
+  if (stateStat.isSymbolicLink() || !stateStat.isDirectory() || (stateStat.mode & 0o077) !== 0) throw new Error("Pi retained state directory must be a private, non-symlink directory");
   const root = realpathSync(stateDirectory);
-  const file = join(root, "retained-delivery-v1.json");
-  const confined = (candidate: string): string => {
-    const resolved = resolve(candidate); const rel = relative(root, resolved);
-    if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error("Pi retained state path escapes its private directory");
-    return resolved;
-  };
-  confined(file);
+  const records = join(root, "records");
+  const locks = join(root, "locks");
+  for (const directory of [records, locks]) {
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const details = lstatSync(directory);
+    if (details.isSymbolicLink() || !details.isDirectory() || (details.mode & 0o077) !== 0 || dirname(realpathSync(directory)) !== root) throw new Error("Pi retained state path must be a private, non-symlink directory");
+  }
   let closed = false;
-  const pending = new Map<string, Promise<void>>();
+  const held = new Map<string, string>();
   const assertOpen = () => { if (closed) throw new Error("Pi retained delivery authority is closed"); };
-  const readRecords = (): Record<string, PiRetainedDeliveryV1> => {
-    assertOpen();
-    try { return JSON.parse(readFileSync(file, "utf8")) as Record<string, PiRetainedDeliveryV1>; }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return {}; throw error; }
+  const nameFor = (key: string) => createHash("sha256").update(key).digest("hex");
+  const recordPath = (key: string) => join(records, `${nameFor(key)}.json`);
+  const lockPath = (key: string) => join(locks, nameFor(key));
+  const assertRegularPrivateFile = (path: string) => {
+    const details = lstatSync(path);
+    if (details.isSymbolicLink() || !details.isFile() || (details.mode & 0o077) !== 0) throw new Error("Pi retained state record must be a private regular file");
   };
-  const publish = (records: Record<string, PiRetainedDeliveryV1>) => {
+  const readRecord = (key: string): PiRetainedDeliveryV1 | undefined => {
     assertOpen();
-    const temporary = confined(join(root, `.${basename(file)}.${process.pid}.${crypto.randomUUID()}.tmp`));
+    const path = recordPath(key);
+    try { assertRegularPrivateFile(path); return JSON.parse(readFileSync(path, "utf8")) as PiRetainedDeliveryV1; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+  };
+  const syncDirectory = (path: string) => { const descriptor = openSync(path, "r"); try { fsyncSync(descriptor); } finally { closeSync(descriptor); } };
+  const publish = (key: string, value: PiRetainedDeliveryV1) => {
+    const path = recordPath(key);
+    const temporary = join(records, `.${nameFor(key)}.${process.pid}.${randomUUID()}.tmp`);
     const descriptor = openSync(temporary, "wx", 0o600);
-    try { writeFileSync(descriptor, JSON.stringify(records), "utf8"); fsyncSync(descriptor); } finally { closeSync(descriptor); }
-    renameSync(temporary, file);
-    const directory = openSync(dirname(file), "r"); try { fsyncSync(directory); } finally { closeSync(directory); }
+    try { writeFileSync(descriptor, JSON.stringify(value), "utf8"); fsyncSync(descriptor); } finally { closeSync(descriptor); }
+    renameSync(temporary, path);
+    syncDirectory(records);
+  };
+  const ownerAlive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; } };
+  const acquire = async (key: string): Promise<string> => {
+    assertOpen();
+    const path = lockPath(key);
+    const nonce = randomUUID();
+    const deadline = Date.now() + 10_000;
+    while (true) {
+      try {
+        mkdirSync(path, { mode: 0o700 });
+        writeFileSync(join(path, "owner.json"), JSON.stringify({ pid: process.pid, nonce }), { encoding: "utf8", flag: "wx", mode: 0o600 });
+        syncDirectory(path); syncDirectory(locks);
+        return nonce;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        const details = lstatSync(path);
+        if (details.isSymbolicLink() || !details.isDirectory() || (details.mode & 0o077) !== 0) throw new Error("Pi retained lock path must be a private, non-symlink directory");
+        let owner: { pid: number; nonce: string };
+        try { assertRegularPrivateFile(join(path, "owner.json")); owner = JSON.parse(readFileSync(join(path, "owner.json"), "utf8")) as { pid: number; nonce: string }; }
+        catch (ownerError) {
+          if (Date.now() - statSync(path).mtimeMs > 1_000) { rmSync(path, { recursive: true }); syncDirectory(locks); continue; }
+          if (Date.now() >= deadline) throw new Error("Pi retained delivery lock acquisition timed out");
+          const { promise: wait, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, 10); await wait; continue;
+        }
+        if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0 || typeof owner.nonce !== "string") throw new Error("Pi retained delivery lock owner is invalid");
+        if (!ownerAlive(owner.pid)) {
+          const reread = JSON.parse(readFileSync(join(path, "owner.json"), "utf8")) as { pid: number; nonce: string };
+          if (reread.pid === owner.pid && reread.nonce === owner.nonce) { rmSync(path, { recursive: true }); syncDirectory(locks); continue; }
+        }
+        if (Date.now() >= deadline) throw new Error("Pi retained delivery lock acquisition timed out");
+        const { promise: wait, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, 10); await wait;
+      }
+    }
+  };
+  const release = (key: string, nonce: string) => {
+    const path = lockPath(key);
+    const owner = JSON.parse(readFileSync(join(path, "owner.json"), "utf8")) as { pid: number; nonce: string };
+    if (owner.pid !== process.pid || owner.nonce !== nonce) throw new Error("Pi retained delivery lock ownership changed before release");
+    rmSync(path, { recursive: true }); syncDirectory(locks);
   };
   return Object.freeze({
-    load(key: string) { const value = readRecords()[key]; return value === undefined ? undefined : structuredClone(value); },
-    create(key: string, value: PiRetainedDeliveryV1) { const records = readRecords(); if (records[key] !== undefined) return false; records[key] = structuredClone(value); publish(records); return true; },
-    compareAndSet(key: string, expectedPhase: PiRetainedDeliveryPhaseV1, value: PiRetainedDeliveryV1) { const records = readRecords(); if (records[key]?.phase !== expectedPhase) return false; records[key] = structuredClone(value); publish(records); return true; },
-    async runExclusive<T>(key: string, operation: () => Promise<T>) { assertOpen(); const prior = pending.get(key) ?? Promise.resolve(); const { promise: release, resolve: releaseLock } = Promise.withResolvers<void>(); const queued = prior.then(() => release); pending.set(key, queued); await prior; try { return await operation(); } finally { releaseLock(); if (pending.get(key) === queued) pending.delete(key); } },
-    close() { closed = true; pending.clear(); },
-    clear() { assertOpen(); rmSync(file, { force: true }); const directory = openSync(root, "r"); try { fsyncSync(directory); } finally { closeSync(directory); } },
+    load(key: string) { const value = readRecord(key); return value === undefined ? undefined : structuredClone(value); },
+    create(key: string, value: PiRetainedDeliveryV1) { if (held.get(key) === undefined) throw new Error("Pi retained create requires the attempt lock"); if (readRecord(key) !== undefined) return false; publish(key, structuredClone(value)); return true; },
+    compareAndSet(key: string, expectedPhase: PiRetainedDeliveryPhaseV1, value: PiRetainedDeliveryV1) { if (held.get(key) === undefined) throw new Error("Pi retained compare-and-set requires the attempt lock"); if (readRecord(key)?.phase !== expectedPhase) return false; publish(key, structuredClone(value)); return true; },
+    async runExclusive<T>(key: string, operation: () => Promise<T>) { assertOpen(); const nonce = await acquire(key); held.set(key, nonce); try { return await operation(); } finally { held.delete(key); release(key, nonce); } },
+    close() { closed = true; },
+    clear() { assertOpen(); for (const directory of [records, locks]) { rmSync(directory, { recursive: true }); mkdirSync(directory, { mode: 0o700 }); } syncDirectory(root); },
   });
 }
 export interface PiNativeContributionRuntimeOptionsV1 { readonly retained: PiRetainedDeliveryAuthorityV1 }
@@ -178,6 +229,10 @@ function assertCanonicalTuple(record: PiRetainedDeliveryV1, receipt: AttemptRece
 }
 export function createPiNativeContributionRuntimeV1(registrations: readonly PiWorkerReturnRegistrationV1[], options: PiNativeContributionRuntimeOptionsV1): PiNativeContributionRuntimeV1 {
   if (options?.retained === undefined) throw new Error("Pi native contribution runtime requires a durable retained delivery authority");
+  for (const registration of registrations) {
+    const client = registration.authority.client as WorkerReturnClientV1 & Record<string, unknown>;
+    if (typeof client.startDecisionSubscription !== "function" || typeof client.observeDecision !== "function") throw new Error("Pi native contribution runtime requires resumable startDecisionSubscription and observeDecision authority methods");
+  }
   const active = new Map<string, PiWorkerReturnRegistrationV1>();
   const retained = options.retained;
   for (const registration of registrations) {

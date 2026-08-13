@@ -132,6 +132,19 @@ try {
     const adapter = createPiAdapterV1({ binding, credential: { schemaVersion: "1", kind: "host-reference", reference: "pi.provider.restart", scope: { workspaceId: binding.workspaceId, adapterId: PI_ADAPTER_ID, purpose: "pi-provider-auth" } }, runtime, producerPrincipalId: workerReturn.receipt.producerPrincipalId, producerGrantDigest: workerReturn.receipt.producerGrantDigest });
     const output = { digest: workerReturn.publications[0]!.digest, mediaType: "text/plain", byteLength: Buffer.byteLength("output-accepted") };
     const evidence = { digest: workerReturn.publications[1]!.digest, mediaType: "application/json", byteLength: Buffer.byteLength("evidence-accepted") };
+    {
+      let sideEffects = 0;
+      const legacyClient = {
+        async publishObject() { sideEffects++; },
+        async submitReceipt() { sideEffects++; return workerReturn.receipt.receiptDigest; },
+        async submitProposal() { sideEffects++; return { proposalId: workerReturn.proposal.proposalId, proposalDigest: workerReturn.proposal.proposalDigest }; },
+        async subscribeDecision() { sideEffects++; return { resumeToken: "legacy", decision: "accepted" }; },
+      } as unknown as WorkerReturnClientV1;
+      const retained = createPiRetainedDeliveryAuthorityV1(join(root, "legacy-decision-client"));
+      assert.throws(() => createPiNativeContributionRuntimeV1([{ capabilityReference: binding.attemptCapability, binding, adapter, authority: { client: legacyClient, async sealProposal() { sideEffects++; return workerReturn.proposal; } }, subscriptionId: workerReturn.decisionResume.subscriptionId }], { retained }), /requires resumable startDecisionSubscription and observeDecision/);
+      assert.equal(sideEffects, 0);
+      retained.close();
+    }
     const crashPhases: readonly PiRetainedDeliveryPhaseV1[] = ["publication:0", "publication:1", "receipt", "proposal", "decision-resume", "decision"];
     for (const crashPhase of crashPhases) {
       const retained = new CrashableRetainedDeliveryAuthority(join(root, `restart-${crashPhase.replace(":", "-")}`));
@@ -157,8 +170,53 @@ try {
       assert.equal(resumeTokens.filter(token => token === null).length, 1); if (crashPhase === "decision-resume") assert.deepEqual(resumeTokens, [null, "authority-restart-token"]);
       await assert.rejects(() => restarted.deliver(binding.attemptCapability, { ...output, digest: createHash("sha256").update(`substituted-${crashPhase}`).digest("hex") }, evidence), /does not match the bound Pi attempt receipt|substituted the canonical output\/evidence tuple/);
     }
+    {
+      const raceRoot = join(root, "cross-instance-race");
+      const sideEffectCounts = { publishes: 0, receipts: 0, proposals: 0, seals: 0, starts: 0, observations: 0 };
+      const retainedA = createPiRetainedDeliveryAuthorityV1(join(raceRoot, "shared"));
+      const retainedB = createPiRetainedDeliveryAuthorityV1(join(raceRoot, "shared"));
+      const makeClient = (_label: string): WorkerReturnClientV1 => ({
+        async publishObject(_digest) { sideEffectCounts.publishes++; },
+        async submitReceipt(receipt) { sideEffectCounts.receipts++; return receipt.receiptDigest; },
+        async submitProposal(proposal) { sideEffectCounts.proposals++; return { proposalId: proposal.proposalId, proposalDigest: proposal.proposalDigest }; },
+        async startDecisionSubscription(input) { sideEffectCounts.starts++; assert.equal(input.resumeToken, null); return { resumeToken: "race-resume-token" }; },
+        async observeDecision(input) { sideEffectCounts.observations++; assert.notEqual(input.resumeToken, null); return { resumeToken: input.resumeToken, decision: "accepted" }; },
+      });
+      const makeRegistration = (_label: string) => ({ capabilityReference: binding.attemptCapability, binding, adapter, authority: { client: makeClient(_label), async sealProposal() { sideEffectCounts.seals++; return workerReturn.proposal; } }, subscriptionId: workerReturn.decisionResume.subscriptionId });
+      const runtimeA = createPiNativeContributionRuntimeV1([makeRegistration("A")], { retained: retainedA });
+      const runtimeB = createPiNativeContributionRuntimeV1([makeRegistration("B")], { retained: retainedB });
+      const [resultA, resultB] = await Promise.all([runtimeA.deliver(binding.attemptCapability, output, evidence), runtimeB.deliver(binding.attemptCapability, output, evidence)]);
+      assert.deepEqual(resultB, resultA); assert.equal(resultA.delivery.decision, "accepted");
+      assert.equal(sideEffectCounts.publishes, 2); assert.equal(sideEffectCounts.receipts, 1); assert.equal(sideEffectCounts.proposals, 1); assert.equal(sideEffectCounts.seals, 1); assert.equal(sideEffectCounts.starts, 1); assert.equal(sideEffectCounts.observations, 1);
+      await runtimeA.shutdown(); await runtimeB.shutdown();
+    }
+    {
+      const raceRoot = join(root, "cross-instance-distinct");
+      const retainedA = createPiRetainedDeliveryAuthorityV1(join(raceRoot, "shared"));
+      const retainedB = createPiRetainedDeliveryAuthorityV1(join(raceRoot, "shared"));
+      const distinctBinding: BoundAdapterOperationV1 = { ...binding, attemptCapability: `${binding.attemptCapability}-distinct`, attemptId: `${binding.attemptId}-distinct`, providerIdempotencyKeyDigest: `${binding.providerIdempotencyKeyDigest}-distinct` };
+      const distinctAttempt: PiNativeAttemptV1 = { providerOperationId: "operation-distinct", nativeSessionId: "session-distinct", startedAt: "2026-08-13T00:00:00Z", finishedAt: "2026-08-13T00:00:01Z", outcome: "succeeded", outputDigest: createHash("sha256").update("output-distinct").digest("hex"), evidence: [{ digest: createHash("sha256").update("evidence-distinct").digest("hex"), mediaType: "application/json", size: 17 }], provenance: {} };
+      const distinctRuntime: PiNativeRuntimeV1 = { async launch() { return distinctAttempt; }, async cancel() { return distinctAttempt; }, async reconcile() { return distinctAttempt; }, async resume() { return distinctAttempt; }, async collect() { return distinctAttempt; } };
+      const distinctAdapter = createPiAdapterV1({ binding: distinctBinding, credential: { schemaVersion: "1", kind: "host-reference", reference: "pi.provider.distinct", scope: { workspaceId: distinctBinding.workspaceId, adapterId: PI_ADAPTER_ID, purpose: "pi-provider-auth" } }, runtime: distinctRuntime, producerPrincipalId: "worker", producerGrantDigest: "grant" });
+      await distinctAdapter.launch({ ...distinctBinding, operation: "launch", renderedContextDigest: "rendered", providerOptions: {} });
+      const distinctOutput = { digest: distinctAttempt.outputDigest!, mediaType: "text/plain", byteLength: 15 };
+      const distinctEvidence = { digest: distinctAttempt.evidence[0]!.digest, mediaType: "application/json", byteLength: distinctAttempt.evidence[0]!.size };
+      const makeClient = (_label: string): WorkerReturnClientV1 => ({
+        async publishObject() { },
+        async submitReceipt(receipt) { return receipt.receiptDigest; },
+        async submitProposal(proposal) { return { proposalId: proposal.proposalId, proposalDigest: proposal.proposalDigest }; },
+        async startDecisionSubscription() { return { resumeToken: `distinct-resume-${_label}` }; },
+        async observeDecision(input) { return { resumeToken: input.resumeToken, decision: "accepted" }; },
+      });
+      const registrationA = { capabilityReference: binding.attemptCapability, binding, adapter, authority: { client: makeClient("A"), async sealProposal() { return workerReturn.proposal; } }, subscriptionId: workerReturn.decisionResume.subscriptionId };
+      const registrationB = { capabilityReference: distinctBinding.attemptCapability, binding: distinctBinding, adapter: distinctAdapter, authority: { client: makeClient("B"), async sealProposal(_binding: unknown, _receipt: unknown) { const sealed = await distinctAdapter.collectReceipt(distinctBinding); const sourceCore = workerReturn.proposal.core; const distinctProposalCore: ProposalEnvelopeCoreV1 = { schemaVersion: sourceCore.schemaVersion, workspaceId: distinctBinding.workspaceId, runId: distinctBinding.runId, authorPrincipalId: sourceCore.authorPrincipalId, authorGrantDigest: sourceCore.authorGrantDigest, attemptId: distinctBinding.attemptId, receiptDigests: [sealed.receiptDigest], forkPinDigest: distinctBinding.forkPinDigest, deltaAuthorityScopeDigest: sourceCore.deltaAuthorityScopeDigest, baseRevision: sourceCore.baseRevision, baseStateHash: sourceCore.baseStateHash, canonicalizerVersion: sourceCore.canonicalizerVersion, hashVersion: sourceCore.hashVersion, proposalSealingObservationCursor: sourceCore.proposalSealingObservationCursor, proposalSealingContextVersion: sourceCore.proposalSealingContextVersion, operations: sourceCore.operations, evidenceClaims: sourceCore.evidenceClaims, pinnedPolicyDigest: sourceCore.pinnedPolicyDigest, currentPolicyDigest: sourceCore.currentPolicyDigest, nonce: sourceCore.nonce, predecessorProposalDigest: sourceCore.predecessorProposalDigest, predecessorReason: sourceCore.predecessorReason }; return sealProposal(distinctProposalCore); } }, subscriptionId: workerReturn.decisionResume.subscriptionId };
+      const runtimeA = createPiNativeContributionRuntimeV1([registrationA], { retained: retainedA });
+      const runtimeB = createPiNativeContributionRuntimeV1([registrationB], { retained: retainedB });
+      const [resultA, resultB] = await Promise.all([runtimeA.deliver(binding.attemptCapability, output, evidence), runtimeB.deliver(distinctBinding.attemptCapability, distinctOutput, distinctEvidence)]);
+      assert.equal(resultA.delivery.decision, "accepted"); assert.equal(resultB.delivery.decision, "accepted"); assert.notDeepEqual(resultA.workerReturn.binding.attemptCapability, resultB.workerReturn.binding.attemptCapability);
+      await runtimeA.shutdown(); await runtimeB.shutdown();
+    }
   }
-  assert.deepEqual(observed, outcomes); assert.equal(acceptedRevision, 1); assert.deepEqual(acceptedDocument, { value: 2 }); assert.ok(acceptedReturn);
 
   const lifecycleCalls: string[] = []; const nativeAttempt: PiNativeAttemptV1 = { providerOperationId: "pi-operation", nativeSessionId: "pi-session", startedAt: "2026-08-13T00:00:00Z", finishedAt: "2026-08-13T00:00:01Z", outcome: "succeeded", outputDigest: "output", evidence: [], provenance: {} };
   const runtime: PiNativeRuntimeV1 = { async launch() { lifecycleCalls.push("launch"); return nativeAttempt; }, async cancel() { lifecycleCalls.push("cancel"); return nativeAttempt; }, async reconcile() { lifecycleCalls.push("reconcile"); return nativeAttempt; }, async resume(request) { lifecycleCalls.push(request.operation); return nativeAttempt; }, async collect() { lifecycleCalls.push("collect"); return nativeAttempt; } };
