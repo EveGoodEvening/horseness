@@ -4,9 +4,9 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 
 ## Global status
 
-- **Planning state:** C00, C01, C02, C03, C04, C05, C06, C07, C08, C09, C10, C11, C12, and C13 are complete; C14 is in-progress; F001/F002 are closed; R001/R002 are complete
-- **Active claims:** C14 (CLI/credentials), tracker-only claim from base `c4c4512a`
-- **Next eligible:** none; C15 remains dependency-blocked on C14 completion
+- **Planning state:** C00, C01, C02, C03, C04, C05, C06, C07, C08, C09, C10, C11, C12, C13, and C14 are complete; F001/F002 are closed; R001/R002 are complete
+- **Active claims:** none
+- **Next eligible:** C15 (Pi native bundle), dependency-ready from C14 completion
 - **Active blockers:** none
 - **Last integrated receipt:** immutable C01 `docs/checkpoints/C01/final/1.json`, envelope digest `17ddd75b49e35d3bf6f432c8c6acca30b4a66512229453aca4fc63e7f427ea7d`, indexed at A01 commit `223023330cb000b759d8a8b2419514638c1aa179`; receipt/index bytes must not be overwritten
 - **Release readiness:** not started
@@ -38,7 +38,7 @@ For C02 onward: commit the two tracker files to claim a dependency-ready chunk; 
 | C12 | SDK/adapter kit | C11 | in-progress; tracker-only claim from integrated base `71b990bbc1edbaf5152a5b201ad0ed311b8422e5`; C11 final candidate `05c5f4c6`, completion `8987a1af`, and lessons `7defa3f1` recorded; implementation and acceptance not yet completed |
 | C12 | SDK/adapter kit | C11 | complete; claim `55a71fb9`; implementation `a77f0cbc`; review fixes `e432bb87`, `793d2608`; final candidate `793d2608`; Node 22 gates green: SDK typecheck exit 0, adapter-kit typecheck exit 0, SDK tests 8/8, adapter-kit tests 6/6, adapter:conformance 6/6, boundaries 14/14; two review rounds resolved 7 high findings (resume cursor, protocol cursor variants, deep immutable binding, proposal scope checks, closed credential grammar, producer/grant/policy/base binding, adapter-kit credential parser); final security review clean |
 | C13 | Daemon/bootstrap auth | C12 | complete; claim `78a43530`; completion tracker base `ad97c417`; final candidate `7cc39529`; exact gates 1, 2, and 4 passed under Node 22: daemon+protocol typecheck exit 0, multiprocess 6/6, boundaries 14/14; exact gate 3 candidate-bound Linux/macOS/Windows receipts explicitly waived/unobserved solely for C13 repository chunk completion by user direction on 2026-08-13, with no cross-OS validation claim; supplemental protocol transports 9/9, store typecheck, authority-state 3/3; definitive code and security reviews clean; CI matrix/verifier retained and runtime authentication unchanged; no C20 or release-gate precedent |
-| C14 | CLI/credentials | C13 | in-progress; tracker-only claim from integrated C13 completion base `c4c4512a`; exact ownership is `apps/cli/**`, `docs/cli.md`, affected CLI manifest/lock files, and `.changeset/C14-cli.md`; implementation, gates, and review evidence not yet claimed |
+| C14 | CLI/credentials | C13 | complete; tracker-only claim `34f520f7` from integrated C13 completion base `c4c4512a`; implementation `426ed3e6`; final candidate `426ed3e6`; Node 22 gates green: CLI typecheck exit 0, CLI test 8/8, CLI smoke 1/1, boundaries 14/14; supplemental daemon typecheck/test 8/8 and protocol typecheck/test 33/33; definitive code+security review clean after resolving blocker (command-field redaction) and high (TOCTOU parent-dir checks); three narrow C13 corrections (authority grant binding, daemon result envelope, daemon executable entry) with regression tests |
 | C15 | Pi native bundle | C14 | not-started |
 | C16 | OMP native bundle | C15 | not-started |
 | C17 | Claude native bundle | C16 | not-started |
@@ -79,4 +79,4 @@ Claude scope decision: Claude Code 2.1.228 provides genuine plugin validation an
 
 ## Planning review status
 
-The bootstrap workflow blocker remains closed. C02 through C13 are complete. C13 completion is integrated at `c4c4512a`; its exact gates 1, 2, and 4 passed, while exact gate 3 remained explicitly waived/unobserved solely for C13 repository chunk completion, so no cross-OS receipt or validation evidence is claimed. C14 is actively claimed from base `c4c4512a` for the typed CLI, JSON contract, credential lifecycle, authorized orchestration workflows, and secret redaction. No next chunk is dependency-ready; C15 remains ineligible until C14 completion is integrated.
+The bootstrap workflow blocker remains closed. C02 through C14 are complete. C14 completion is integrated at `426ed3e6`; all four exact gates passed under Node 22: CLI typecheck exit 0, CLI test 8/8, CLI smoke 1/1, boundaries 14/14. Definitive code and security reviews are clean after resolving one blocker (command-field redaction) and one high (TOCTOU parent-directory checks on protected secret files). Three narrow C13 corrections were applied with regression tests: authority grant binding, daemon result envelope, and daemon standalone executable entry. C15 (Pi native bundle) is the sole next dependency-ready chunk.
