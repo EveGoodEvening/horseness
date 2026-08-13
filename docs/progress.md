@@ -4,10 +4,10 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 
 ## Global status
 
-- **Planning state:** C00, C01, C02, C03, C04, C05, C06, C07, C08, C09, C10, C11, C12, C13, C14, C15, and C16 are complete; C17 is not-started; F001/F002 are closed; R001/R002 are complete
+- **Planning state:** C00, C01, C02, C03, C04, C05, C06, C07, C08, C09, C10, C11, C12, C13, C14, C15, and C16 are complete; C17 is not-started and blocked before claim; C18–C25 are not-started and dependency-blocked transitively; F001/F002 are closed; R001/R002 are complete
 - **Active claims:** none
-- **Next eligible:** C17 only
-- **Active blockers:** none
+- **Next eligible:** none while the C17 controlled-live Claude credential prerequisite is unavailable
+- **Active blockers:** C17 requires a fail-closed credentialed-live native Claude smoke, but this environment has no `HORSENESS_CLAUDE_CREDENTIAL_REF` and no allowlisted resolver for a controlled-live least-privilege Claude test account
 - **Last integrated receipt:** immutable C01 `docs/checkpoints/C01/final/1.json`, envelope digest `17ddd75b49e35d3bf6f432c8c6acca30b4a66512229453aca4fc63e7f427ea7d`, indexed at A01 commit `223023330cb000b759d8a8b2419514638c1aa179`; receipt/index bytes must not be overwritten
 - **Release readiness:** not started
 - **Base chunk count:** 26 (`C00`–`C25`)
@@ -41,15 +41,15 @@ For C02 onward: commit the two tracker files to claim a dependency-ready chunk; 
 | C14 | CLI/credentials | C13 | complete; tracker-only claim `34f520f7` from integrated C13 completion base `c4c4512a`; implementation `426ed3e6`; final candidate `426ed3e6`; Node 22 gates green: CLI typecheck exit 0, CLI test 8/8, CLI smoke 1/1, boundaries 14/14; supplemental daemon typecheck/test 8/8 and protocol typecheck/test 33/33; definitive code+security review clean after resolving blocker (command-field redaction) and high (TOCTOU parent-dir checks); three narrow C13 corrections (authority grant binding, daemon result envelope, daemon executable entry) with regression tests |
 | C15 | Pi native bundle | C14 | complete; claim `334c7b08`; planning correction `3c8a27c6`; implementation `523a7a76`; review fixes `70ae8fb3`, `40a7413d`, `3c7b0bba`, `b9296805`, `33b34f3d`; final candidate HEAD `33b34f3d`; exact Node 22 primary gates green: adapter typecheck, 5 tests, pack, host smoke with real Pi `0.73.1` proving five decisions, canonical revision `1` / document value `2`, and lifecycle/restart/uninstall, plus boundaries 14/14; supplemental protocol typecheck and 33 tests plus adapter-kit typecheck and 7 tests green; final blocker/high code and security review clean; all C15 checklist items checked |
 | C16 | OMP native bundle | C15 | complete; claim `5429c345`; implementation `e6b123a0`; prior review fixes `74bca397`, `fe7fde71`; dependency-scope review-fix candidate is source HEAD `9668df34` plus the pending root manifest/lock cleanup immediately before the tracker completion commit; exact Node 22 gates green after cleanup: adapter typecheck, 5 tests, pack, real acquired OMP `17.2.15` Bun smoke proving all five outcomes, canonical revision `1` / document value `2`, context, fork switch, restart, and uninstall, plus boundaries 14/14; definitive blocker/high code and security review clean; all C16 checklist items checked |
-| C17 | Claude native bundle | C16 | not-started; sole next eligible chunk; root `package.json` ownership is limited to the `scripts["host:smoke:claude"]` forwarding key, with smoke implementation adapter-owned |
-| C18 | Codex native bundle | C17 | not-started; root `package.json` ownership is limited to the `scripts["host:smoke:codex"]` forwarding key, with smoke implementation adapter-owned |
-| C19 | Installer journal/trust | C18 | not-started |
-| C20 | Installer/bootstrap/doctor | C19 | not-started |
-| C21 | Security/system validation | C20 | not-started |
-| C22 | Release trust ceremony, versioning, and candidate | C21; offline ceremony is first pre-signing phase | not-started |
-| C23 | Authorized publication | C22 | not-started |
-| C24 | Published-artifact verification | C23 | not-started |
-| C25 | Authorized promotion and announcement | C24 | not-started |
+| C17 | Claude native bundle | C16 | not-started; blocked before claim: required credentialed-live native smoke must fail closed, but `HORSENESS_CLAUDE_CREDENTIAL_REF` is absent and no allowlisted controlled-live Claude account resolver is available; root `package.json` ownership remains limited to `scripts["host:smoke:claude"]`; no implementation started |
+| C18 | Codex native bundle | C17 | not-started; dependency-blocked transitively by C17, not deferred by scope |
+| C19 | Installer journal/trust | C18 | not-started; dependency-blocked transitively by C17, not deferred by scope |
+| C20 | Installer/bootstrap/doctor | C19 | not-started; dependency-blocked transitively by C17, not deferred by scope |
+| C21 | Security/system validation | C20 | not-started; dependency-blocked transitively by C17, not deferred by scope |
+| C22 | Release trust ceremony, versioning, and candidate | C21; offline ceremony is first pre-signing phase | not-started; dependency-blocked transitively by C17, not deferred by scope |
+| C23 | Authorized publication | C22 | not-started; dependency-blocked transitively by C17, not deferred by scope |
+| C24 | Published-artifact verification | C23 | not-started; dependency-blocked transitively by C17, not deferred by scope |
+| C25 | Authorized promotion and announcement | C24 | not-started; dependency-blocked transitively by C17, not deferred by scope |
 
 ## Historical correction accounting
 
@@ -83,4 +83,4 @@ C15 WorkerReturn review-fix planning correction: the Pi native return originates
 
 ## Planning review status
 
-The bootstrap workflow blocker remains closed. C15 is complete. C16 is complete with integrated claim `5429c345`, implementation `e6b123a0`, prior review fixes `74bca397` and `fe7fde71`, and dependency-scope review-fix candidate source HEAD `9668df34` plus the pending root manifest/lock cleanup immediately before this tracker completion commit. The correction removed the out-of-scope, unused root `@oh-my-pi/pi-coding-agent` catalog devDependency and its canonical pnpm lock closure without changing implementation behavior. All five ordered C16 gates passed again under the recorded Node 22 environment: adapter typecheck; 5 tests; pack; real acquired OMP `17.2.15` Bun smoke proving all five outcomes, canonical revision `1` / document value `2`, context, fork switch, restart, and uninstall; boundaries 14/14. No active blocker remains, and C17 is the sole next eligible chunk.
+The bootstrap workflow blocker remains closed. C15 and C16 are complete. C17 was checked before claim against the C11 Claude feasibility record, the frozen C17 native-smoke contract, the Claude host manifest, and the current environment. C11's optional credential-free hermetic result proves only native artifact loading and official plugin validation; its explicit deferral of context injection, deterministic provider attempt, receipt binding, restart/reconcile, resume, fork switch, and uninstall to C17 cannot satisfy C17's complete native matrix. C17 therefore remains `not-started` and blocked with no active claim: its publication-grade smoke must fail closed and needs an allowlisted resolver for an opaque `HORSENESS_CLAUDE_CREDENTIAL_REF` bound to a controlled-live, least-privilege Claude test account under the frozen network, time, cost, provenance, and redaction limits. This environment provides neither the reference nor such a resolver. No implementation or acceptance gate has been run or marked complete. C18–C25 remain not-started because their dependency chain runs through C17; they are dependency-blocked transitively, not deferred by scope.
