@@ -1,6 +1,10 @@
 # OMP native integration
 
-`@horseness/adapter-omp` supports the exact `@oh-my-pi/pi-coding-agent@17.2.15` distribution. The shipped read-only extension uses OMP-native `registerTool`, `registerCommand`, and `agent_start`/session lifecycle registrations. C11 remains the provenance authority for registry integrity, archive SHA-256, executable digest, and the verified same-distribution Bun `loadExtensions` interface at `src/extensibility/extensions/loader.ts`.
+`@horseness/adapter-omp` supports the exact `@oh-my-pi/pi-coding-agent@17.2.15` distribution. The smoke acquires the C11 digest-verified archive, copies its `package/` tree to an isolated work root, installs dependencies there with Bun offline, and imports that copied distribution's verified `src/extensibility/extensions/loader.ts`; repository `node_modules` is not provenance.
+
+The shipped extension uses OMP-native `registerTool`, `registerCommand`, `before_agent_start`, `agent_start`, and the exact session event fields exposed by 17.2.15. Attempt context injection is immutable and attempt-scoped: the runtime selects a bound attempt capability and returns its rendered context, rendered-context digest, and complete immutable adapter binding to `before_agent_start` as a hidden custom message before the provider starts.
+
+Fork handling uses `session_before_branch.entryId` and `session_branch.previousSessionFile` only as host lifecycle signals; the trusted runtime resolves the selected session to its already-bound ForkPin. OMP exposes no uninstall reason in `session_shutdown`, so uninstall is implemented by removing the extension contribution, re-running real loader discovery to prove absence, and invoking the trusted runtime's credential revoker/kill switch. Ordinary shutdown does not masquerade as uninstall.
 
 The adapter accepts only opaque host credential references scoped to the immutable workspace and OMP adapter identity. The native worker-return tool validates bounded output and evidence descriptors, obtains the binding-valid receipt from the public adapter surface, asks the authority to seal the proposal, constructs the complete `WorkerReturnV1`, and delegates publication, receipt, proposal, and two-step resumable decision delivery to adapter-kit.
 

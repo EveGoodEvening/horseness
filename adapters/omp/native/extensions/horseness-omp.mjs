@@ -10,11 +10,11 @@ const validateObject = (object, mediaTypes, maximum, label) => {
 
 export default function horsenessOMPNativeExtension(omp) {
   const runtime = globalThis[RUNTIME_KEY];
-  if (!runtime || typeof runtime.deliver !== "function" || typeof runtime.state !== "function" || typeof runtime.shutdown !== "function") throw new Error("trusted Horseness OMP adapter runtime is unavailable");
+  if (!runtime || typeof runtime.deliver !== "function" || typeof runtime.state !== "function" || typeof runtime.contextForAttempt !== "function") throw new Error("trusted Horseness OMP adapter runtime is unavailable");
   let activeForkPinDigest = null;
   let enabled = true;
   const nativeState = async () => ({ ...await runtime.state(), activeForkPinDigest, credentialEnabled: enabled });
-
+  const requireEnabled = () => { if (!enabled) throw new Error("Horseness contribution credential is disabled"); };
   omp.registerTool({
     name: "horseness_worker_return",
     label: "Horseness Worker Return",
@@ -30,7 +30,7 @@ export default function horsenessOMPNativeExtension(omp) {
       },
     },
     async execute(_toolCallId, input) {
-      if (!enabled) throw new Error("Horseness contribution credential is disabled");
+      requireEnabled();
       if (typeof input?.attemptCapabilityReference !== "string" || !/^[A-Za-z0-9][A-Za-z0-9:._-]{2,255}$/.test(input.attemptCapabilityReference)) throw new Error("invalid opaque attempt capability reference");
       validateObject(input.output, OUTPUT_MEDIA_TYPES, MAX_OUTPUT_BYTES, "output");
       validateObject(input.evidence, EVIDENCE_MEDIA_TYPES, MAX_EVIDENCE_BYTES, "evidence");
@@ -40,11 +40,19 @@ export default function horsenessOMPNativeExtension(omp) {
     },
   });
 
-  omp.registerTool({ name: "horseness_native_state", label: "Horseness Native State", description: "Report native reattachment state without exposing credentials.", parameters: { type: "object", additionalProperties: false, properties: {} }, async execute() { return { content: [{ type: "text", text: "Horseness native state observed." }], details: await nativeState() }; } });
-  omp.registerCommand("horseness-state", { description: "Report trusted Horseness native reattachment state.", async handler(_args, context) { const state = await nativeState(); context?.ui?.notify?.(`Horseness retained attempts: ${state.attemptKeys.length}`, "info"); return state; } });
-  omp.on("agent_start", async () => { await runtime.state(); });
-  omp.on("session_before_branch", async event => { if (typeof event?.nextForkPinDigest === "string" && event.nextForkPinDigest.length > 0) activeForkPinDigest = event.nextForkPinDigest; });
-  omp.on("session_branch", async event => { if (typeof event?.forkPinDigest === "string") activeForkPinDigest = event.forkPinDigest; });
-  omp.on("session_start", async event => { if (typeof event?.forkPinDigest === "string") activeForkPinDigest = event.forkPinDigest; });
-  omp.on("session_shutdown", async event => { if (event?.reason === "uninstall") { enabled = false; activeForkPinDigest = null; await runtime.shutdown(); } });
+  omp.registerTool({ name: "horseness_native_state", label: "Horseness Native State", description: "Report native reattachment state without exposing credentials.", parameters: { type: "object", additionalProperties: false, properties: {} }, async execute() { requireEnabled(); return { content: [{ type: "text", text: "Horseness native state observed." }], details: await nativeState() }; } });
+  omp.registerCommand("horseness-state", { description: "Report trusted Horseness native reattachment state.", async handler(_args, context) { requireEnabled(); const state = await nativeState(); context?.ui?.notify?.(`Horseness retained attempts: ${state.attemptKeys.length}`, "info"); return state; } });
+  omp.on("before_agent_start", async () => {
+    requireEnabled();
+    const injected = await runtime.contextForAttempt();
+    if (!injected) return undefined;
+    const immutable = structuredClone(injected);
+    return { message: { customType: "horseness-attempt-context-v1", content: JSON.stringify(immutable), display: false, details: immutable } };
+  });
+  omp.on("agent_start", async () => { requireEnabled(); await runtime.state(); });
+  omp.on("session_before_branch", async event => { requireEnabled(); if (typeof runtime.beforeBranch === "function") await runtime.beforeBranch(event.entryId); });
+  omp.on("session_branch", async event => { requireEnabled(); const selected = typeof runtime.activateSession === "function" ? await runtime.activateSession(event.previousSessionFile) : null; activeForkPinDigest = selected?.forkPinDigest ?? null; });
+  omp.on("session_start", async () => { requireEnabled(); const selected = typeof runtime.activateSession === "function" ? await runtime.activateSession(null) : null; activeForkPinDigest = selected?.forkPinDigest ?? null; });
+  omp.on("session_shutdown", async () => { if (typeof runtime.sessionShutdown === "function") await runtime.sessionShutdown(); });
+  if (typeof runtime.registerRevoker === "function") runtime.registerRevoker(async () => { enabled = false; activeForkPinDigest = null; if (typeof runtime.shutdown === "function") await runtime.shutdown(); });
 }

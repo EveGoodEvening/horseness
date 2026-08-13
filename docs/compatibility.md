@@ -56,9 +56,9 @@ The adapter-owned `host:smoke:pi` gate resolves the real installed Pi 0.73.1 pac
 
 ## OMP adapter v1 implementation train
 
-OMP support is pinned to `@oh-my-pi/pi-coding-agent@17.2.15` and its same-distribution Bun extension loader (`src/extensibility/extensions/loader.ts`, SHA-256 `c0076ad052d435ee1075abfa0682e83ad4a075a1415c720bbbdf71d9affcc48f`). The shipped native contribution uses OMP `registerTool`, `registerCommand`, and `agent_start` plus session branch/start/shutdown events; Pi names, paths, and lifecycle assumptions are not compatibility aliases.
+OMP support is pinned to `@oh-my-pi/pi-coding-agent@17.2.15` and its same-distribution Bun extension loader (`src/extensibility/extensions/loader.ts`, SHA-256 `c0076ad052d435ee1075abfa0682e83ad4a075a1415c720bbbdf71d9affcc48f`). The smoke executes that interface only from the C11 digest-verified archive copied into an isolated work root with offline-installed dependencies. The shipped native contribution uses OMP `registerTool`, `registerCommand`, `before_agent_start`, `agent_start`, and exact 17.2.15 session event fields; Pi names, paths, and lifecycle assumptions are not compatibility aliases.
 
-The `host:smoke:omp` gate proves a native-origin complete `WorkerReturnV1`, durable tuple-bound cross-instance deduplication, resumable decision-subscription checkpoints, all five authority outcomes, accepted canonical advance, restart/reconcile/reattach/resume, branch-bound ForkPin switch, and uninstall discovery and credential revocation.
+The `host:smoke:omp` gate proves attempt-scoped immutable context injection and the complete native-origin `WorkerReturnV1` path through the real loaded extension, durable tuple-bound cross-instance deduplication, resumable decision-subscription checkpoints, all five authority outcomes, accepted canonical advance, restart/reconcile/reattach/resume, real branch lifecycle signaling, and uninstall as contribution removal plus loader rediscovery and trusted runtime credential revocation. `session_shutdown` is ordinary teardown because OMP 17.2.15 exposes no uninstall reason.
 
 ## Daemon v1 implementation train
 

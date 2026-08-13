@@ -18,9 +18,9 @@ export const OMP_NATIVE_PACKAGE_METADATA = Object.freeze({
   adapterVersion: OMP_ADAPTER_VERSION,
   hostId: OMP_HOST_ID,
   hostVersionRange: "=17.2.15",
-  packageDigest: "sha256:f86b5f75927e7a035b22a79a0d83c12f0c8775eb479d6ff76993d035d3d2e590",
+  packageDigest: "sha256:9ab7b1a3727566e79327b7931fb235c951fe50e1cf3976b04400c7babc4cefa2",
   contributions: Object.freeze([
-    Object.freeze({ kind: "extension", name: "extensions/horseness-omp.mjs", digest: "sha256:2f9383b01688ae498eb39488741fed77758282f41d85a5470f30fcb26f9256b8" }),
+    Object.freeze({ kind: "extension", name: "extensions/horseness-omp.mjs", digest: "sha256:847261999ac8ea58bcbe0ecba5626b019891670e8f11dca9b65beffd310fbfcb" }),
     Object.freeze({ kind: "manifest", name: "omp-package.json", digest: "sha256:072eb99066241d74146419ebdb6fe063286d480f262504b08b831ea42b56280b" }),
   ]),
 }) satisfies NativePackageMetadataV1;
@@ -196,10 +196,26 @@ export function createOMPRetainedDeliveryAuthorityV1(stateDirectory: string): OM
     clear() { assertOpen(); for (const directory of [records, locks]) { rmSync(directory, { recursive: true }); mkdirSync(directory, { mode: 0o700 }); } syncDirectory(root); },
   });
 }
-export interface OMPNativeContributionRuntimeOptionsV1 { readonly retained: OMPRetainedDeliveryAuthorityV1 }
+export interface OMPNativeAttemptContextV1 {
+  readonly attemptCapabilityReference: string;
+  readonly binding: BoundAdapterOperationV1;
+  readonly renderedContext: string;
+  readonly renderedContextDigest: string;
+}
+export interface OMPNativeContributionRuntimeOptionsV1 {
+  readonly retained: OMPRetainedDeliveryAuthorityV1;
+  readonly attemptContexts?: readonly OMPNativeAttemptContextV1[];
+  readonly initialAttemptCapabilityReference?: string;
+}
 export interface OMPNativeContributionRuntimeV1 {
   deliver(capabilityReference: string, output: { readonly digest: string; readonly mediaType: string; readonly byteLength: number }, evidence: { readonly digest: string; readonly mediaType: string; readonly byteLength: number }): Promise<{ workerReturn: WorkerReturnV1; delivery: OMPWorkerReturnDeliveryV1 }>;
   state(): Promise<{ readonly attemptKeys: readonly string[] }>;
+  contextForAttempt(): Promise<OMPNativeAttemptContextV1 | null>;
+  beforeBranch(entryId: string): Promise<void>;
+  activateSession(previousSessionFile: string | null): Promise<{ readonly forkPinDigest: string } | null>;
+  registerRevoker(revoker: () => Promise<void>): void;
+  revoke(): Promise<void>;
+  sessionShutdown(): Promise<void>;
   shutdown(): Promise<void>;
 }
 function attemptKey(binding: BoundAdapterOperationV1): string {
@@ -260,6 +276,11 @@ export function createOMPNativeContributionRuntimeV1(registrations: readonly OMP
   }
   const active = new Map<string, OMPWorkerReturnRegistrationV1>();
   const retained = options.retained;
+  const contexts = new Map((options.attemptContexts ?? []).map(context => [context.attemptCapabilityReference, structuredClone(context)]));
+  let selectedCapability = options.initialAttemptCapabilityReference ?? registrations[0]?.capabilityReference ?? null;
+  let pendingBranchEntryId: string | null = null;
+  let revoker: (() => Promise<void>) | null = null;
+  let revoked = false;
   for (const registration of registrations) {
     const reference = parseCredentialReferenceV1({ schemaVersion: "1", kind: "host-reference", reference: registration.capabilityReference, scope: { workspaceId: registration.binding.workspaceId, adapterId: OMP_ADAPTER_ID, purpose: "omp-attempt-return" } });
     if (reference.reference !== registration.binding.attemptCapability) throw new Error("OMP attempt capability reference does not match immutable binding");
@@ -288,7 +309,19 @@ export function createOMPNativeContributionRuntimeV1(registrations: readonly OMP
       });
     },
     async state() { return { attemptKeys: registrations.map(registration => attemptKey(registration.binding)).filter(key => retained.load(key) !== undefined) }; },
-    async shutdown() { active.clear(); retained.close(); },
+    async contextForAttempt() { if (revoked || selectedCapability === null) return null; const context = contexts.get(selectedCapability); return context === undefined ? null : structuredClone(context); },
+    async beforeBranch(entryId: string) { if (revoked || typeof entryId !== "string" || entryId.length === 0) throw new Error("invalid OMP branch entry id"); pendingBranchEntryId = entryId; },
+    async activateSession(previousSessionFile: string | null) {
+      if (revoked) return null;
+      if (previousSessionFile !== null && pendingBranchEntryId === null) throw new Error("OMP branch activation was not preceded by session_before_branch");
+      pendingBranchEntryId = null;
+      const context = selectedCapability === null ? undefined : contexts.get(selectedCapability);
+      return context === undefined ? null : { forkPinDigest: context.binding.forkPinDigest };
+    },
+    registerRevoker(next: () => Promise<void>) { if (revoker !== null) throw new Error("OMP native credential revoker is already registered"); revoker = next; },
+    async revoke() { if (revoked) return; revoked = true; active.clear(); contexts.clear(); selectedCapability = null; const current = revoker; revoker = null; if (current !== null) await current(); else retained.close(); },
+    async sessionShutdown() { pendingBranchEntryId = null; },
+    async shutdown() { active.clear(); contexts.clear(); selectedCapability = null; retained.close(); },
   });
 }
 
