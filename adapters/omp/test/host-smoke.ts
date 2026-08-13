@@ -37,7 +37,6 @@ async function run(command: string, args: readonly string[], cwd: string, env: N
 type WorkerToolDetails = { workerReturn: WorkerReturnV1; delivery: { decision: string; resumeToken: string | null } };
 type NativeTool = { execute(id: string, input: unknown): Promise<{ details: WorkerToolDetails }> };
 type StateTool = { execute(id: string, input: unknown): Promise<{ details: { activeForkPinDigest: string | null } }> };
-type Extension = { tools: Map<string, { definition: unknown }>; handlers: Map<string, unknown[]> };
 function jsonWireValue(value: unknown): JsonValue {
   const wire: unknown = JSON.parse(JSON.stringify(value));
   assertJsonValue(wire);
@@ -64,7 +63,6 @@ class CrashableRetainedDeliveryAuthority implements OMPRetainedDeliveryAuthority
   clear(): void { this.retained.clear(); }
 }
 
-let extension: Extension | null = null;
 let nativeHarness: NativeRunnerHarness | null = null;
 const rootParent = resolve(".cache/horseness/omp-smoke");
 await mkdir(rootParent, { recursive: true, mode: 0o700 });
@@ -113,6 +111,7 @@ export function $(..._args) { throw new Error("bun shell unavailable in host smo
   let acceptedRevision = 0;
   let acceptedDocument: JsonValue = null;
   let acceptedReturn: WorkerReturnV1 | null = null;
+  let activeForkPinDigest: string | null = null;
   for (const desired of outcomes) {
     const scenarioRoot = join(root, desired);
     await mkdir(scenarioRoot, { recursive: true });
@@ -184,12 +183,18 @@ export function $(..._args) { throw new Error("bun shell unavailable in host smo
       const adapter = createOMPAdapterV1({ binding, credential: { schemaVersion: "1", kind: "host-reference", reference: "omp.provider.ref", scope: { workspaceId, adapterId: OMP_ADAPTER_ID, purpose: "omp-provider-auth" } }, runtime: providerRuntime, producerPrincipalId: "worker", producerGrantDigest: "grant" });
       await adapter.launch({ ...binding, operation: "launch", renderedContextDigest: "rendered", providerOptions: {} });
       const retained = createOMPRetainedDeliveryAuthorityV1(join(scenarioRoot, "omp-retained"));
-      nativeRuntime = createOMPNativeContributionRuntimeV1([{ capabilityReference: binding.attemptCapability, binding, adapter, authority: { client: delivery as WorkerReturnClientV1, async sealProposal(_binding, receipt) { return delivery.sealProposal(proposalCore, receipt); } }, subscriptionId: delivery.subscriptionId }], { retained, attemptContexts: [{ attemptCapabilityReference: binding.attemptCapability, binding, renderedContext: `immutable-context-${desired}`, renderedContextDigest: `rendered-context-digest-${desired}` }], initialAttemptCapabilityReference: binding.attemptCapability });
+      const branchBinding: BoundAdapterOperationV1 | null = desired === "accepted" ? { ...binding, attemptId: "attempt-branch", forkPinDigest: createHash("sha256").update("omp-branch-fork-pin").digest("hex"), attemptCapability: "omp-attempt-capability-branch" } : null;
+      const registrations = [{ capabilityReference: binding.attemptCapability, binding, adapter, authority: { client: delivery as WorkerReturnClientV1, async sealProposal(_binding: BoundAdapterOperationV1, receipt: WorkerReturnV1["receipt"]) { return delivery.sealProposal(proposalCore, receipt); } }, subscriptionId: delivery.subscriptionId }];
+      if (branchBinding !== null) registrations.push({ capabilityReference: branchBinding.attemptCapability, binding: branchBinding, adapter, authority: registrations[0]!.authority, subscriptionId: delivery.subscriptionId });
+      const attemptContexts = [{ attemptCapabilityReference: binding.attemptCapability, binding, renderedContext: `immutable-context-${desired}`, renderedContextDigest: `rendered-context-digest-${desired}` }];
+      if (branchBinding !== null) {
+        attemptContexts.push({ attemptCapabilityReference: branchBinding.attemptCapability, binding: branchBinding, renderedContext: "immutable-context-branch", renderedContextDigest: "rendered-context-digest-branch" });
+      }
+      nativeRuntime = createOMPNativeContributionRuntimeV1(registrations, { retained, attemptContexts, initialAttemptCapabilityReference: binding.attemptCapability });
       Object.defineProperty(globalThis, Symbol.for("horseness.adapter.omp.native-runtime.v1"), { configurable: true, value: nativeRuntime, writable: true });
       await nativeHarness?.close();
       nativeHarness = await loadNativeRunner(loaderPath, runnerPath, installedExtension, packageRoot);
       runner = nativeHarness.runner;
-      extension = nativeHarness.extension as Extension;
       nativeTool = runner.getRegisteredTool("horseness_worker_return")?.definition as NativeTool | undefined;
       stateTool = runner.getRegisteredTool("horseness_native_state")?.definition as StateTool | undefined;
       assert.ok(nativeTool);
@@ -215,6 +220,28 @@ export function $(..._args) { throw new Error("bun shell unavailable in host smo
         acceptedDocument = canonical.document;
         acceptedReturn = native.details.workerReturn;
         assert.deepEqual(canonical.document, { value: 2 });
+        assert.ok(branchBinding);
+        nativeRuntime.registerBranch({ entryId: "fork-entry", previousSessionFile: "previous-session.jsonl", attemptCapabilityReference: branchBinding.attemptCapability });
+        nativeRuntime.registerBranch({ entryId: "fork-entry", previousSessionFile: "previous-session.jsonl", attemptCapabilityReference: branchBinding.attemptCapability });
+        assert.throws(() => nativeRuntime!.registerBranch({ entryId: "fork-entry", previousSessionFile: "substituted-session.jsonl", attemptCapabilityReference: branchBinding.attemptCapability }), /cannot overwrite or substitute/);
+        assert.throws(() => nativeRuntime!.registerBranch({ entryId: "unknown-capability-entry", previousSessionFile: "unknown-capability-session.jsonl", attemptCapabilityReference: "omp-attempt-capability-unknown" }), /unknown attempt capability/);
+        const beforeBranch = await stateTool.execute("state", {});
+        assert.equal(beforeBranch.details.activeForkPinDigest, binding.forkPinDigest);
+        await runner.emit({ type: "session_before_branch", entryId: "unknown-entry" });
+        assert.deepEqual(await runner.takeErrors(), [{ extensionPath: installedExtension, event: "session_before_branch", error: "unknown OMP branch entry id" }]);
+        const afterUnknown = await stateTool.execute("state", {});
+        assert.equal(afterUnknown.details.activeForkPinDigest, binding.forkPinDigest);
+        await runner.emit({ type: "session_before_branch", entryId: "fork-entry" });
+        await runner.emit({ type: "session_branch", previousSessionFile: "mismatched-session.jsonl" });
+        assert.deepEqual(await runner.takeErrors(), [{ extensionPath: installedExtension, event: "session_branch", error: "OMP branch activation does not match the pending immutable mapping" }]);
+        const afterMismatch = await stateTool.execute("state", {});
+        assert.equal(afterMismatch.details.activeForkPinDigest, binding.forkPinDigest);
+        await runner.emit({ type: "session_before_branch", entryId: "fork-entry" });
+        await runner.emit({ type: "session_branch", previousSessionFile: "previous-session.jsonl" });
+        const switched = await stateTool.execute("state", {});
+        assert.equal(switched.details.activeForkPinDigest, branchBinding.forkPinDigest);
+        activeForkPinDigest = switched.details.activeForkPinDigest;
+        await runner.emit({ type: "session_shutdown" });
       }
     } finally { authority.close(); }
   }
@@ -341,25 +368,17 @@ export function $(..._args) { throw new Error("bun shell unavailable in host smo
   assert.deepEqual([reconciled.providerOperationId, reattached.nativeSessionId, resumed.nativeSessionId], [nativeAttempt.providerOperationId, nativeAttempt.nativeSessionId, nativeAttempt.nativeSessionId]);
   assert.equal(collected.providerOperationId, nativeAttempt.providerOperationId);
   assert.deepEqual(lifecycleCalls, ["launch", "reconcile", "reattach", "resume", "collect"]);
-  assert.ok(extension);
-  assert.ok(runner);
-  assert.ok(stateTool);
-  assert.ok(nativeTool);
-  assert.ok(nativeRuntime);
-  await runner.emit({ type: "session_before_branch", entryId: "fork-entry" });
-  await runner.emit({ type: "session_branch", previousSessionFile: "previous-session.jsonl" });
-  const switched = await stateTool.execute("state", {});
-  const nextFork = switched.details.activeForkPinDigest;
-  assert.equal(typeof nextFork, "string");
-  assert.notEqual(nextFork, acceptedReturn!.binding.forkPinDigest);
-  await runner.emit({ type: "session_shutdown" });
-  await nativeRuntime.revoke();
+  const initializedNativeRuntime = nativeRuntime;
+  assert.ok(initializedNativeRuntime, "OMP native runtime was not initialized");
+  const initializedNativeTool = nativeTool;
+  assert.ok(initializedNativeTool, "OMP native worker-return tool was not registered");
+  await initializedNativeRuntime.revoke();
   await rm(installedExtension);
   const rediscovered = await loadNativeRunner(loaderPath, runnerPath, installedExtension, packageRoot).then(async harness => { await harness.close(); return null; }, error => error);
   assert.ok(rediscovered instanceof Error);
-  await assert.rejects(() => nativeTool.execute("after-uninstall", {}), /credential is disabled/);
+  await assert.rejects(() => initializedNativeTool.execute("after-uninstall", {}), /credential is disabled/);
   await nativeHarness?.close();
   assert.deepEqual(OMP_INSTALL_CONTRIBUTIONS.map(item => item.contributionId), ["horseness-omp-extension", "horseness-omp-manifest"]);
 
-  process.stdout.write(`${JSON.stringify({ schemaVersion: "OMPHostSmokeResultV1", host: "omp", version: upstream.version, loaderDigest, packageDigest: OMP_NATIVE_PACKAGE_METADATA.packageDigest, receiptDigest: acceptedReturn!.receipt.receiptDigest, proposalDigest: acceptedReturn!.proposal.proposalDigest, decisions: observed, canonicalRevision: acceptedRevision, canonicalDocument: acceptedDocument, lifecycle: { calls: lifecycleCalls, activeForkPinDigest: nextFork, uninstallDiscovery: "disabled", credential: "revoked" } })}\n`);
+  process.stdout.write(`${JSON.stringify({ schemaVersion: "OMPHostSmokeResultV1", host: "omp", version: upstream.version, loaderDigest, packageDigest: OMP_NATIVE_PACKAGE_METADATA.packageDigest, receiptDigest: acceptedReturn!.receipt.receiptDigest, proposalDigest: acceptedReturn!.proposal.proposalDigest, decisions: observed, canonicalRevision: acceptedRevision, canonicalDocument: acceptedDocument, lifecycle: { calls: lifecycleCalls, activeForkPinDigest, uninstallDiscovery: "disabled", credential: "revoked" } })}\n`);
 } finally { await nativeHarness?.close().catch(() => undefined); await rm(root, { recursive: true, force: true }); }

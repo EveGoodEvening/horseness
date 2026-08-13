@@ -207,10 +207,16 @@ export interface OMPNativeContributionRuntimeOptionsV1 {
   readonly attemptContexts?: readonly OMPNativeAttemptContextV1[];
   readonly initialAttemptCapabilityReference?: string;
 }
+export interface OMPNativeBranchRegistrationV1 {
+  readonly entryId: string;
+  readonly previousSessionFile: string;
+  readonly attemptCapabilityReference: string;
+}
 export interface OMPNativeContributionRuntimeV1 {
   deliver(capabilityReference: string, output: { readonly digest: string; readonly mediaType: string; readonly byteLength: number }, evidence: { readonly digest: string; readonly mediaType: string; readonly byteLength: number }): Promise<{ workerReturn: WorkerReturnV1; delivery: OMPWorkerReturnDeliveryV1 }>;
   state(): Promise<{ readonly attemptKeys: readonly string[] }>;
   contextForAttempt(): Promise<OMPNativeAttemptContextV1 | null>;
+  registerBranch(registration: OMPNativeBranchRegistrationV1): void;
   beforeBranch(entryId: string): Promise<void>;
   activateSession(previousSessionFile: string | null): Promise<{ readonly forkPinDigest: string } | null>;
   registerRevoker(revoker: () => Promise<void>): void;
@@ -277,8 +283,10 @@ export function createOMPNativeContributionRuntimeV1(registrations: readonly OMP
   const active = new Map<string, OMPWorkerReturnRegistrationV1>();
   const retained = options.retained;
   const contexts = new Map((options.attemptContexts ?? []).map(context => [context.attemptCapabilityReference, structuredClone(context)]));
+  const branchesByEntry = new Map<string, OMPNativeBranchRegistrationV1>();
+  const branchesBySession = new Map<string, OMPNativeBranchRegistrationV1>();
   let selectedCapability = options.initialAttemptCapabilityReference ?? registrations[0]?.capabilityReference ?? null;
-  let pendingBranchEntryId: string | null = null;
+  let pendingBranch: OMPNativeBranchRegistrationV1 | null = null;
   let revoker: (() => Promise<void>) | null = null;
   let revoked = false;
   for (const registration of registrations) {
@@ -310,18 +318,46 @@ export function createOMPNativeContributionRuntimeV1(registrations: readonly OMP
     },
     async state() { return { attemptKeys: registrations.map(registration => attemptKey(registration.binding)).filter(key => retained.load(key) !== undefined) }; },
     async contextForAttempt() { if (revoked || selectedCapability === null) return null; const context = contexts.get(selectedCapability); return context === undefined ? null : structuredClone(context); },
-    async beforeBranch(entryId: string) { if (revoked || typeof entryId !== "string" || entryId.length === 0) throw new Error("invalid OMP branch entry id"); pendingBranchEntryId = entryId; },
+    registerBranch(registration: OMPNativeBranchRegistrationV1) {
+      if (revoked) throw new Error("OMP native contribution runtime is revoked");
+      const { entryId, previousSessionFile, attemptCapabilityReference } = registration;
+      if (entryId.length === 0 || previousSessionFile.length === 0) throw new Error("invalid OMP branch registration identifiers");
+      if (!active.has(attemptCapabilityReference) || !contexts.has(attemptCapabilityReference)) throw new Error("OMP branch registration references an unknown attempt capability");
+      const existingEntry = branchesByEntry.get(entryId);
+      const existingSession = branchesBySession.get(previousSessionFile);
+      if (existingEntry !== undefined || existingSession !== undefined) {
+        const sameEntry = existingEntry?.previousSessionFile === previousSessionFile && existingEntry.attemptCapabilityReference === attemptCapabilityReference;
+        const sameSession = existingSession?.entryId === entryId && existingSession.attemptCapabilityReference === attemptCapabilityReference;
+        if (!sameEntry || !sameSession) throw new Error("OMP branch registration cannot overwrite or substitute an immutable mapping");
+        return;
+      }
+      const immutable = Object.freeze({ entryId, previousSessionFile, attemptCapabilityReference });
+      branchesByEntry.set(entryId, immutable);
+      branchesBySession.set(previousSessionFile, immutable);
+    },
+    async beforeBranch(entryId: string) {
+      if (revoked || typeof entryId !== "string" || entryId.length === 0) throw new Error("invalid OMP branch entry id");
+      const branch = branchesByEntry.get(entryId);
+      if (branch === undefined) throw new Error("unknown OMP branch entry id");
+      pendingBranch = branch;
+    },
     async activateSession(previousSessionFile: string | null) {
       if (revoked) return null;
-      if (previousSessionFile !== null && pendingBranchEntryId === null) throw new Error("OMP branch activation was not preceded by session_before_branch");
-      pendingBranchEntryId = null;
+      if (previousSessionFile !== null) {
+        const pending = pendingBranch;
+        pendingBranch = null;
+        if (pending === null) throw new Error("OMP branch activation was not preceded by session_before_branch");
+        const mapped = branchesBySession.get(previousSessionFile);
+        if (mapped === undefined || mapped !== pending) throw new Error("OMP branch activation does not match the pending immutable mapping");
+        selectedCapability = mapped.attemptCapabilityReference;
+      }
       const context = selectedCapability === null ? undefined : contexts.get(selectedCapability);
       return context === undefined ? null : { forkPinDigest: context.binding.forkPinDigest };
     },
     registerRevoker(next: () => Promise<void>) { if (revoker !== null) throw new Error("OMP native credential revoker is already registered"); revoker = next; },
-    async revoke() { if (revoked) return; revoked = true; active.clear(); contexts.clear(); selectedCapability = null; const current = revoker; revoker = null; if (current !== null) await current(); else retained.close(); },
-    async sessionShutdown() { pendingBranchEntryId = null; },
-    async shutdown() { active.clear(); contexts.clear(); selectedCapability = null; retained.close(); },
+    async revoke() { if (revoked) return; revoked = true; active.clear(); contexts.clear(); branchesByEntry.clear(); branchesBySession.clear(); selectedCapability = null; pendingBranch = null; const current = revoker; revoker = null; if (current !== null) await current(); else retained.close(); },
+    async sessionShutdown() { pendingBranch = null; },
+    async shutdown() { active.clear(); contexts.clear(); branchesByEntry.clear(); branchesBySession.clear(); selectedCapability = null; pendingBranch = null; retained.close(); },
   });
 }
 

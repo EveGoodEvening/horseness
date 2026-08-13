@@ -24,12 +24,12 @@ type NativeRunnerState = {
 
 export interface NativeRunnerHarness {
   loaded: { extensions: unknown[]; errors: unknown[]; runtime: unknown };
-  extension: LoadedExtension;
   runner: {
     getRegisteredTool(name: string): { definition: { execute(id: string, input: unknown): Promise<unknown> } } | undefined;
     getCommand(name: string): unknown;
     hasHandlers(name: string): boolean;
     emit(event: unknown): Promise<unknown>;
+    takeErrors(): Promise<Array<{ extensionPath: string; event: string; error: string }>>;
   };
   close(): Promise<void>;
 }
@@ -65,6 +65,10 @@ async function runChild(loaderPath: string, runnerPath: string, extensionPath: s
   if (loaded.errors.length !== 0 || loaded.extensions.length !== 1) throw new Error(`OMP extension load failed: ${JSON.stringify(loaded.errors)}`);
   const extension = loaded.extensions[0] as LoadedExtension;
   const runner = new ExtensionRunner(loaded.extensions, loaded.runtime, cwd, { getCwd: () => cwd }, { registerProvider() {}, unregisterProvider() {} });
+  const handlerErrors: Array<{ extensionPath: string; event: string; error: string }> = [];
+  runner.onError((error: { extensionPath: string; event: string; error: string }) => {
+    handlerErrors.push({ extensionPath: error.extensionPath, event: error.event, error: error.error });
+  });
   const toolNames = [...extension.tools.keys()];
   const commandNames = [...extension.commands.keys()];
   const handlerNames = [...extension.handlers.keys()];
@@ -105,6 +109,8 @@ async function runChild(loaderPath: string, runnerPath: string, extensionPath: s
         value = null;
       } else if (message.method === "inspect") {
         value = { toolNames, commandNames, handlerNames };
+      } else if (message.method === "takeErrors") {
+        value = handlerErrors.splice(0);
       } else {
         throw new Error(`unknown OMP native RPC method: ${message.method}`);
       }
@@ -193,12 +199,12 @@ export async function loadNativeRunner(loaderPath: string, runnerPath: string, e
   };
   return {
     loaded: { extensions: [extension], errors: [], runtime: null },
-    extension,
     runner: {
       getRegisteredTool: name => state.toolNames.includes(name) ? { definition: { execute: (id, input) => client.request("invoke", [name, id, input]) } } : undefined,
       getCommand: name => state.commandNames.includes(name) ? {} : undefined,
       hasHandlers: name => state.handlerNames.includes(name),
       emit: event => client.request("emit", [event]),
+      takeErrors: () => client.request("takeErrors", []) as Promise<Array<{ extensionPath: string; event: string; error: string }>>,
     },
     close: () => client.close(),
   };
