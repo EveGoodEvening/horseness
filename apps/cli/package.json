@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "sideEffects": false,
+  "bin": {
+    "horseness": "./bin/horseness.mjs"
+  },
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -11,13 +14,17 @@
     }
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p ../../tsconfig.base.json",
-    "lint": "eslint src --max-warnings=0",
-    "test": "node --test"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint src test --max-warnings=0",
+    "test": "node --import tsx --test test/**/*.test.ts",
+    "smoke": "node --import tsx --test test/smoke*.test.ts"
   },
   "dependencies": {
     "@horseness/installer": "workspace:*",
     "@horseness/protocol": "workspace:*",
     "@horseness/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "4.20.5"
   }
 }

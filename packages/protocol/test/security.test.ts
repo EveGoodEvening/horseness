@@ -48,6 +48,23 @@ test("under-scoped worker and adapter grants are rejected",()=>{
  assert.throws(()=>createAuthenticatedContextV1(inspection,adapter,"2029-01-01T00:00:00.000Z"),denied("GRANT_INVALID"));
 });
 
+test("workspace-rooted authority grants administer descendants without weakening scoped grants",()=>{
+ const authorityGrant={...grant,principalRole:"authority",runId:null,proposalId:null,allowedMethods:["workspace.get.v1","run.create.v1","run.get.v1"]} as const satisfies AuthenticatedGrantV1;
+ const authority=createAuthenticatedContextV1(inspection,authorityGrant,"2029-01-01T00:00:00.000Z");
+ const workspaceCursor={schemaVersion:"1",kind:"workspace-only",workspaceId:"ws",workspaceSequence:3,workspaceEnvelopeHash:"wh",workspaceContextEpoch:1} as const;
+ const absentRunCursor={...workspaceCursor,kind:"absent-run-genesis",runId:"new-run",expectedRunHead:"absent"} as const;
+ const workspaceRequest={jsonrpc:"2.0",id:1,method:"workspace.get.v1",params:{protocolVersion:"1",observationCursor:workspaceCursor,body:{schemaVersion:"1",workspaceId:"ws",input:{schemaVersion:"1",requestType:"workspace.get.v1",value:{schemaVersion:"1",queryType:"GetWorkspaceV1",observationCursor:workspaceCursor}}}}} as const;
+ const createRequest={jsonrpc:"2.0",id:2,method:"run.create.v1",params:{protocolVersion:"1",observationCursor:absentRunCursor,idempotencyKey:"create-run",body:{schemaVersion:"1",workspaceId:"ws",runId:"new-run",input:{schemaVersion:"1",requestType:"run.create.v1",value:{schemaVersion:"1",commandType:"CreateRunV1",commandId:"create-run",observationCursor:absentRunCursor,principalId:"principal",initialDocument:{}}}}}} as const;
+ const getRequest={jsonrpc:"2.0",id:3,method:"run.get.v1",params:{protocolVersion:"1",observationCursor:cursor,body:{schemaVersion:"1",workspaceId:"ws",runId:"run",input:{schemaVersion:"1",requestType:"run.get.v1",value:{schemaVersion:"1",queryType:"GetRunV1",observationCursor:cursor}}}}} as const;
+ assert.equal(parseJsonRpcRequestV1(workspaceRequest,authority).method,"workspace.get.v1");
+ assert.equal(parseJsonRpcRequestV1(createRequest,authority).method,"run.create.v1");
+ assert.equal(parseJsonRpcRequestV1(getRequest,authority).method,"run.get.v1");
+ const scopedWorker=createAuthenticatedContextV1(inspection,{...grant,proposalId:null,allowedMethods:["task.get.v1"],taskId:"task"},"2029-01-01T00:00:00.000Z");
+ assert.throws(()=>parseJsonRpcRequestV1({...getRequest,method:"task.get.v1",params:{...getRequest.params,body:{schemaVersion:"1",workspaceId:"ws",runId:"run",taskId:"other",input:{schemaVersion:"1",requestType:"task.get.v1",value:{operationId:"get-task",taskId:"other",includeAttempts:false}}}}},scopedWorker),denied("AUTH_SCOPE_MISMATCH"));
+ const scopedAuthority=createAuthenticatedContextV1(inspection,{...authorityGrant,runId:"run",allowedMethods:["run.get.v1"]},"2029-01-01T00:00:00.000Z");
+ assert.throws(()=>parseJsonRpcRequestV1({...getRequest,params:{...getRequest.params,observationCursor:{...cursor,runId:"other"},body:{...getRequest.params.body,runId:"other",input:{...getRequest.params.body.input,value:{...getRequest.params.body.input.value,observationCursor:{...cursor,runId:"other"}}}}}},scopedAuthority),denied("AUTH_SCOPE_MISMATCH"));
+});
+
 test("unix socket inspection proves endpoint and private parent",()=>{
  const make=(candidate:TransportInspectionV1)=>()=>createAuthenticatedContextV1(candidate,grant,"2029-01-01T00:00:00.000Z");
  assert.throws(make({...inspection,isSymbolicLink:true}),denied("TRANSPORT_NOT_ALLOWED"));

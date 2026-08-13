@@ -24,7 +24,7 @@ export class DaemonServer {
       const handler = this.handlers.get(request.method);
       if (handler === undefined) throw new Error(`daemon method not implemented: ${request.method}`);
       const result = await handler(request, coordinatorBody(request.params.body), context);
-      return successResponse(request.id, request.method, result.data, result.resultCursor ?? null);
+      return successResponse(request.id, request.method, { schemaVersion: "1", resultType: request.method, value: result.data } as unknown as JsonValue, result.resultCursor ?? null);
     } catch (error) { return failureResponse(id, error); }
   }
 

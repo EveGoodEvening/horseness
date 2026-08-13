@@ -59,6 +59,7 @@ function validateGrantBindings(grant:AuthenticatedGrantV1):void{
  const required=new Set<"runId"|"taskId"|"attemptId"|"generation"|"proposalId"|"adapterId">();
  for(const method of grant.allowedMethods){
   const definition=methodDefinition(method);if(definition===undefined)throw protocolError("GRANT_INVALID");
+  if(grant.principalRole==="authority")continue;
   if(definition.scope!=="workspace")required.add("runId");
   if(definition.scope==="task"||definition.scope==="attempt"||definition.scope==="adapter")required.add("taskId");
   if(definition.scope==="attempt"||definition.scope==="adapter"){required.add("attemptId");required.add("generation")}
@@ -95,7 +96,8 @@ function bindScope(context:AuthenticatedContextV1,body:CoordinatorBodyV1,cursor:
  if(body.workspaceId!==context.workspaceId||cursor.workspaceId!==context.workspaceId)throw protocolError("AUTH_SCOPE_MISMATCH");
  if(body.runId!==undefined&&"runId" in cursor&&body.runId!==cursor.runId)throw protocolError("AUTH_SCOPE_MISMATCH");
  const required:readonly ("runId"|"taskId"|"attemptId"|"generation"|"proposalId"|"adapterId")[]=definition.scope==="workspace"?[]:definition.scope==="run"?["runId"]:definition.scope==="task"?["runId","taskId"]:definition.scope==="attempt"?["runId","taskId","attemptId","generation"]:definition.scope==="proposal"?["runId","proposalId"]:["runId","taskId","attemptId","generation","adapterId"];
- for(const key of required){const bound=context[key as keyof AuthenticatedContextV1],actual=body[key as keyof CoordinatorBodyV1];if(bound===null||actual!==bound)throw protocolError("AUTH_SCOPE_MISMATCH")}
+ const bindings:readonly ("runId"|"taskId"|"attemptId"|"generation"|"proposalId"|"adapterId")[]=["runId","taskId","attemptId","generation","proposalId","adapterId"];
+ for(const key of bindings){const bound=context[key],actual=body[key];if(actual!==undefined||required.includes(key)){if(actual===undefined||(bound!==null&&actual!==bound))throw protocolError("AUTH_SCOPE_MISMATCH")}}
 }
 function validateResume(resume:SubscriptionResumeV1,cursor:ObservationCursorV1,body:CoordinatorBodyV1,context:AuthenticatedContextV1,verifier:SubscriptionResumeVerifierV1|undefined):void{
  if(!verifier)throw protocolError("RESUME_TOKEN_INVALID");const claims=verifier.verify(resume);if(!claims)throw protocolError("RESUME_TOKEN_INVALID");

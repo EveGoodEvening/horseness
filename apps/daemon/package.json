@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "sideEffects": false,
+  "bin": {
+    "horseness-daemon": "./bin/horseness-daemon.mjs"
+  },
   "exports": {
     ".": {
       "types": "./src/index.ts",
