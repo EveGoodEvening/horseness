@@ -1,0 +1,11 @@
+{
+  "name": "@horseness/bootstrap",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "bin": { "horseness-bootstrap": "./bin/horseness-bootstrap.mjs" },
+  "exports": { ".": { "types": "./src/index.ts", "import": "./src/index.ts" } },
+  "scripts": { "typecheck": "tsc --noEmit -p tsconfig.json", "build": "node ../../scripts/bootstrap/build.mjs" },
+  "dependencies": { "@horseness/daemon": "workspace:*", "@horseness/domain": "workspace:*", "@horseness/installer": "workspace:*", "tsx": "4.20.5" }
+}

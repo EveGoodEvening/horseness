@@ -8,9 +8,11 @@ Pass `--json` to any command for one canonical JSON object followed by a newline
 
 Exit status is stable:
 
-- `0`: success
-- `1`: an authenticated operation failed
+- `0`: complete success
+- `1`: operational failure
 - `2`: invalid invocation, option, or command
+- `3`: partial per-host success
+- `4`: consent or trust refusal
 
 ## Local daemon lifecycle
 
@@ -56,6 +58,13 @@ The credential lifecycle commands are:
 - `restore-rebind`: rebind a restored authority to the current workspace state paths.
 
 Treat grant references as opaque host references. The CLI passes a reference during the daemon transport handshake and never accepts the underlying credential secret as a normal option.
+
+## Installer lifecycle commands
+
+The typed registry/router exposes `install`, `upgrade`, `downgrade`, `rollback`, `retry-install`, `uninstall`, `doctor`, `repair`, `rebind-workspace`, and `smoke`. Help and shell completion are generated from the same registry, so routing, usage, and completion cannot silently diverge.
+
+Every lifecycle invocation requires an explicit absolute `--workspace`; pass `--create-workspace` only when creation is intended. `--host all` applies the signed platform catalog to all four hosts. Unattended executable consent requires `--accept-executable-risk <release-manifest-digest>`. Doctor is static and non-mutating; repair is the separate mutating command.
+The lifecycle blackbox deploys the real CLI package, invokes the packed bootstrap and daemon, and observes different signed release versions, retained bytes, journaled crash/retry, compensation, doctor/repair/smoke status, workspace binding, and uninstall. No command-success fixture executable participates.
 
 ## Repository development
 

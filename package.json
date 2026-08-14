@@ -33,7 +33,13 @@
     "acceptance": "node scripts/acceptance.mjs",
     "progress:cas": "node scripts/progress-cas.mjs",
     "compat-train:build": "node scripts/compat-train/build.mjs",
-    "compat-train:verify": "node scripts/compat-train/verify.mjs"
+    "compat-train:verify": "node scripts/compat-train/verify.mjs",
+    "bootstrap:build": "pnpm --filter @horseness/bootstrap run build",
+    "install:blackbox": "node scripts/bootstrap/install-blackbox.mjs",
+    "install:blackbox:offline": "node scripts/bootstrap/install-blackbox.mjs --offline",
+    "doctor:hostile-no-side-effects": "pnpm --filter @horseness/installer exec node --import tsx ../../scripts/bootstrap/doctor-hostile.mjs",
+    "uninstall:failure-matrix": "pnpm --filter @horseness/bootstrap exec node --import tsx ../../scripts/bootstrap/uninstall-failure-matrix.mjs",
+    "cli:lifecycle:blackbox": "pnpm --filter @horseness/cli exec node --import tsx ../../scripts/bootstrap/cli-lifecycle-blackbox.mjs"
   },
   "markdownlint-cli2": {
     "config": {

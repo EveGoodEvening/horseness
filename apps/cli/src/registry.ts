@@ -3,6 +3,9 @@ import { CoordinatorClientV1, type AuthorizedProtocolTransportV1, type Coordinat
 import { cliFailureV1, cliSuccessV1, type CliResultV1, type JsonValue } from "./result.js";
 
 export type CliOutputModeV1 = "human" | "json";
+export interface InstallerCliRuntimeV1 {
+  execute(command: "install" | "upgrade" | "downgrade" | "rollback" | "retry-install" | "uninstall" | "doctor" | "repair" | "rebind-workspace" | "smoke", invocation: CliInvocationV1): Promise<{ readonly exitCode: 0 | 1 | 2 | 3 | 4; readonly data: JsonValue }>;
+}
 
 export interface CliInvocationV1 {
   readonly command: string;
@@ -17,6 +20,7 @@ export interface CliExecutionContextV1 {
   readonly stdout: (text: string) => void;
   readonly stderr: (text: string) => void;
   readonly authorityTime: () => string;
+  readonly installer?: InstallerCliRuntimeV1;
 }
 
 export interface CliCommandDefinitionV1 {
@@ -140,6 +144,11 @@ function genericCoordinatorDefinition(definition: (typeof METHOD_REGISTRY_V1)[nu
 
 export function registerCoordinatorCommandsV1(registry: CliCommandRegistryV1): void {
   for (const definition of METHOD_REGISTRY_V1) registry.register(genericCoordinatorDefinition(definition));
+}
+
+export function requiredInstallerRuntimeV1(context: CliExecutionContextV1): InstallerCliRuntimeV1 {
+  if (context.installer === undefined) throw new Error("installer runtime is unavailable");
+  return context.installer;
 }
 
 export function createDefaultCliCommandRegistryV1(): CliCommandRegistryV1 {

@@ -9,7 +9,7 @@ const layers = new Map([
   ["@horseness/store-sqlite", 1], ["@horseness/orchestrator", 2], ["@horseness/sdk", 2],
   ["@horseness/adapter-kit", 3], ["@horseness/installer", 1], ["@horseness/daemon", 4],
   ["@horseness/cli", 4], ["@horseness/adapter-pi", 4], ["@horseness/adapter-omp", 4],
-  ["@horseness/adapter-claude", 4], ["@horseness/adapter-codex", 4]
+  ["@horseness/adapter-claude", 4], ["@horseness/adapter-codex", 4], ["@horseness/bootstrap", 5]
 ]);
 export function importBoundaryError({ file, packageDir, specifier, workspaceNames }) {
   if (specifier.startsWith(".")) {

@@ -148,6 +148,21 @@ importers:
         specifier: 4.20.5
         version: 4.20.5
 
+  apps/bootstrap:
+    dependencies:
+      '@horseness/daemon':
+        specifier: workspace:*
+        version: link:../daemon
+      '@horseness/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@horseness/installer':
+        specifier: workspace:*
+        version: link:../../packages/installer
+      tsx:
+        specifier: 4.20.5
+        version: 4.20.5
+
   apps/cli:
     dependencies:
       '@horseness/installer':

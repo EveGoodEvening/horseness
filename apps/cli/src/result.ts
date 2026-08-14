@@ -1,12 +1,13 @@
 export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
 
 export type CliResultV1 =
-  | { readonly schemaVersion: "1"; readonly ok: true; readonly command: string; readonly data: JsonValue }
+  | { readonly schemaVersion: "1"; readonly ok: true; readonly command: string; readonly data: JsonValue; readonly exitCode?: 0 | 3 }
   | {
       readonly schemaVersion: "1";
       readonly ok: false;
       readonly command: string;
       readonly error: { readonly code: string; readonly message: string; readonly details: JsonValue | null };
+      readonly exitCode?: 1 | 2 | 4;
     };
 
 const SECRET_KEY = /(?:authorization|bootstrap|credential|password|passwd|private[-_]?key|recovery|secret|token)/iu;
@@ -43,12 +44,12 @@ function canonicalize(value: JsonValue): JsonValue {
   return value;
 }
 
-export function cliSuccessV1(command: string, data: JsonValue): CliResultV1 {
-  return { schemaVersion: "1", ok: true, command, data };
+export function cliSuccessV1(command: string, data: JsonValue, exitCode: 0 | 3 = 0): CliResultV1 {
+  return { schemaVersion: "1", ok: true, command, data, ...(exitCode === 0 ? {} : { exitCode }) };
 }
 
-export function cliFailureV1(command: string, code: string, message: string, details: JsonValue | null): CliResultV1 {
-  return { schemaVersion: "1", ok: false, command, error: { code, message, details } };
+export function cliFailureV1(command: string, code: string, message: string, details: JsonValue | null, exitCode: 1 | 2 | 4 = 1): CliResultV1 {
+  return { schemaVersion: "1", ok: false, command, error: { code, message, details }, ...(exitCode === 1 ? {} : { exitCode }) };
 }
 
 export function renderCliJsonV1(result: CliResultV1, secretKeys: readonly string[] = []): string {

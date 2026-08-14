@@ -1,0 +1,14 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { validateOsReceiptV1 } from "../scripts/ci-require-os-receipts.mjs";
+const sha = "a".repeat(40);
+const c13 = { version: "horseness.os-receipt.v1", chunk: "C13", os: "linux", candidateSha: sha, gates: ["c13:typecheck", "c13:multiprocess"].map((name) => ({ name, status: "passed" })) };
+const c20Names = ["c20:typecheck", "c20:test", "c20:bootstrap-build", "c20:install-blackbox-online", "c20:install-blackbox-offline", "c20:doctor-hostile-no-side-effects", "c20:uninstall-failure-matrix", "c20:cli-lifecycle-blackbox", "c20:boundaries-check"];
+const c20 = { version: "horseness.os-receipt.v2", chunk: "C20", os: "windows", candidateSha: sha, gates: c20Names.map((name) => ({ name, status: "passed" })) };
+test("preserves the C13 v1 profile", () => assert.doesNotThrow(() => validateOsReceiptV1(c13, "C13", "linux", sha)));
+test("accepts the candidate-bound C20 v2 profile", () => assert.doesNotThrow(() => validateOsReceiptV1(c20, "C20", "windows", sha)));
+test("rejects cross-version and reordered C20 evidence", () => { assert.throws(() => validateOsReceiptV1({ ...c13, chunk: "C20" }, "C20", "linux", sha), /version mismatch/); assert.throws(() => validateOsReceiptV1({ ...c20, gates: [...c20.gates].reverse() }, "C20", "windows", sha), /name\/order mismatch/); });
+test("install-smoke has the only strict three-OS receipt production route", async () => { const workflow = await readFile(new URL("../.github/workflows/install-smoke.yml", import.meta.url), "utf8"); for (const name of c20Names) assert.match(workflow, new RegExp(`name: ${name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}`)); for (const os of ["linux", "macos", "windows"]) { assert.match(workflow, new RegExp(`os: ${os}`)); assert.match(workflow, /C20-\$\{\{ matrix\.os \}\}\.json/); } assert.match(workflow, /actions\/upload-artifact@v4/); });
+test("receipt writer refuses local fabrication", () => { const result = spawnSync(process.execPath, ["scripts/bootstrap/write-c20-os-receipt.mjs", "linux", sha], { encoding: "utf8", env: { ...process.env, CI: "false", GITHUB_ACTIONS: "false" } }); assert.notEqual(result.status, 0); assert.match(result.stderr, /only be emitted by the install-smoke CI route/); });

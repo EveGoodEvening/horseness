@@ -1,6 +1,6 @@
 import type { AuthorizedProtocolTransportV1, OpaqueCredentialReferenceV1 } from "@horseness/sdk";
 import { CliParseErrorV1, parseCliInvocationV1 } from "./parser.js";
-import { createDefaultCliCommandRegistryV1, type CliCommandRegistryV1, type CliExecutionContextV1 } from "./registry.js";
+import { createDefaultCliCommandRegistryV1, type CliCommandRegistryV1, type CliExecutionContextV1, type InstallerCliRuntimeV1 } from "./registry.js";
 import { cliFailureV1, renderCliHumanV1, renderCliJsonV1, type CliResultV1 } from "./result.js";
 
 export interface CliRuntimeDependenciesV1 {
@@ -10,6 +10,7 @@ export interface CliRuntimeDependenciesV1 {
   readonly stdout?: (text: string) => void;
   readonly stderr?: (text: string) => void;
   readonly authorityTime?: () => string;
+  readonly installer?: InstallerCliRuntimeV1;
 }
 
 function writeResult(result: CliResultV1, mode: "human" | "json", secretOptions: readonly string[], context: CliExecutionContextV1): void {
@@ -28,6 +29,7 @@ export async function runCliV1(argv: readonly string[], dependencies: CliRuntime
     stdout: dependencies.stdout ?? ((text) => process.stdout.write(text)),
     stderr: dependencies.stderr ?? ((text) => process.stderr.write(text)),
     authorityTime: dependencies.authorityTime ?? (() => new Date().toISOString()),
+    ...(dependencies.installer === undefined ? {} : { installer: dependencies.installer }),
   };
   const registry = dependencies.registry ?? createDefaultCliCommandRegistryV1();
   let initial;
@@ -60,7 +62,7 @@ export async function runCliV1(argv: readonly string[], dependencies: CliRuntime
   try {
     const result = await definition.execute({ ...invocation, command: definition.name }, context);
     writeResult(result, invocation.outputMode, definition.secretOptions, context);
-    return result.ok ? 0 : 1;
+    return result.exitCode ?? (result.ok ? 0 : 1);
   } catch (error) {
     const message = error instanceof Error ? error.message : "unexpected command failure";
     const failure = cliFailureV1(definition.name, "UNEXPECTED_ERROR", message, null);

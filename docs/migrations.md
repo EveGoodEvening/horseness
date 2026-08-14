@@ -31,3 +31,9 @@ Each migration generation proceeds through durable `begun`, `backup-created`, `s
 Restart recovery never guesses that a migration completed. It authenticates installer state, restores a confined durable backup for every interrupted nonterminal phase, and records `compensated`; absent or unusable recovery evidence becomes explicit `repair-required`. Failed transforms compensate without losing the prior home. Uninstall requested after an upgrade is represented by durable `uninstall-pending` and `uninstalled` journal transitions; C19 does not perform host mutation.
 
 Downgrade is permitted only through a declared reversible plan. Crossing a semantic major version additionally requires the explicit major-version gate; otherwise the engine refuses while retaining the backup. The non-public signed `0.0.0-compat.1` fixture is the C19 N-1 source for deterministic migration initiation.
+
+## C20 operation recovery
+
+C20 operation writes reuse the authenticated C19 journal and migration authority. Contribution bytes are file-fsynced into a private staging tree, the tree is activated by same-filesystem rename, and the parent directory and owner marker are made durable before success. Exact retries authenticate marker and byte digests and are idempotent; substitution, unmarked occupancy, or drift refuses.
+
+Upgrade, downgrade, rollback, and retry-install use the same neutral-bundle ownership and staging rules. Downgrades continue to require the C19 reversible-plan and explicit major-version gates. Uninstall recovery follows the durable order kill switch, discovery disable, credential revocation, cleanup. A crash at any boundary resumes from persisted evidence rather than restoring discoverability or re-enabling a revoked contribution.

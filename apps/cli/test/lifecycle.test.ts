@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { readProtectedSecretFileV1 } from "../src/lifecycle.js";
 import { AuthorizedLocalTransportV1, CliTransportError } from "../src/transport.js";
@@ -46,4 +47,20 @@ test("local transport accepts only opaque grant references and never reports the
     ),
     (error: unknown) => error instanceof CliTransportError && !error.message.includes(raw),
   );
+});
+
+test("lifecycle blackbox accepts the root argument separator and enforces the complete command order", { timeout: 30_000 }, () => {
+  const script = resolve(import.meta.dirname, "../../../scripts/bootstrap/cli-lifecycle-blackbox.mjs");
+  const commands = ["install", "upgrade", "downgrade", "rollback", "retry-install", "uninstall", "doctor", "repair", "rebind-workspace", "smoke"] as const;
+  const accepted = spawnSync(process.execPath, ["--import", "tsx", script, "--", ...commands], { encoding: "utf8" });
+  assert.equal(accepted.status, 0, accepted.stderr || accepted.stdout);
+  assert.equal(accepted.stdout, "CLI lifecycle blackbox passed for 10 packed commands\n");
+
+  const wrongOrder = spawnSync(process.execPath, ["--import", "tsx", script, "--", commands[1], commands[0], ...commands.slice(2)], { encoding: "utf8" });
+  assert.notEqual(wrongOrder.status, 0);
+  assert.match(wrongOrder.stderr, /CLI command registry mismatch/u);
+
+  const incomplete = spawnSync(process.execPath, ["--import", "tsx", script, "--", ...commands.slice(0, -1)], { encoding: "utf8" });
+  assert.notEqual(incomplete.status, 0);
+  assert.match(incomplete.stderr, /CLI command registry mismatch/u);
 });

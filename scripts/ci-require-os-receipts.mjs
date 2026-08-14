@@ -1,103 +1,21 @@
 import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
-
-const RECEIPT_VERSION = "horseness.os-receipt.v1";
-const SHA_PATTERN = /^[0-9a-f]{40}$/u;
-const OS_NAMES = new Set(["linux", "macos", "windows"]);
-const REQUIRED_GATES = Object.freeze([
-  "c13:typecheck",
-  "c13:multiprocess",
-]);
-
-function fail(message) {
-  throw new Error(`C13 OS receipt verification failed: ${message}`);
+const SHA_PATTERN = /^[0-9a-f]{40}$/u; const OS_NAMES = new Set(["linux", "macos", "windows"]);
+const PROFILES = Object.freeze({
+  C13: Object.freeze({ version: "horseness.os-receipt.v1", gates: Object.freeze(["c13:typecheck", "c13:multiprocess"]) }),
+  C20: Object.freeze({ version: "horseness.os-receipt.v2", gates: Object.freeze(["c20:typecheck", "c20:test", "c20:bootstrap-build", "c20:install-blackbox-online", "c20:install-blackbox-offline", "c20:doctor-hostile-no-side-effects", "c20:uninstall-failure-matrix", "c20:cli-lifecycle-blackbox", "c20:boundaries-check"]) }),
+});
+function fail(chunk, message) { throw new Error(`${chunk} OS receipt verification failed: ${message}`); }
+function expectedCandidateSha(chunk) { const value = process.env.HORSENESS_CANDIDATE_SHA ?? process.env.GITHUB_HEAD_SHA ?? process.env.GITHUB_SHA; if (value === undefined || !SHA_PATTERN.test(value)) fail(chunk, "set HORSENESS_CANDIDATE_SHA (or a GitHub candidate SHA) to a 40-character lowercase commit SHA"); return value; }
+function exactKeys(value, expected, label, chunk) { const actual = Object.keys(value).sort(); const wanted = [...expected].sort(); if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) fail(chunk, `${label} has unexpected fields`); }
+export function validateOsReceiptV1(value, chunk, os, candidateSha) {
+  const profile = PROFILES[chunk]; if (profile === undefined) fail(chunk, "unsupported receipt chunk/version profile");
+  if (value === null || typeof value !== "object" || Array.isArray(value)) fail(chunk, `${os} receipt is not an object`);
+  exactKeys(value, ["version", "chunk", "os", "candidateSha", "gates"], `${os} receipt`, chunk);
+  if (value.version !== profile.version) fail(chunk, `${os} receipt version mismatch`); if (value.chunk !== chunk) fail(chunk, `${os} receipt chunk mismatch`); if (value.os !== os) fail(chunk, `${os} receipt OS mismatch`); if (value.candidateSha !== candidateSha) fail(chunk, `${os} receipt candidate SHA mismatch`);
+  if (!Array.isArray(value.gates) || value.gates.length !== profile.gates.length) fail(chunk, `${os} receipt gate count mismatch`);
+  for (let index = 0; index < profile.gates.length; index += 1) { const gate = value.gates[index]; if (gate === null || typeof gate !== "object" || Array.isArray(gate)) fail(chunk, `${os} receipt gate ${index + 1} is not an object`); exactKeys(gate, ["name", "status"], `${os} receipt gate ${index + 1}`, chunk); if (gate.name !== profile.gates[index]) fail(chunk, `${os} receipt gate ${index + 1} name/order mismatch`); if (gate.status !== "passed") fail(chunk, `${os} receipt gate ${gate.name} did not pass`); }
 }
-
-function expectedCandidateSha() {
-  const value = process.env.HORSENESS_CANDIDATE_SHA
-    ?? process.env.GITHUB_HEAD_SHA
-    ?? process.env.GITHUB_SHA;
-  if (value === undefined || !SHA_PATTERN.test(value)) {
-    fail("set HORSENESS_CANDIDATE_SHA (or a GitHub candidate SHA) to a 40-character lowercase commit SHA");
-  }
-  return value;
-}
-
-function exactKeys(value, expected, label) {
-  const actual = Object.keys(value).sort();
-  const wanted = [...expected].sort();
-  if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) {
-    fail(`${label} has unexpected fields`);
-  }
-}
-
-function validateReceipt(value, chunk, os, candidateSha) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    fail(`${os} receipt is not an object`);
-  }
-  exactKeys(value, ["version", "chunk", "os", "candidateSha", "gates"], `${os} receipt`);
-  if (value.version !== RECEIPT_VERSION) fail(`${os} receipt version mismatch`);
-  if (value.chunk !== chunk) fail(`${os} receipt chunk mismatch`);
-  if (value.os !== os) fail(`${os} receipt OS mismatch`);
-  if (value.candidateSha !== candidateSha) fail(`${os} receipt candidate SHA mismatch`);
-  if (!Array.isArray(value.gates) || value.gates.length !== REQUIRED_GATES.length) {
-    fail(`${os} receipt gate count mismatch`);
-  }
-  for (let index = 0; index < REQUIRED_GATES.length; index += 1) {
-    const gate = value.gates[index];
-    if (gate === null || typeof gate !== "object" || Array.isArray(gate)) {
-      fail(`${os} receipt gate ${index + 1} is not an object`);
-    }
-    exactKeys(gate, ["name", "status"], `${os} receipt gate ${index + 1}`);
-    if (gate.name !== REQUIRED_GATES[index]) fail(`${os} receipt gate ${index + 1} name/order mismatch`);
-    if (gate.status !== "passed") fail(`${os} receipt gate ${gate.name} did not pass`);
-  }
-}
-
-async function findReceipt(directory, chunk, os) {
-  const direct = resolve(directory, `${chunk}-${os}.json`);
-  try {
-    return { path: direct, text: await readFile(direct, "utf8") };
-  } catch (error) {
-    if (error === null || typeof error !== "object" || error.code !== "ENOENT") throw error;
-  }
-
-  const entries = await readdir(directory, { recursive: true, withFileTypes: true }).catch((error) => {
-    if (error === null || typeof error !== "object" || error.code !== "ENOENT") throw error;
-    fail(`receipt directory does not exist: ${directory}`);
-  });
-  const matches = entries.filter((entry) => entry.isFile() && entry.name === `${chunk}-${os}.json`);
-  if (matches.length !== 1) fail(`expected exactly one ${chunk}-${os}.json receipt, found ${matches.length}`);
-  const match = matches[0];
-  const path = resolve(match.parentPath, match.name);
-  return { path, text: await readFile(path, "utf8") };
-}
-
-async function main() {
-  const argumentsAfterNode = process.argv.slice(2);
-  const commandArguments = argumentsAfterNode[0] === "--"
-    ? argumentsAfterNode.slice(1)
-    : argumentsAfterNode;
-  const [chunk, ...oses] = commandArguments;
-  if (chunk === undefined || oses.length === 0) {
-    fail("usage: ci-require-os-receipts.mjs <chunk> <linux|macos|windows>...");
-  }
-  if (new Set(oses).size !== oses.length) fail("duplicate requested OS");
-  for (const os of oses) if (!OS_NAMES.has(os)) fail(`unsupported OS: ${os}`);
-
-  const candidateSha = expectedCandidateSha();
-  const directory = resolve(process.env.HORSENESS_OS_RECEIPTS_DIR ?? ".ci/os-receipts");
-  for (const os of oses) {
-    const receipt = await findReceipt(directory, chunk, os);
-    let value;
-    try {
-      value = JSON.parse(receipt.text);
-    } catch {
-      fail(`${receipt.path} is not valid JSON`);
-    }
-    validateReceipt(value, chunk, os, candidateSha);
-  }
-  process.stdout.write(`Verified ${oses.length} ${chunk} OS receipts for ${candidateSha}\n`);
-}
-
-await main();
+async function findReceipt(directory, chunk, os) { const direct = resolve(directory, `${chunk}-${os}.json`); try { return { path: direct, text: await readFile(direct, "utf8") }; } catch (error) { if (error?.code !== "ENOENT") throw error; } const entries = await readdir(directory, { recursive: true, withFileTypes: true }).catch((error) => { if (error?.code !== "ENOENT") throw error; fail(chunk, `receipt directory does not exist: ${directory}`); }); const matches = entries.filter((entry) => entry.isFile() && entry.name === `${chunk}-${os}.json`); if (matches.length !== 1) fail(chunk, `expected exactly one ${chunk}-${os}.json receipt, found ${matches.length}`); const match = matches[0]; const path = resolve(match.parentPath, match.name); return { path, text: await readFile(path, "utf8") }; }
+async function main() { const raw = process.argv.slice(2); const args = raw[0] === "--" ? raw.slice(1) : raw; const [chunk, ...oses] = args; if (chunk === undefined || oses.length === 0) fail(chunk ?? "OS", "usage: ci-require-os-receipts.mjs <chunk> <linux|macos|windows>..."); if (!(chunk in PROFILES)) fail(chunk, "unsupported receipt chunk/version profile"); if (new Set(oses).size !== oses.length) fail(chunk, "duplicate requested OS"); for (const os of oses) if (!OS_NAMES.has(os)) fail(chunk, `unsupported OS: ${os}`); const candidateSha = expectedCandidateSha(chunk); const directory = resolve(process.env.HORSENESS_OS_RECEIPTS_DIR ?? ".ci/os-receipts"); for (const os of oses) { const receipt = await findReceipt(directory, chunk, os); let value; try { value = JSON.parse(receipt.text); } catch { fail(chunk, `${receipt.path} is not valid JSON`); } validateOsReceiptV1(value, chunk, os, candidateSha); } process.stdout.write(`Verified ${oses.length} ${chunk} OS receipts for ${candidateSha}\n`); }
+if (process.argv[1] !== undefined && import.meta.url === new URL(`file://${resolve(process.argv[1])}`).href) await main();

@@ -1,0 +1,27 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { createHash, createPrivateKey, generateKeyPairSync, sign, type KeyObject } from "node:crypto";
+import { access, mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+
+interface MutableManifest { sequence: number; sigstoreIdentity: { repository: string }; [key: string]: unknown }
+interface TestEnvelope { signedManifest: { keyId: string; manifestDigest: string; signature: string; manifest: MutableManifest }; catalog: { releaseVersion: string; contributions: unknown[] }; catalogDigest: string; [key: string]: unknown }
+const FIXTURE_PRIVATE_KEY = createPrivateKey(`-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIGcLq+MnoMJ0+s1xKa1yHhwepzbdwKTfivQYe2Okp3mW\n-----END PRIVATE KEY-----\n`);
+const sha = (bytes: string | Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
+function canonical(value: unknown): string { if (value === null || typeof value === "boolean" || typeof value === "string") return JSON.stringify(value); if (typeof value === "number") return String(value); if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`; const object = value as Record<string, unknown>; return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonical(object[key])}`).join(",")}}`; }
+async function snapshot(path: string): Promise<string> { const rows: string[] = []; async function walk(current: string): Promise<void> { for (const entry of await readdir(current, { withFileTypes: true })) { const child = join(current, entry.name); const info = await stat(child); const digest = entry.isDirectory() ? "d" : entry.isSocket() ? "socket" : sha(await readFile(child)); rows.push(`${child.slice(path.length)}:${info.size}:${digest}`); if (entry.isDirectory()) await walk(child); } } await walk(path); return rows.sort().join("\n"); }
+async function runEnvelope(envelope: unknown, root: string, create = true) { const release = join(root, "release.json"); await writeFile(release, JSON.stringify(envelope)); const workspace = join(root, "workspace"); const home = join(root, "home"); const executable = resolve(import.meta.dirname, "../../../../apps/bootstrap/dist/horseness-bootstrap.mjs"); const args = [executable, "install", "--manifest", release, "--workspace", workspace, "--host", "pi", "--scope", "user", "--clean-home", home, "--accept-executable-risk", "fixture-release-digest", ...(create ? ["--create-workspace"] : [])]; return { result: spawnSync(process.execPath, args, { encoding: "utf8", timeout: 60_000 }), workspace, home }; }
+function resign(envelope: TestEnvelope, mutate: (manifest: MutableManifest) => void, key: KeyObject = FIXTURE_PRIVATE_KEY): TestEnvelope { const copy = structuredClone(envelope); mutate(copy.signedManifest.manifest); copy.signedManifest.manifestDigest = sha(`horseness.release-manifest.v1\0${canonical(copy.signedManifest.manifest)}`); copy.signedManifest.signature = sign(null, Buffer.from(canonical(copy.signedManifest.manifest)), key).toString("base64"); const neutral = { releaseVersion: copy.catalog.releaseVersion, releaseManifestDigest: copy.signedManifest.manifestDigest, authenticatedManifestKeyId: copy.signedManifest.keyId, authenticatedManifestSequence: copy.signedManifest.manifest.sequence, contributions: copy.catalog.contributions }; copy.catalogDigest = sha(`horseness.neutral-install-catalog.v1\0${canonical(neutral)}`); return copy; }
+const fixture = JSON.parse(await readFile(resolve(import.meta.dirname, "../../../../apps/bootstrap/generated/fixture-release.json"), "utf8")) as TestEnvelope;
+test("self-signed, wrong identity, and revoked releases fail before workspace or host mutation", async () => {
+  const attacker = generateKeyPairSync("ed25519"); const selfSigned = resign(fixture, () => {}, attacker.privateKey); selfSigned.signedManifest.keyId = "attacker-self-signed";
+  const wrongIdentity = resign(fixture, (manifest) => { manifest.sigstoreIdentity.repository = "attacker/repository"; });
+  const revoked = structuredClone(fixture); revoked.signedManifest.keyId = "fixture-revoked-ed25519-v1";
+  for (const variant of [selfSigned, wrongIdentity, revoked]) { const root = await mkdtemp(join(tmpdir(), "horseness-bootstrap-malicious-")); const { result, workspace, home } = await runEnvelope(variant, root); assert.equal(result.status, 1); for (const path of [workspace, home]) await assert.rejects(access(path), { code: "ENOENT" }); }
+});
+
+test("authenticated release replay is rejected without changing installed state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "horseness-bootstrap-replay-")); const first = await runEnvelope(fixture, root); assert.equal(first.result.status, 0, first.result.stderr); const before = `${await snapshot(first.workspace)}\n${await snapshot(first.home)}`; const replay = resign(fixture, (manifest) => { manifest.sequence = 19; }); const second = await runEnvelope(replay, root, false); assert.equal(second.result.status, 1); assert.equal(`${await snapshot(first.workspace)}\n${await snapshot(first.home)}`, before); try { const endpoint = JSON.parse(await readFile(join(first.workspace, ".horseness/daemon-endpoint.v1.json"), "utf8")) as { processId: number }; process.kill(endpoint.processId, "SIGTERM"); } catch {}
+});

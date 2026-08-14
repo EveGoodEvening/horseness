@@ -1,0 +1,10 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
+const [os, candidateSha] = process.argv.slice(2);
+if (!["linux", "macos", "windows"].includes(os) || !/^[0-9a-f]{40}$/u.test(candidateSha ?? "")) throw new Error("usage: write-c20-os-receipt.mjs <linux|macos|windows> <candidate-sha>");
+if (process.env.CI !== "true" || process.env.GITHUB_ACTIONS !== "true") throw new Error("C20 receipts may only be emitted by the install-smoke CI route");
+const gates = ["c20:typecheck", "c20:test", "c20:bootstrap-build", "c20:install-blackbox-online", "c20:install-blackbox-offline", "c20:doctor-hostile-no-side-effects", "c20:uninstall-failure-matrix", "c20:cli-lifecycle-blackbox", "c20:boundaries-check"].map((name) => ({ name, status: "passed" }));
+const receipt = { version: "horseness.os-receipt.v2", chunk: "C20", os, candidateSha, gates };
+const directory = resolve(process.env.HORSENESS_OS_RECEIPTS_DIR ?? ".ci/os-receipts");
+await mkdir(directory, { recursive: true });
+await writeFile(resolve(directory, `C20-${os}.json`), `${JSON.stringify(receipt)}\n`, { flag: "wx", mode: 0o600 });
