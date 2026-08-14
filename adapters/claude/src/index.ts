@@ -12,23 +12,32 @@ export const CLAUDE_HOST_ID = "claude" as const;
 export const CLAUDE_HOST_VERSION = "2.1.228" as const;
 export const CLAUDE_PROVIDER_ID = "claude-native-provider-v1" as const;
 
+export type ClaudeNativeContributionDigestV1 = { readonly kind: string; readonly name: string; readonly digest: string };
+export function claudeNativePackageDigestV1(contributions: readonly ClaudeNativeContributionDigestV1[]): string {
+  return `sha256:${createHash("sha256").update(JSON.stringify({ schemaVersion: "ClaudeNativePackageDigestV1", contributions })).digest("hex")}`;
+}
+const CLAUDE_NATIVE_CONTRIBUTIONS = Object.freeze([
+  Object.freeze({ kind: "manifest", name: "plugin/.claude-plugin/plugin.json", digest: "sha256:53ee18d5eef969cdf498841eca485b576a2edccdb226a37467cf540eab2d4e1a" }),
+  Object.freeze({ kind: "manifest", name: "plugin/.mcp.json", digest: "sha256:c869a35a3efc77e3c9219d6fffc102cecfc2873343b1feee35b24f8806c53ad8" }),
+  Object.freeze({ kind: "hook", name: "plugin/hooks/hooks.json", digest: "sha256:1acf6428e2b76fe23d35c6bad42dffcabcd9c452f8b3f8f96917257a7e0ae56e" }),
+  Object.freeze({ kind: "hook", name: "plugin/hooks/session-start.mjs", digest: "sha256:322884083aadcab6f4bdf47a062573386f40d250580294a4469ed09b9d66015f" }),
+  Object.freeze({ kind: "command", name: "plugin/commands/horseness-worker-return.md", digest: "sha256:26aa5f1e0f3911cc3d0a62c071e067ff4492169db51de1f9726affe918d824f1" }),
+  Object.freeze({ kind: "agent", name: "plugin/agents/horseness-worker.md", digest: "sha256:2232aef6755d0cf24bd3e3b359adf127c8acf0b0f639ce4a7e0886d9b09d3daf" }),
+  Object.freeze({ kind: "skill", name: "plugin/skills/horseness-worker/SKILL.md", digest: "sha256:8623e24fd1f67096288ec3ef91d2509b2ed50b9914068f0ff5c592ecb2246e0a" }),
+  Object.freeze({ kind: "mcp-server", name: "plugin/servers/horseness-worker.mjs", digest: "sha256:330f6f0322f2459faef8bb90ecde4686df4ca94e1e1627e15509bd4058d31738" }),
+]) satisfies readonly ClaudeNativeContributionDigestV1[];
+function observedClaudeContribution(item: { readonly name: string; readonly digest: string }): ClaudeNativeContributionDigestV1 | null {
+  const expected = CLAUDE_NATIVE_CONTRIBUTIONS.find(contribution => contribution.name === item.name);
+  return expected === undefined ? null : { kind: expected.kind, name: item.name, digest: item.digest };
+}
 export const CLAUDE_NATIVE_PACKAGE_METADATA = Object.freeze({
   schemaVersion: "1",
   adapterId: CLAUDE_ADAPTER_ID,
   adapterVersion: CLAUDE_ADAPTER_VERSION,
   hostId: CLAUDE_HOST_ID,
   hostVersionRange: "=2.1.228",
-  packageDigest: "sha256:18c6de6d5cf49026c9851d02dfd962cae9c33fbeadb1ce45fddd4e753963e8b5",
-  contributions: Object.freeze([
-    Object.freeze({ kind: "manifest", name: "plugin/.claude-plugin/plugin.json", digest: "sha256:53ee18d5eef969cdf498841eca485b576a2edccdb226a37467cf540eab2d4e1a" }),
-    Object.freeze({ kind: "manifest", name: "plugin/.mcp.json", digest: "sha256:c869a35a3efc77e3c9219d6fffc102cecfc2873343b1feee35b24f8806c53ad8" }),
-    Object.freeze({ kind: "hook", name: "plugin/hooks/hooks.json", digest: "sha256:866e696b6c09b5e35f1bdf37684b4e91c5a8e63440b09c02ef4d2d69fb965b11" }),
-    Object.freeze({ kind: "hook", name: "plugin/hooks/session-start.mjs", digest: "sha256:95baa0fff1132e0762e0448f1615a1e8d01544a0f40e70c240040842a6dc27b6" }),
-    Object.freeze({ kind: "command", name: "plugin/commands/horseness-worker-return.md", digest: "sha256:26aa5f1e0f3911cc3d0a62c071e067ff4492169db51de1f9726affe918d824f1" }),
-    Object.freeze({ kind: "agent", name: "plugin/agents/horseness-worker.md", digest: "sha256:2232aef6755d0cf24bd3e3b359adf127c8acf0b0f639ce4a7e0886d9b09d3daf" }),
-    Object.freeze({ kind: "skill", name: "plugin/skills/horseness-worker/SKILL.md", digest: "sha256:8623e24fd1f67096288ec3ef91d2509b2ed50b9914068f0ff5c592ecb2246e0a" }),
-    Object.freeze({ kind: "mcp-server", name: "plugin/servers/horseness-worker.mjs", digest: "sha256:330f6f0322f2459faef8bb90ecde4686df4ca94e1e1627e15509bd4058d31738" }),
-  ]),
+  packageDigest: "sha256:f670a645d4a645a2d14aefa10ca58b26baf209606cc6c514f22884a88594624d",
+  contributions: CLAUDE_NATIVE_CONTRIBUTIONS,
 }) satisfies NativePackageMetadataV1;
 
 export const CLAUDE_INSTALL_CONTRIBUTIONS = Object.freeze(CLAUDE_NATIVE_PACKAGE_METADATA.contributions.map((item, index) =>
@@ -53,6 +62,8 @@ export function validateClaudeSubscriptionLiveReceiptV1(value: ClaudeSubscriptio
   if (value.schemaVersion !== "ClaudeSubscriptionLiveReceiptV1" || value.host !== "claude" || value.observedModel.length === 0 || value.candidate.head.length === 0 || value.candidate.tree.length === 0 || value.command.argv.length === 0 || value.bindings.length !== 5 || new Set(bindingIdentities).size !== 5 || value.provenance.contributions.length === 0 || value.timing.durationMs < 0 || value.terminal.reason.length === 0 || value.redactionAudit.passed !== true) throw new Error("CLAUDE_LIVE_RECEIPT_INVALID");
   const digests = [value.command.digest, value.command.scenarioSetDigest, value.command.batchResponseDigest, value.provenance.archiveDigest, value.provenance.executableDigest, value.provenance.packageDigest, ...value.provenance.contributions.map(item => item.digest), ...value.bindings.flatMap(item => [item.forkPinDigest, item.contextManifestCoreDigest, item.attemptContextBindingDigest, item.receiptDigest, item.proposalDigest, item.outputDigest, ...item.evidenceDigests])];
   if (digests.some(digest => !/^(?:sha256:)?[a-f0-9]{64}$/.test(digest))) throw new Error("CLAUDE_LIVE_RECEIPT_DIGEST_INVALID");
+  const observedContributions = value.provenance.contributions.map(observedClaudeContribution);
+  if (observedContributions.some(item => item === null) || JSON.stringify(value.provenance.contributions) !== JSON.stringify(CLAUDE_NATIVE_CONTRIBUTIONS.map(({ name, digest }) => ({ name, digest }))) || value.provenance.packageDigest !== claudeNativePackageDigestV1(observedContributions as ClaudeNativeContributionDigestV1[]) || value.provenance.packageDigest !== CLAUDE_NATIVE_PACKAGE_METADATA.packageDigest) throw new Error("CLAUDE_LIVE_RECEIPT_PROVENANCE_MISMATCH");
   if (JSON.stringify(value).match(/"(?:account|email|subscriptionId|credential|authorization|token|cookie|authPath|tokenFingerprint)"\s*:/i)) throw new Error("CLAUDE_LIVE_RECEIPT_REDACTION_FAILED");
   return Object.freeze(structuredClone(value));
 }
@@ -537,11 +548,12 @@ class ClaudeWorkerAdapterV1 implements WorkerAdapterV1 {
 }
 
 export function createClaudeAdapterV1(options: ClaudeAdapterOptionsV1): SecureWorkerAdapterV1 { return new SecureWorkerAdapterV1(options.binding, new ClaudeWorkerAdapterV1(options)); }
-export function claudeDoctorV1(input: { readonly nativePackageVersion: string | null; readonly loaderDigest: string | null; readonly contributionDigests: readonly string[] }): DoctorProbeResultV1 {
-  const expected = CLAUDE_NATIVE_PACKAGE_METADATA.contributions.map(item => item.digest);
+export function claudeDoctorV1(input: { readonly nativePackageVersion: string | null; readonly loaderDigest: string | null; readonly contributions: readonly { readonly name: string; readonly digest: string }[] }): DoctorProbeResultV1 {
+  const observed = input.contributions.map(observedClaudeContribution);
+  const contributionsMatch = observed.every(item => item !== null) && JSON.stringify(input.contributions) === JSON.stringify(CLAUDE_NATIVE_CONTRIBUTIONS.map(({ name, digest }) => ({ name, digest }))) && claudeNativePackageDigestV1(observed as ClaudeNativeContributionDigestV1[]) === CLAUDE_NATIVE_PACKAGE_METADATA.packageDigest;
   return parseDoctorProbeResultV1({ schemaVersion: "1", checks: [
     { code: "CLAUDE_NATIVE_VERSION", status: input.nativePackageVersion === CLAUDE_HOST_VERSION ? "ok" : "error", evidenceDigest: input.nativePackageVersion === null ? null : `version:${input.nativePackageVersion}` },
     { code: "Claude_EXTENSION_LOADER", status: input.loaderDigest === "sha256:d535985e6941a3eb00179ccd7f52ceb0c6623a0305a518ebc4e6514f84a94c99" ? "ok" : "error", evidenceDigest: input.loaderDigest },
-    { code: "Claude_CONTRIBUTIONS", status: expected.every(digest => input.contributionDigests.includes(digest)) && input.contributionDigests.length === expected.length ? "ok" : "error", evidenceDigest: CLAUDE_NATIVE_PACKAGE_METADATA.packageDigest },
+    { code: "Claude_CONTRIBUTIONS", status: contributionsMatch ? "ok" : "error", evidenceDigest: contributionsMatch ? CLAUDE_NATIVE_PACKAGE_METADATA.packageDigest : null },
   ], restartRequired: false });
 }

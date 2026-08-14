@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,7 +20,20 @@ const adapter = createClaudeAdapterV1({ binding, credential: { schemaVersion: "1
 test("Claude package exposes meaningful immutable native contributions", () => { assert.equal(CLAUDE_NATIVE_PACKAGE_METADATA.hostVersionRange, "=2.1.228"); assert.equal(CLAUDE_INSTALL_CONTRIBUTIONS.length, 8); assert.deepEqual(CLAUDE_INSTALL_CONTRIBUTIONS.map(item => item.mode), Array(8).fill("read-only")); });
 test("Claude lifecycle retains binding, reconciles, resumes and seals a valid receipt", async () => { const capabilities = await adapter.detectCapabilities(); assert.equal(capabilities.providerId, CLAUDE_PROVIDER_ID); const launched = await adapter.launch({ ...binding, operation: "launch", renderedContextDigest: "sha256:rendered", providerOptions: {} }); assert.equal(launched.providerOperationId, "claude-operation"); await adapter.reconcile({ ...binding, operation: "reconcile", providerOperationId: "claude-operation" }); await adapter.resume({ ...binding, operation: "reattach", providerOperationId: "claude-operation", nativeSessionId: "claude-session" }); await adapter.resume({ ...binding, operation: "resume", providerOperationId: "claude-operation", nativeSessionId: "claude-session" }); const receipt = await adapter.collectReceipt(binding); verifyAttemptReceipt(receipt); assert.equal(receipt.providerId, CLAUDE_PROVIDER_ID); assert.deepEqual(calls, ["launch", "reconcile", "reattach", "resume", "collect"]); });
 test("Claude rejects binding and credential scope substitution", () => { assert.throws(() => createClaudeAdapterV1({ binding, credential: { schemaVersion: "1", kind: "host-reference", reference: "claude.grant.ref", scope: { workspaceId: "other", adapterId: CLAUDE_ADAPTER_ID, purpose: "horseness-attempt-grant" } }, runtime, producerPrincipalId: "worker", producerGrantDigest: "grant" })); assert.throws(() => adapter.launch({ ...binding, generation: 2, operation: "launch", renderedContextDigest: "sha256:rendered", providerOptions: {} })); });
-test("Claude doctor binds exact upstream loader and package resources", () => { assert.deepEqual(claudeDoctorV1({ nativePackageVersion: "2.1.228", loaderDigest: "sha256:d535985e6941a3eb00179ccd7f52ceb0c6623a0305a518ebc4e6514f84a94c99", contributionDigests: CLAUDE_NATIVE_PACKAGE_METADATA.contributions.map(item => item.digest) }).checks.map(check => check.status), ["ok", "ok", "ok"]); });
+test("Claude doctor independently hashes exact shipped package resources and rejects copied-byte tampering", async () => {
+  const nativeRoot = fileURLToPath(new URL("../native/", import.meta.url));
+  const copiedRoot = await mkdtemp(join(tmpdir(), "horseness-claude-native-provenance-"));
+  const hashContributions = () => Promise.all(CLAUDE_NATIVE_PACKAGE_METADATA.contributions.map(async item => ({ name: item.name, digest: `sha256:${createHash("sha256").update(await readFile(join(copiedRoot, item.name))).digest("hex")}` })));
+  try {
+    await cp(nativeRoot, copiedRoot, { recursive: true });
+    const contributions = await hashContributions();
+    assert.deepEqual(claudeDoctorV1({ nativePackageVersion: "2.1.228", loaderDigest: "sha256:d535985e6941a3eb00179ccd7f52ceb0c6623a0305a518ebc4e6514f84a94c99", contributions }).checks.map(check => check.status), ["ok", "ok", "ok"]);
+    await writeFile(join(copiedRoot, "plugin/hooks/hooks.json"), "{}\n");
+    assert.deepEqual(claudeDoctorV1({ nativePackageVersion: "2.1.228", loaderDigest: "sha256:d535985e6941a3eb00179ccd7f52ceb0c6623a0305a518ebc4e6514f84a94c99", contributions: await hashContributions() }).checks.map(check => check.status), ["ok", "ok", "error"]);
+  } finally {
+    await rm(copiedRoot, { recursive: true, force: true });
+  }
+});
 
 test("Claude retained authority reclaims only a mismatched process incarnation", async () => {
   if (process.platform !== "linux") return;
@@ -110,10 +123,11 @@ test("Claude MCP runtime rejects the first byte over its 8 KiB response bound", 
 test("Claude live receipt validates complete candidate evidence and rejects auth/account fields", () => {
   const digest = `sha256:${"a".repeat(64)}`;
   const receiptBinding = { workspaceId: "w", runId: "r", taskId: "t", attemptId: "a", generation: 1, forkPinDigest: digest, contextManifestCoreDigest: digest, attemptContextBindingDigest: digest, receiptDigest: digest, proposalDigest: digest, outputDigest: digest, evidenceDigests: [digest] };
-  const receipt: ClaudeSubscriptionLiveReceiptV1 = { schemaVersion: "ClaudeSubscriptionLiveReceiptV1", host: "claude", hostVersion: "2.1.228", observedModel: "claude-model", candidate: { head: "head", tree: "tree" }, command: { argv: ["pnpm", "host:smoke:claude"], digest, scenarioSetDigest: digest, batchResponseDigest: digest }, provenance: { archiveDigest: digest, archiveIdentity: "npm:claude", memberPath: "claude", executableDigest: digest, packageDigest: digest, contributions: [{ name: "plugin", digest }] }, bindings: Array.from({ length: 5 }, (_, index) => ({ ...receiptBinding, attemptId: `a-${index}` })), redactionAudit: { passed: true, prohibitedFields: ["account"] }, timing: { startedAt: "2026-08-14T00:00:00Z", finishedAt: "2026-08-14T00:00:01Z", durationMs: 1000 }, terminal: { result: "succeeded", reason: "CLAUDE_LIVE_SMOKE_SUCCEEDED" } };
+  const receipt: ClaudeSubscriptionLiveReceiptV1 = { schemaVersion: "ClaudeSubscriptionLiveReceiptV1", host: "claude", hostVersion: "2.1.228", observedModel: "claude-model", candidate: { head: "head", tree: "tree" }, command: { argv: ["pnpm", "host:smoke:claude"], digest, scenarioSetDigest: digest, batchResponseDigest: digest }, provenance: { archiveDigest: digest, archiveIdentity: "npm:claude", memberPath: "claude", executableDigest: digest, packageDigest: CLAUDE_NATIVE_PACKAGE_METADATA.packageDigest, contributions: CLAUDE_NATIVE_PACKAGE_METADATA.contributions.map(({ name, digest: contributionDigest }) => ({ name, digest: contributionDigest })) }, bindings: Array.from({ length: 5 }, (_, index) => ({ ...receiptBinding, attemptId: `a-${index}` })), redactionAudit: { passed: true, prohibitedFields: ["account"] }, timing: { startedAt: "2026-08-14T00:00:00Z", finishedAt: "2026-08-14T00:00:01Z", durationMs: 1_000 }, terminal: { result: "succeeded", reason: "complete" } };
   assert.deepEqual(validateClaudeSubscriptionLiveReceiptV1(receipt), receipt);
   const sharedAttemptBindings = receipt.bindings.map((item, index) => ({ ...item, workspaceId: `w-${index}`, attemptId: "shared-attempt" }));
   assert.deepEqual(validateClaudeSubscriptionLiveReceiptV1({ ...receipt, bindings: sharedAttemptBindings }).bindings, sharedAttemptBindings);
   assert.throws(() => validateClaudeSubscriptionLiveReceiptV1({ ...receipt, bindings: receipt.bindings.map(() => receipt.bindings[0]!) }), /INVALID/);
+  assert.throws(() => validateClaudeSubscriptionLiveReceiptV1({ ...receipt, provenance: { ...receipt.provenance, contributions: receipt.provenance.contributions.map((item, index) => index === 0 ? { ...item, digest } : item) } }), /PROVENANCE_MISMATCH/);
   assert.throws(() => validateClaudeSubscriptionLiveReceiptV1({ ...receipt, terminal: { ...receipt.terminal, account: "forbidden" } } as unknown as ClaudeSubscriptionLiveReceiptV1), /REDACTION/);
 });
