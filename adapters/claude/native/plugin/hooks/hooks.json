@@ -2,7 +2,7 @@
   "description": "Inject the immutable bounded Horseness attempt context at Claude session start.",
   "hooks": {
     "SessionStart": [{
-      "matcher": "startup|resume|clear|compact",
+      "matcher": "startup|resume|fork|clear|compact",
       "hooks": [{"type":"command","command":"node ${CLAUDE_PLUGIN_ROOT}/hooks/session-start.mjs","timeout":10}]
     }]
   }

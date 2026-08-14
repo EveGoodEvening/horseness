@@ -18,16 +18,16 @@ export const CLAUDE_NATIVE_PACKAGE_METADATA = Object.freeze({
   adapterVersion: CLAUDE_ADAPTER_VERSION,
   hostId: CLAUDE_HOST_ID,
   hostVersionRange: "=2.1.228",
-  packageDigest: "sha256:2b6dafdfd8c722e0e09d06508f4e0c498b03bf72926a03d9496951a48dd65cfa",
+  packageDigest: "sha256:18c6de6d5cf49026c9851d02dfd962cae9c33fbeadb1ce45fddd4e753963e8b5",
   contributions: Object.freeze([
     Object.freeze({ kind: "manifest", name: "plugin/.claude-plugin/plugin.json", digest: "sha256:53ee18d5eef969cdf498841eca485b576a2edccdb226a37467cf540eab2d4e1a" }),
     Object.freeze({ kind: "manifest", name: "plugin/.mcp.json", digest: "sha256:c869a35a3efc77e3c9219d6fffc102cecfc2873343b1feee35b24f8806c53ad8" }),
     Object.freeze({ kind: "hook", name: "plugin/hooks/hooks.json", digest: "sha256:866e696b6c09b5e35f1bdf37684b4e91c5a8e63440b09c02ef4d2d69fb965b11" }),
-    Object.freeze({ kind: "hook", name: "plugin/hooks/session-start.mjs", digest: "sha256:2200b5b19dd731022d9f1ee5191b9798b8f0a5a196149664d600c13d9b11c8fa" }),
-    Object.freeze({ kind: "command", name: "plugin/commands/horseness-worker-return.md", digest: "sha256:90f5acb04bb6f63a998b9a56fa7d32db368df2f7f723618bc52a04599ddc9d25" }),
-    Object.freeze({ kind: "agent", name: "plugin/agents/horseness-worker.md", digest: "sha256:9d77cb92c9a590fee55116ae630a29f3fe20904985bed578af2aecff9fb2ed60" }),
-    Object.freeze({ kind: "skill", name: "plugin/skills/horseness-worker/SKILL.md", digest: "sha256:ce7e845ade17d5db50b3b5de058885dc3533aba2d58dc8279a881d9dcd1fa432" }),
-    Object.freeze({ kind: "mcp-server", name: "plugin/servers/horseness-worker.mjs", digest: "sha256:c0996ec903fe0da27686166ccb4a9203cac91a35179413a9cda83009dc10a314" }),
+    Object.freeze({ kind: "hook", name: "plugin/hooks/session-start.mjs", digest: "sha256:95baa0fff1132e0762e0448f1615a1e8d01544a0f40e70c240040842a6dc27b6" }),
+    Object.freeze({ kind: "command", name: "plugin/commands/horseness-worker-return.md", digest: "sha256:26aa5f1e0f3911cc3d0a62c071e067ff4492169db51de1f9726affe918d824f1" }),
+    Object.freeze({ kind: "agent", name: "plugin/agents/horseness-worker.md", digest: "sha256:2232aef6755d0cf24bd3e3b359adf127c8acf0b0f639ce4a7e0886d9b09d3daf" }),
+    Object.freeze({ kind: "skill", name: "plugin/skills/horseness-worker/SKILL.md", digest: "sha256:8623e24fd1f67096288ec3ef91d2509b2ed50b9914068f0ff5c592ecb2246e0a" }),
+    Object.freeze({ kind: "mcp-server", name: "plugin/servers/horseness-worker.mjs", digest: "sha256:330f6f0322f2459faef8bb90ecde4686df4ca94e1e1627e15509bd4058d31738" }),
   ]),
 }) satisfies NativePackageMetadataV1;
 
@@ -35,6 +35,27 @@ export const CLAUDE_INSTALL_CONTRIBUTIONS = Object.freeze(CLAUDE_NATIVE_PACKAGE_
   parseInstallContributionV1({ schemaVersion: "1", kind: index === 0 ? "plugin" : "file", contributionId: `horseness-claude-${index}`, relativePath: item.name, contentDigest: item.digest, sourceArtifactDigest: CLAUDE_NATIVE_PACKAGE_METADATA.packageDigest, mode: "read-only", hostScope: CLAUDE_HOST_ID }),
 )) satisfies readonly InstallContributionV1[];
 
+export interface ClaudeSubscriptionLiveReceiptV1 {
+  readonly schemaVersion: "ClaudeSubscriptionLiveReceiptV1";
+  readonly host: "claude";
+  readonly hostVersion: string;
+  readonly observedModel: string;
+  readonly candidate: { readonly head: string; readonly tree: string };
+  readonly command: { readonly argv: readonly string[]; readonly digest: string; readonly scenarioSetDigest: string; readonly batchResponseDigest: string };
+  readonly provenance: { readonly archiveDigest: string; readonly archiveIdentity: string; readonly memberPath: string; readonly executableDigest: string; readonly packageDigest: string; readonly contributions: readonly { readonly name: string; readonly digest: string }[] };
+  readonly bindings: readonly { readonly workspaceId: string; readonly runId: string; readonly taskId: string; readonly attemptId: string; readonly generation: number; readonly forkPinDigest: string; readonly contextManifestCoreDigest: string; readonly attemptContextBindingDigest: string; readonly receiptDigest: string; readonly proposalDigest: string; readonly outputDigest: string; readonly evidenceDigests: readonly string[] }[];
+  readonly redactionAudit: { readonly passed: true; readonly prohibitedFields: readonly string[] };
+  readonly timing: { readonly startedAt: string; readonly finishedAt: string; readonly durationMs: number };
+  readonly terminal: { readonly result: "succeeded" | "failed"; readonly reason: string };
+}
+export function validateClaudeSubscriptionLiveReceiptV1(value: ClaudeSubscriptionLiveReceiptV1): ClaudeSubscriptionLiveReceiptV1 {
+  const bindingIdentities = value.bindings.map(item => `${item.workspaceId}:${item.runId}:${item.taskId}:${item.attemptId}:${item.generation}`);
+  if (value.schemaVersion !== "ClaudeSubscriptionLiveReceiptV1" || value.host !== "claude" || value.observedModel.length === 0 || value.candidate.head.length === 0 || value.candidate.tree.length === 0 || value.command.argv.length === 0 || value.bindings.length !== 5 || new Set(bindingIdentities).size !== 5 || value.provenance.contributions.length === 0 || value.timing.durationMs < 0 || value.terminal.reason.length === 0 || value.redactionAudit.passed !== true) throw new Error("CLAUDE_LIVE_RECEIPT_INVALID");
+  const digests = [value.command.digest, value.command.scenarioSetDigest, value.command.batchResponseDigest, value.provenance.archiveDigest, value.provenance.executableDigest, value.provenance.packageDigest, ...value.provenance.contributions.map(item => item.digest), ...value.bindings.flatMap(item => [item.forkPinDigest, item.contextManifestCoreDigest, item.attemptContextBindingDigest, item.receiptDigest, item.proposalDigest, item.outputDigest, ...item.evidenceDigests])];
+  if (digests.some(digest => !/^(?:sha256:)?[a-f0-9]{64}$/.test(digest))) throw new Error("CLAUDE_LIVE_RECEIPT_DIGEST_INVALID");
+  if (JSON.stringify(value).match(/"(?:account|email|subscriptionId|credential|authorization|token|cookie|authPath|tokenFingerprint)"\s*:/i)) throw new Error("CLAUDE_LIVE_RECEIPT_REDACTION_FAILED");
+  return Object.freeze(structuredClone(value));
+}
 export interface ClaudeNativeAttemptV1 {
   readonly providerOperationId: string;
   readonly nativeSessionId: string;
@@ -65,6 +86,7 @@ export interface ClaudeAdapterOptionsV1 {
 export interface ClaudeWorkerReturnAuthorityV1 {
   readonly client: WorkerReturnClientV1;
   sealProposal(binding: Readonly<BoundAdapterOperationV1>, receipt: AttemptReceiptEnvelopeV1): Promise<ProposalEnvelopeV1>;
+  canonicalAcceptedAdvance?(): Promise<{ readonly workspaceId: string; readonly runId: string; readonly revision: number; readonly stateHash: string }>;
 }
 export interface ClaudeWorkerReturnDeliveryV1 { readonly receiptDigest: string; readonly decision: string; readonly resumeToken: string | null }
 export interface ClaudeWorkerReturnRegistrationV1 {
@@ -211,16 +233,50 @@ export interface ClaudeNativeContributionRuntimeOptionsV1 {
   readonly retained: ClaudeRetainedDeliveryAuthorityV1;
   readonly attemptContexts?: readonly ClaudeNativeAttemptContextV1[];
   readonly initialAttemptCapabilityReference?: string;
+  readonly sessionStateDirectory?: string;
 }
 export interface ClaudeNativeBranchRegistrationV1 {
   readonly entryId: string;
   readonly previousSessionFile: string;
   readonly attemptCapabilityReference: string;
 }
+export interface ClaudeNativeSessionStartV1 {
+  readonly sessionId: string;
+  readonly source: "startup" | "resume" | "fork" | "clear" | "compact";
+  readonly previousSessionId?: string;
+  readonly branchEntryId?: string;
+}
+export interface ClaudeNativeWorkerReturnInputV1 {
+  readonly attemptCapabilityReference: string;
+  readonly output: { readonly digest: string; readonly mediaType: string; readonly byteLength: number };
+  readonly evidence: { readonly digest: string; readonly mediaType: string; readonly byteLength: number };
+}
+export interface ClaudeNativeWorkerReturnResultV1 { readonly workerReturn: WorkerReturnV1; readonly delivery: ClaudeWorkerReturnDeliveryV1 }
+export interface ClaudeNativeWorkerReturnBatchEvidenceV1 {
+  readonly workspaceId: string;
+  readonly runId: string;
+  readonly taskId: string;
+  readonly attemptId: string;
+  readonly generation: number;
+  readonly decision: string;
+  readonly receiptDigest: string;
+  readonly proposalDigest: string;
+  readonly outputDigest: string;
+  readonly evidenceDigests: readonly string[];
+}
+export interface ClaudeNativeWorkerReturnBatchResultV1 {
+  readonly schemaVersion: "HorsenessClaudeWorkerReturnBatchResultV1";
+  readonly sessionId: string | null;
+  readonly results: readonly ClaudeNativeWorkerReturnBatchEvidenceV1[];
+  readonly canonicalAcceptedAdvance: { readonly workspaceId: string; readonly runId: string; readonly revision: number; readonly stateHash: string };
+}
+
 export interface ClaudeNativeContributionRuntimeV1 {
-  deliver(capabilityReference: string, output: { readonly digest: string; readonly mediaType: string; readonly byteLength: number }, evidence: { readonly digest: string; readonly mediaType: string; readonly byteLength: number }): Promise<{ workerReturn: WorkerReturnV1; delivery: ClaudeWorkerReturnDeliveryV1 }>;
+  deliver(capabilityReference: string, output: ClaudeNativeWorkerReturnInputV1["output"], evidence: ClaudeNativeWorkerReturnInputV1["evidence"], sessionId?: string): Promise<ClaudeNativeWorkerReturnResultV1>;
+  deliverBatch(inputs: readonly ClaudeNativeWorkerReturnInputV1[], sessionId?: string): Promise<ClaudeNativeWorkerReturnBatchResultV1>;
   state(): Promise<{ readonly attemptKeys: readonly string[] }>;
   contextForAttempt(): Promise<ClaudeNativeAttemptContextV1 | null>;
+  registerSessionStart(start: ClaudeNativeSessionStartV1): Promise<ClaudeNativeAttemptContextV1>;
   registerBranch(registration: ClaudeNativeBranchRegistrationV1): void;
   beforeBranch(entryId: string): Promise<void>;
   activateSession(previousSessionFile: string | null): Promise<{ readonly forkPinDigest: string } | null>;
@@ -279,6 +335,37 @@ function assertCanonicalTuple(record: ClaudeRetainedDeliveryV1, receipt: Attempt
   const publications = record.workerReturn.publications;
   if (record.workerReturn.receipt.receiptDigest !== receipt.receiptDigest || publications.length !== 2 || publications[0]?.kind !== "artifact" || publications[0].digest !== outputDigest || publications[1]?.kind !== "evidence" || publications[1].digest !== evidenceDigest) throw new Error("replayed Claude worker return substituted the canonical output/evidence tuple");
 }
+type ClaudeSessionBindingStateV1 = {
+  readonly schemaVersion: "ClaudeSessionBindingStateV1";
+  readonly sessions: Readonly<Record<string, string>>;
+  readonly branches: Readonly<Record<string, ClaudeNativeBranchRegistrationV1>>;
+};
+function createSessionBindingStore(directory: string | undefined) {
+  if (directory === undefined || !isAbsolute(directory)) throw new Error("Claude session binding state directory must be absolute");
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const root = realpathSync(directory);
+  const path = join(root, "session-bindings.json");
+  const read = (): ClaudeSessionBindingStateV1 => {
+    try {
+      const details = lstatSync(path);
+      if (details.isSymbolicLink() || !details.isFile() || (details.mode & 0o077) !== 0) throw new Error("Claude session binding state must be a private regular file");
+      const parsed = JSON.parse(readFileSync(path, "utf8")) as ClaudeSessionBindingStateV1;
+      if (parsed.schemaVersion !== "ClaudeSessionBindingStateV1" || parsed.sessions === null || parsed.branches === null) throw new Error("Claude session binding state is invalid");
+      return parsed;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { schemaVersion: "ClaudeSessionBindingStateV1", sessions: {}, branches: {} };
+      throw error;
+    }
+  };
+  const publish = (state: ClaudeSessionBindingStateV1) => {
+    const temporary = join(root, `.session-bindings.${process.pid}.${randomUUID()}.tmp`);
+    const descriptor = openSync(temporary, "wx", 0o600);
+    try { writeFileSync(descriptor, JSON.stringify(state), "utf8"); fsyncSync(descriptor); } finally { closeSync(descriptor); }
+    renameSync(temporary, path);
+    const rootDescriptor = openSync(root, "r"); try { fsyncSync(rootDescriptor); } finally { closeSync(rootDescriptor); }
+  };
+  return { read, publish };
+}
 export function createClaudeNativeContributionRuntimeV1(registrations: readonly ClaudeWorkerReturnRegistrationV1[], options: ClaudeNativeContributionRuntimeOptionsV1): ClaudeNativeContributionRuntimeV1 {
   if (options?.retained === undefined) throw new Error("Claude native contribution runtime requires a durable retained delivery authority");
   for (const registration of registrations) {
@@ -288,12 +375,16 @@ export function createClaudeNativeContributionRuntimeV1(registrations: readonly 
   const active = new Map<string, ClaudeWorkerReturnRegistrationV1>();
   const retained = options.retained;
   const contexts = new Map((options.attemptContexts ?? []).map(context => [context.attemptCapabilityReference, structuredClone(context)]));
-  const branchesByEntry = new Map<string, ClaudeNativeBranchRegistrationV1>();
-  const branchesBySession = new Map<string, ClaudeNativeBranchRegistrationV1>();
+  const sessionStore = createSessionBindingStore(options.sessionStateDirectory);
+  const persisted = sessionStore.read();
+  const branchesByEntry = new Map(Object.entries(persisted.branches));
+  const branchesBySession = new Map(Object.values(persisted.branches).map(branch => [branch.previousSessionFile, branch]));
+  const sessions = new Map(Object.entries(persisted.sessions));
   let selectedCapability = options.initialAttemptCapabilityReference ?? registrations[0]?.capabilityReference ?? null;
   let pendingBranch: ClaudeNativeBranchRegistrationV1 | null = null;
   let revoker: (() => Promise<void>) | null = null;
   let revoked = false;
+  const persistSessions = () => sessionStore.publish({ schemaVersion: "ClaudeSessionBindingStateV1", sessions: Object.fromEntries(sessions), branches: Object.fromEntries(branchesByEntry) });
   for (const registration of registrations) {
     const reference = parseCredentialReferenceV1({ schemaVersion: "1", kind: "host-reference", reference: registration.capabilityReference, scope: { workspaceId: registration.binding.workspaceId, adapterId: CLAUDE_ADAPTER_ID, purpose: "claude-attempt-return" } });
     if (reference.reference !== registration.binding.attemptCapability) throw new Error("Claude attempt capability reference does not match immutable binding");
@@ -301,7 +392,8 @@ export function createClaudeNativeContributionRuntimeV1(registrations: readonly 
     active.set(reference.reference, registration);
   }
   return Object.freeze({
-    async deliver(capabilityReference: string, output: { readonly digest: string; readonly mediaType: string; readonly byteLength: number }, evidence: { readonly digest: string; readonly mediaType: string; readonly byteLength: number }) {
+    async deliver(capabilityReference: string, output: { readonly digest: string; readonly mediaType: string; readonly byteLength: number }, evidence: { readonly digest: string; readonly mediaType: string; readonly byteLength: number }, sessionId?: string) {
+      if (sessionId !== undefined && sessions.get(sessionId) !== capabilityReference) throw new Error("Claude session capability substitution rejected");
       const registration = active.get(capabilityReference);
       if (registration === undefined) throw new Error("unknown or revoked Claude attempt capability reference");
       const key = attemptKey(registration.binding);
@@ -323,8 +415,49 @@ export function createClaudeNativeContributionRuntimeV1(registrations: readonly 
         return structuredClone({ workerReturn: record.workerReturn, delivery });
       });
     },
+    async deliverBatch(inputs: readonly ClaudeNativeWorkerReturnInputV1[], sessionId?: string) {
+      if (inputs.length !== 5 || new Set(inputs.map(input => input.attemptCapabilityReference)).size !== 5) throw new Error("Claude native worker return batch requires exactly five distinct scenario capabilities");
+      if (sessionId !== undefined && !sessions.has(sessionId)) throw new Error("Claude worker return batch session is unknown or unbound");
+      const results: ClaudeNativeWorkerReturnBatchEvidenceV1[] = [];
+      let canonicalAcceptedAdvance: ClaudeNativeWorkerReturnBatchResultV1["canonicalAcceptedAdvance"] | null = null;
+      for (const input of inputs) {
+        const result = await this.deliver(input.attemptCapabilityReference, input.output, input.evidence);
+        const { binding, receipt, proposal } = result.workerReturn;
+        results.push({ workspaceId: binding.workspaceId, runId: binding.runId, taskId: binding.taskId, attemptId: binding.attemptId, generation: binding.generation, decision: result.delivery.decision, receiptDigest: receipt.receiptDigest, proposalDigest: proposal.proposalDigest, outputDigest: receipt.outputDigest!, evidenceDigests: receipt.evidence.map(item => item.digest) });
+        if (result.delivery.decision === "accepted") {
+          const authority = active.get(input.attemptCapabilityReference)?.authority;
+          if (canonicalAcceptedAdvance !== null || authority?.canonicalAcceptedAdvance === undefined) throw new Error("Claude native worker return batch lacks one authoritative accepted canonical advance");
+          canonicalAcceptedAdvance = await authority.canonicalAcceptedAdvance();
+        }
+      }
+      if (canonicalAcceptedAdvance === null) throw new Error("Claude native worker return batch lacks one authoritative accepted canonical advance");
+      return structuredClone({ schemaVersion: "HorsenessClaudeWorkerReturnBatchResultV1" as const, sessionId: sessionId ?? null, results, canonicalAcceptedAdvance });
+    },
     async state() { return { attemptKeys: registrations.map(registration => attemptKey(registration.binding)).filter(key => retained.load(key) !== undefined) }; },
     async contextForAttempt() { if (revoked || selectedCapability === null) return null; const context = contexts.get(selectedCapability); return context === undefined ? null : structuredClone(context); },
+    async registerSessionStart(start: ClaudeNativeSessionStartV1) {
+      if (revoked || start.sessionId.length === 0) throw new Error("invalid Claude session start");
+      const existing = sessions.get(start.sessionId);
+      if (existing !== undefined) {
+        if (start.source === "startup" || (start.previousSessionId !== undefined && sessions.get(start.previousSessionId) !== existing)) throw new Error("Claude session binding substitution rejected");
+        const context = contexts.get(existing); if (context === undefined) throw new Error("Claude session references an unknown attempt capability"); return structuredClone(context);
+      }
+      let capability: string | undefined;
+      if (start.source === "startup") capability = selectedCapability ?? undefined;
+      else if (start.source === "fork") {
+        if (start.branchEntryId === undefined) throw new Error("Claude fork requires a pre-registered branch entry id");
+        const branch = branchesByEntry.get(start.branchEntryId);
+        if (branch === undefined) throw new Error("unknown Claude branch entry id");
+        if (start.previousSessionId !== branch.previousSessionFile || sessions.get(start.previousSessionId) === undefined) throw new Error("Claude branch source session does not match the immutable mapping");
+        capability = branch.attemptCapabilityReference;
+      } else {
+        if (start.branchEntryId !== undefined) throw new Error("Claude branch entry id is only valid for a fork session");
+        if (start.previousSessionId !== undefined) capability = sessions.get(start.previousSessionId);
+      }
+      if (capability === undefined || !active.has(capability) || !contexts.has(capability)) throw new Error("Claude session source is unknown or unbound");
+      sessions.set(start.sessionId, capability); selectedCapability = capability; persistSessions();
+      return structuredClone(contexts.get(capability)!);
+    },
     registerBranch(registration: ClaudeNativeBranchRegistrationV1) {
       if (revoked) throw new Error("Claude native contribution runtime is revoked");
       const { entryId, previousSessionFile, attemptCapabilityReference } = registration;
@@ -341,6 +474,7 @@ export function createClaudeNativeContributionRuntimeV1(registrations: readonly 
       const immutable = Object.freeze({ entryId, previousSessionFile, attemptCapabilityReference });
       branchesByEntry.set(entryId, immutable);
       branchesBySession.set(previousSessionFile, immutable);
+      persistSessions();
     },
     async beforeBranch(entryId: string) {
       if (revoked || typeof entryId !== "string" || entryId.length === 0) throw new Error("invalid Claude branch entry id");
@@ -362,9 +496,9 @@ export function createClaudeNativeContributionRuntimeV1(registrations: readonly 
       return context === undefined ? null : { forkPinDigest: context.binding.forkPinDigest };
     },
     registerRevoker(next: () => Promise<void>) { if (revoker !== null) throw new Error("Claude native grant revoker is already registered"); revoker = next; },
-    async revoke() { if (revoked) return; revoked = true; active.clear(); contexts.clear(); branchesByEntry.clear(); branchesBySession.clear(); selectedCapability = null; pendingBranch = null; const current = revoker; revoker = null; if (current !== null) await current(); else retained.close(); },
+    async revoke() { if (revoked) return; revoked = true; active.clear(); contexts.clear(); branchesByEntry.clear(); branchesBySession.clear(); sessions.clear(); selectedCapability = null; pendingBranch = null; persistSessions(); const current = revoker; revoker = null; if (current !== null) await current(); else retained.close(); },
     async sessionShutdown() { pendingBranch = null; },
-    async shutdown() { active.clear(); contexts.clear(); branchesByEntry.clear(); branchesBySession.clear(); selectedCapability = null; pendingBranch = null; retained.close(); },
+    async shutdown() { active.clear(); contexts.clear(); branchesByEntry.clear(); branchesBySession.clear(); sessions.clear(); selectedCapability = null; pendingBranch = null; retained.close(); },
   });
 }
 

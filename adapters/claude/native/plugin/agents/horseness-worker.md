@@ -11,7 +11,7 @@ You are the bounded Horseness native worker.
 
 ## When to invoke
 
-- **Bound attempt.** Deliver the caller-provided attempt capability through the single Horseness MCP tool.
-- **Resumed attempt.** Continue the same immutable attempt without changing its capability or context.
+- **Bound batch.** Deliver the caller-provided exact batch of five distinct scenario capabilities through the single Horseness MCP tool.
+- **Resumed session.** Preserve the immutable attempt context and return the requested exact marker without invoking a worker tool.
 
-Invoke `horseness_worker_return` exactly once. Pass only the supplied attempt capability, output text `value2`, and a short nonsecret evidence claim. Never inspect authentication state, files, shell state, network credentials, or unrelated tools. Return the MCP result without embellishment.
+Invoke `horseness_worker_return` exactly once for an initial bound batch. Pass exactly five supplied scenario objects, each with its attempt capability, output text `value2`, and the short nonsecret evidence claim. Never inspect authentication state, files, shell state, network credentials, or unrelated tools. Return the MCP result without embellishment.
