@@ -47,6 +47,7 @@ export const CLAUDE_INSTALL_CONTRIBUTIONS = Object.freeze(CLAUDE_NATIVE_PACKAGE_
 export interface ClaudeSubscriptionLiveReceiptV1 {
   readonly schemaVersion: "ClaudeSubscriptionLiveReceiptV1";
   readonly host: "claude";
+  readonly authMode: "existing-user-subscription-session";
   readonly hostVersion: string;
   readonly observedModel: string;
   readonly candidate: { readonly head: string; readonly tree: string };
@@ -59,7 +60,8 @@ export interface ClaudeSubscriptionLiveReceiptV1 {
 }
 export function validateClaudeSubscriptionLiveReceiptV1(value: ClaudeSubscriptionLiveReceiptV1): ClaudeSubscriptionLiveReceiptV1 {
   const bindingIdentities = value.bindings.map(item => `${item.workspaceId}:${item.runId}:${item.taskId}:${item.attemptId}:${item.generation}`);
-  if (value.schemaVersion !== "ClaudeSubscriptionLiveReceiptV1" || value.host !== "claude" || value.observedModel.length === 0 || value.candidate.head.length === 0 || value.candidate.tree.length === 0 || value.command.argv.length === 0 || value.bindings.length !== 5 || new Set(bindingIdentities).size !== 5 || value.provenance.contributions.length === 0 || value.timing.durationMs < 0 || value.terminal.reason.length === 0 || value.redactionAudit.passed !== true) throw new Error("CLAUDE_LIVE_RECEIPT_INVALID");
+  const authMode: unknown = value.authMode;
+  if (value.schemaVersion !== "ClaudeSubscriptionLiveReceiptV1" || value.host !== "claude" || authMode !== "existing-user-subscription-session" || value.observedModel.length === 0 || value.candidate.head.length === 0 || value.candidate.tree.length === 0 || value.command.argv.length === 0 || value.bindings.length !== 5 || new Set(bindingIdentities).size !== 5 || value.provenance.contributions.length === 0 || value.timing.durationMs < 0 || value.terminal.reason.length === 0 || value.redactionAudit.passed !== true) throw new Error("CLAUDE_LIVE_RECEIPT_INVALID");
   const digests = [value.command.digest, value.command.scenarioSetDigest, value.command.batchResponseDigest, value.provenance.archiveDigest, value.provenance.executableDigest, value.provenance.packageDigest, ...value.provenance.contributions.map(item => item.digest), ...value.bindings.flatMap(item => [item.forkPinDigest, item.contextManifestCoreDigest, item.attemptContextBindingDigest, item.receiptDigest, item.proposalDigest, item.outputDigest, ...item.evidenceDigests])];
   if (digests.some(digest => !/^(?:sha256:)?[a-f0-9]{64}$/.test(digest))) throw new Error("CLAUDE_LIVE_RECEIPT_DIGEST_INVALID");
   const observedContributions = value.provenance.contributions.map(observedClaudeContribution);

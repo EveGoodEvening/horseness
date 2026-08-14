@@ -283,15 +283,40 @@ try {
   await new Promise<void>((resolveClose, reject) => server!.close(error => error ? reject(error) : resolveClose())); server = undefined;
   for (const scenario of scenarioAuthorities) scenario.authority.close();
   revokedAcceptedRuntime = runtime;
-  await runtime.revoke();
   const uninstallState = join(root, "horseness-uninstall.json");
-  const persistUninstall = async (state: string) => { const handle = await open(uninstallState, "w", 0o600); try { await handle.writeFile(JSON.stringify({ schemaVersion: "ClaudeUninstallStateV1", state, killSwitch: true, capability: "revoked", discoveryPath: "temp-owned-plugin" })); await handle.sync(); } finally { await handle.close(); } };
-  await persistUninstall("kill_switch_written");
   const disabledPlugin = join(root, "plugin.disabled");
-  await rename(plugin, disabledPlugin);
-  const rootHandle = await open(root, "r"); try { await rootHandle.sync(); } finally { await rootHandle.close(); }
-  await persistUninstall("discovery_disabled");
-  await persistUninstall("authority_revoked");
+  type UninstallPhase = "kill_switch_written" | "discovery_disabled" | "authority_revoked" | "complete";
+  type UninstallState = { readonly schemaVersion: "ClaudeUninstallStateV1"; readonly state: UninstallPhase; readonly killSwitch: true; readonly capability: "revoked"; readonly discoveryPath: "temp-owned-plugin" };
+  const syncRoot = async () => { const handle = await open(root, "r"); try { await handle.sync(); } finally { await handle.close(); } };
+  const readUninstall = async (): Promise<UninstallState | null> => {
+    try { return JSON.parse(await readFile(uninstallState, "utf8")) as UninstallState; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+  };
+  const persistUninstall = async (state: UninstallPhase) => {
+    const temporary = join(root, `.horseness-uninstall.${randomBytes(8).toString("hex")}.tmp`);
+    const handle = await open(temporary, "wx", 0o600);
+    try { await handle.writeFile(JSON.stringify({ schemaVersion: "ClaudeUninstallStateV1", state, killSwitch: true, capability: "revoked", discoveryPath: "temp-owned-plugin" } satisfies UninstallState)); await handle.sync(); }
+    finally { await handle.close(); }
+    await rename(temporary, uninstallState);
+    await syncRoot();
+  };
+  const discoverablePluginAfterRestart = async (): Promise<string | undefined> => (await readUninstall())?.killSwitch === true ? undefined : plugin;
+  const injectCrash = (phase: UninstallPhase, crashAfter: UninstallPhase | undefined) => { if (phase === crashAfter) throw new Error(`CLAUDE_UNINSTALL_CRASH_AFTER_${phase.toUpperCase()}`); };
+  const resumeUninstall = async (crashAfter?: UninstallPhase) => {
+    let persisted = await readUninstall();
+    if (persisted === null) { await persistUninstall("kill_switch_written"); injectCrash("kill_switch_written", crashAfter); persisted = await readUninstall(); }
+    if (persisted?.state === "kill_switch_written") { await rename(plugin, disabledPlugin); await syncRoot(); await persistUninstall("discovery_disabled"); injectCrash("discovery_disabled", crashAfter); persisted = await readUninstall(); }
+    if (persisted?.state === "discovery_disabled") { await runtime.revoke(); await persistUninstall("authority_revoked"); injectCrash("authority_revoked", crashAfter); }
+  };
+  await assert.rejects(() => resumeUninstall("kill_switch_written"), /CRASH_AFTER_KILL_SWITCH_WRITTEN/);
+  assert.equal(await discoverablePluginAfterRestart(), undefined, "CLAUDE_UNINSTALL_KILL_SWITCH_DISCOVERY_REMAINS");
+  assert.equal((await readUninstall())?.state, "kill_switch_written");
+  await assert.rejects(() => resumeUninstall("discovery_disabled"), /CRASH_AFTER_DISCOVERY_DISABLED/);
+  assert.equal(await discoverablePluginAfterRestart(), undefined, "CLAUDE_UNINSTALL_RESTART_DISCOVERY_REMAINS");
+  assert.equal((await readUninstall())?.state, "discovery_disabled");
+  await assert.rejects(() => resumeUninstall("authority_revoked"), /CRASH_AFTER_AUTHORITY_REVOKED/);
+  assert.equal((await readUninstall())?.state, "authority_revoked");
+  await resumeUninstall();
   if (revokedAcceptedRuntime === null) throw new Error("CLAUDE_UNINSTALL_RUNTIME_MISSING");
   await assert.rejects(() => revokedAcceptedRuntime!.deliver("claude-attempt-accepted", { digest: sha(OUTPUT_TEXT), mediaType: "text/plain", byteLength: Buffer.byteLength(OUTPUT_TEXT) }, { digest: sha(EVIDENCE_CLAIM), mediaType: "application/json", byteLength: Buffer.byteLength(EVIDENCE_CLAIM) }), /unknown or revoked/);
   smokeStage = "uninstall-native-restart";
@@ -306,7 +331,7 @@ try {
   const gitTree = spawnSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: resolve(fileURLToPath(new URL("../../..", import.meta.url))), encoding: "utf8", timeout: 5_000, maxBuffer: 4096 });
   if (gitHead.status !== 0 || gitTree.status !== 0) throw new Error("CLAUDE_CANDIDATE_PROVENANCE_UNAVAILABLE");
   const finishedAtMs = Date.now();
-  const receipt = validateClaudeSubscriptionLiveReceiptV1({ schemaVersion: "ClaudeSubscriptionLiveReceiptV1", host: "claude", hostVersion: fixture.artifact.version, observedModel: String(invocation.init.model ?? invocation.result.model ?? ""), candidate: { head: gitHead.stdout.trim(), tree: gitTree.stdout.trim() }, command: { argv: commandArgv, digest: sha(JSON.stringify(commandArgv)), scenarioSetDigest: sha(JSON.stringify({ schemaVersion: "HorsenessClaudeExactScenarioBatchV1", capabilityReferences: scenarioInputs.map(item => item.attemptCapabilityReference) })), batchResponseDigest: sha(JSON.stringify(batchResult)) }, provenance: { archiveDigest: fixture.artifact.archiveSha256, archiveIdentity: fixture.artifact.identity, memberPath: fixture.artifact.executable.path, executableDigest: fixture.artifact.executable.sha256, packageDigest: observedPackageDigest, contributions: observedContributions.map(({ name, digest }) => ({ name, digest })) }, bindings: liveBindings, redactionAudit: { passed: true, prohibitedFields: ["account", "email", "subscriptionId", "credential", "authorization", "token", "cookie", "authPath", "tokenFingerprint"] }, timing: { startedAt: new Date(smokeStartedAtMs).toISOString(), finishedAt: new Date(finishedAtMs).toISOString(), durationMs: finishedAtMs - smokeStartedAtMs }, terminal: { result: "succeeded", reason: "CLAUDE_LIVE_SMOKE_SUCCEEDED" } });
+  const receipt = validateClaudeSubscriptionLiveReceiptV1({ schemaVersion: "ClaudeSubscriptionLiveReceiptV1", host: "claude", authMode: "existing-user-subscription-session", hostVersion: fixture.artifact.version, observedModel: String(invocation.init.model ?? invocation.result.model ?? ""), candidate: { head: gitHead.stdout.trim(), tree: gitTree.stdout.trim() }, command: { argv: commandArgv, digest: sha(JSON.stringify(commandArgv)), scenarioSetDigest: sha(JSON.stringify({ schemaVersion: "HorsenessClaudeExactScenarioBatchV1", capabilityReferences: scenarioInputs.map(item => item.attemptCapabilityReference) })), batchResponseDigest: sha(JSON.stringify(batchResult)) }, provenance: { archiveDigest: fixture.artifact.archiveSha256, archiveIdentity: fixture.artifact.identity, memberPath: fixture.artifact.executable.path, executableDigest: fixture.artifact.executable.sha256, packageDigest: observedPackageDigest, contributions: observedContributions.map(({ name, digest }) => ({ name, digest })) }, bindings: liveBindings, redactionAudit: { passed: true, prohibitedFields: ["account", "email", "subscriptionId", "credential", "authorization", "token", "cookie", "authPath", "tokenFingerprint"] }, timing: { startedAt: new Date(smokeStartedAtMs).toISOString(), finishedAt: new Date(finishedAtMs).toISOString(), durationMs: finishedAtMs - smokeStartedAtMs }, terminal: { result: "succeeded", reason: "CLAUDE_LIVE_SMOKE_SUCCEEDED" } });
   process.stdout.write(`${JSON.stringify(receipt)}\n`);
   process.stdout.write(`${JSON.stringify({ schemaVersion: "ClaudeHostSmokeResultV1", host: "claude", version: fixture.artifact.version, authMode: "existing-user-subscription-session", executableDigest: fixture.artifact.executable.sha256, packageDigest: observedPackageDigest, receiptDigest: acceptedReceipt, decisions: observed, canonicalRevision: acceptedRevision, canonicalDocument: acceptedDocument, sessions: { resumed: acceptedSession, forked: forkSession }, bounds: { scenarios: 5, providerInvocations: 4, workerToolCalls: 1, maxToolCallsPerInvocation: 1, maxTurns: 3, maxContextBytes: 4096, maxOutputBytes: 1024, maxEvidenceBytes: 1024, wallClockMs: MAX_WALL_MS }, lifecycle: { resume: "same-session-marker-no-worker-tool", fork: "new-session-second-fork-pin-marker-no-worker-tool", uninstallDiscovery: "minimal-native-init-disabled", horsenessGrant: "revoked", claudeLogout: "not-performed" } })}\n`);
 } catch (error) {
