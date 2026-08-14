@@ -49,7 +49,7 @@ export interface CodexSubscriptionLiveReceiptV1 {
   readonly observedModel: string;
   readonly candidate: { readonly head: string; readonly tree: string };
   readonly command: { readonly argv: readonly string[]; readonly digest: string; readonly scenarioSetDigest: string; readonly batchResponseDigest: string };
-  readonly provenance: { readonly archiveDigest: string; readonly archiveIdentity: string; readonly memberPath: string; readonly executableDigest: string; readonly packageDigest: string; readonly contributions: readonly { readonly name: string; readonly digest: string }[]; readonly nativePlugin: { readonly observedPluginId: string; readonly nativeItemPluginId: string; readonly resolvedDeclarationDigest: string } };
+  readonly provenance: { readonly archiveDigest: string; readonly archiveIdentity: string; readonly memberPath: string; readonly executableDigest: string; readonly packageDigest: string; readonly contributions: readonly { readonly name: string; readonly digest: string }[]; readonly nativePlugin: { readonly observedPluginId: string; readonly nativeItemPluginId: string; readonly installedVersion: string; readonly installedPackageDigest: string; readonly installedContributions: readonly CodexNativeContributionDigestV1[]; readonly resolvedDeclarationDigest: string } };
   readonly bindings: readonly { readonly workspaceId: string; readonly runId: string; readonly taskId: string; readonly attemptId: string; readonly generation: number; readonly forkPinDigest: string; readonly contextManifestCoreDigest: string; readonly attemptContextBindingDigest: string; readonly receiptDigest: string; readonly proposalDigest: string; readonly outputDigest: string; readonly evidenceDigests: readonly string[] }[];
   readonly redactionAudit: { readonly passed: true; readonly prohibitedFields: readonly string[] };
   readonly timing: { readonly startedAt: string; readonly finishedAt: string; readonly durationMs: number };
@@ -57,12 +57,15 @@ export interface CodexSubscriptionLiveReceiptV1 {
 }
 export function validateCodexSubscriptionLiveReceiptV1(value: CodexSubscriptionLiveReceiptV1): CodexSubscriptionLiveReceiptV1 {
   const bindingIdentities = value.bindings.map(item => `${item.workspaceId}:${item.runId}:${item.taskId}:${item.attemptId}:${item.generation}`);
-  const authMode: unknown = value.authMode;
-  if (value.schemaVersion !== "CodexSubscriptionLiveReceiptV1" || value.host !== "codex" || authMode !== "existing-user-subscription-session" || value.observedModel.length === 0 || value.candidate.head.length === 0 || value.candidate.tree.length === 0 || value.command.argv.length === 0 || value.bindings.length !== 5 || new Set(bindingIdentities).size !== 5 || value.provenance.contributions.length === 0 || value.provenance.nativePlugin.observedPluginId.length === 0 || value.provenance.nativePlugin.nativeItemPluginId !== value.provenance.nativePlugin.observedPluginId || value.timing.durationMs < 0 || value.terminal.reason.length === 0 || value.redactionAudit.passed !== true) throw new Error("CODEX_LIVE_RECEIPT_INVALID");
-  const digests = [value.command.digest, value.command.scenarioSetDigest, value.command.batchResponseDigest, value.provenance.archiveDigest, value.provenance.executableDigest, value.provenance.packageDigest, value.provenance.nativePlugin.resolvedDeclarationDigest, ...value.provenance.contributions.map(item => item.digest), ...value.bindings.flatMap(item => [item.forkPinDigest, item.contextManifestCoreDigest, item.attemptContextBindingDigest, item.receiptDigest, item.proposalDigest, item.outputDigest, ...item.evidenceDigests])];
+  if (value.schemaVersion !== "CodexSubscriptionLiveReceiptV1" || value.host !== "codex" || value.authMode !== "existing-user-subscription-session" || value.observedModel.length === 0 || value.candidate.head.length === 0 || value.candidate.tree.length === 0 || value.command.argv.length === 0 || value.bindings.length !== 5 || new Set(bindingIdentities).size !== 5 || value.provenance.contributions.length === 0 || value.provenance.nativePlugin.observedPluginId.length === 0 || value.provenance.nativePlugin.nativeItemPluginId !== value.provenance.nativePlugin.observedPluginId || !/^0\.1\.0\+horseness\.[a-f0-9]{16}$/.test(value.provenance.nativePlugin.installedVersion) || value.timing.durationMs < 0 || value.timing.durationMs > 120_000 || Date.parse(value.timing.finishedAt) - Date.parse(value.timing.startedAt) !== value.timing.durationMs || value.terminal.result !== "succeeded" || value.redactionAudit.passed !== true) throw new Error("CODEX_LIVE_RECEIPT_INVALID");
+  const digests = [value.command.digest, value.command.scenarioSetDigest, value.command.batchResponseDigest, value.provenance.archiveDigest, value.provenance.executableDigest, value.provenance.packageDigest, value.provenance.nativePlugin.installedPackageDigest, value.provenance.nativePlugin.resolvedDeclarationDigest, ...value.provenance.contributions.map(item => item.digest), ...value.provenance.nativePlugin.installedContributions.map(item => item.digest), ...value.bindings.flatMap(item => [item.forkPinDigest, item.contextManifestCoreDigest, item.attemptContextBindingDigest, item.receiptDigest, item.proposalDigest, item.outputDigest, ...item.evidenceDigests])];
   if (digests.some(digest => !/^(?:sha256:)?[a-f0-9]{64}$/.test(digest))) throw new Error("CODEX_LIVE_RECEIPT_DIGEST_INVALID");
   const observedContributions = value.provenance.contributions.map(observedCodexContribution);
-  if (observedContributions.some(item => item === null) || JSON.stringify(value.provenance.contributions) !== JSON.stringify(CODEX_NATIVE_CONTRIBUTIONS.map(({ name, digest }) => ({ name, digest }))) || value.provenance.packageDigest !== codexNativePackageDigestV1(observedContributions as CodexNativeContributionDigestV1[]) || value.provenance.packageDigest !== CODEX_NATIVE_PACKAGE_METADATA.packageDigest) throw new Error("CODEX_LIVE_RECEIPT_PROVENANCE_MISMATCH");
+  const installedIdentityMatches = value.provenance.nativePlugin.installedContributions.every((item, index) => {
+    const shipped = CODEX_NATIVE_CONTRIBUTIONS[index];
+    return shipped !== undefined && item.name === shipped.name && item.kind === shipped.kind && (item.name === "plugin/.codex-plugin/plugin.json" || item.digest === shipped.digest);
+  });
+  if (observedContributions.some(item => item === null) || JSON.stringify(value.provenance.contributions) !== JSON.stringify(CODEX_NATIVE_CONTRIBUTIONS.map(({ name, digest }) => ({ name, digest }))) || value.provenance.packageDigest !== codexNativePackageDigestV1(observedContributions as CodexNativeContributionDigestV1[]) || value.provenance.packageDigest !== CODEX_NATIVE_PACKAGE_METADATA.packageDigest || value.provenance.nativePlugin.installedVersion !== `0.1.0+horseness.${value.provenance.packageDigest.slice("sha256:".length, "sha256:".length + 16)}` || value.provenance.nativePlugin.installedContributions.length !== CODEX_NATIVE_CONTRIBUTIONS.length || !installedIdentityMatches || value.provenance.nativePlugin.installedPackageDigest !== codexNativePackageDigestV1(value.provenance.nativePlugin.installedContributions)) throw new Error("CODEX_LIVE_RECEIPT_PROVENANCE_MISMATCH");
   if (JSON.stringify(value).match(/"(?:account|email|subscriptionId|credential|authorization|token|cookie|authPath|tokenFingerprint)"\s*:/i)) throw new Error("CODEX_LIVE_RECEIPT_REDACTION_FAILED");
   return Object.freeze(structuredClone(value));
 }
@@ -391,6 +394,23 @@ function createSessionBindingStore(directory: string | undefined) {
   };
   return { read, publish };
 }
+const CODEX_UNINSTALL_PHASES = ["kill_switch_written", "discovery_disabled", "authority_revoked", "complete"] as const;
+function readActiveCodexKillSwitch(path: string): boolean {
+  if (!isAbsolute(path)) throw new Error("CODEX_KILL_SWITCH_PATH_INVALID");
+  const parent = dirname(path);
+  const parentStat = lstatSync(parent);
+  if (!parentStat.isDirectory() || parentStat.isSymbolicLink() || (parentStat.mode & 0o077) !== 0 || realpathSync(parent) !== parent) throw new Error("CODEX_KILL_SWITCH_PARENT_INVALID");
+  let fileStat;
+  try { fileStat = lstatSync(path); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+  if (!fileStat.isFile() || fileStat.isSymbolicLink() || (fileStat.mode & 0o077) !== 0 || realpathSync(path) !== path) throw new Error("CODEX_KILL_SWITCH_FILE_INVALID");
+  const value = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+  const keys = Object.keys(value).sort();
+  const expectedKeys = ["installedPluginRoot", "killSwitch", "marketplaceName", "pluginId", "schemaVersion", "state"].sort();
+  if (JSON.stringify(keys) !== JSON.stringify(expectedKeys) || value.schemaVersion !== "CodexUninstallStateV1" || value.killSwitch !== true || value.pluginId !== "horseness-codex@horseness-c18" || value.marketplaceName !== "horseness-c18" || !CODEX_UNINSTALL_PHASES.includes(value.state as typeof CODEX_UNINSTALL_PHASES[number]) || typeof value.installedPluginRoot !== "string" || !isAbsolute(value.installedPluginRoot)) throw new Error("CODEX_KILL_SWITCH_JOURNAL_INVALID");
+  return true;
+}
+
 export function createCodexNativeContributionRuntimeV1(registrations: readonly CodexWorkerReturnRegistrationV1[], options: CodexNativeContributionRuntimeOptionsV1): CodexNativeContributionRuntimeV1 {
   if (options?.retained === undefined) throw new Error("Codex native contribution runtime requires a durable retained delivery authority");
   for (const registration of registrations) {
@@ -413,8 +433,7 @@ export function createCodexNativeContributionRuntimeV1(registrations: readonly C
   const assertEnabled = () => {
     if (revoked) throw new Error("Codex native contribution runtime is revoked");
     if (options.killSwitchPath === undefined) return;
-    try { const value = JSON.parse(readFileSync(options.killSwitchPath, "utf8")) as { killSwitch?: unknown }; if (value.killSwitch === true) throw new Error("Codex native contribution kill switch is active"); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    if (readActiveCodexKillSwitch(options.killSwitchPath)) throw new Error("Codex native contribution kill switch is active");
   };
   const persistSessions = () => sessionStore.publish({ schemaVersion: "CodexSessionBindingStateV1", sessions: Object.fromEntries(sessions), branches: Object.fromEntries(branchesByEntry), claims: Object.fromEntries(claims) });
   for (const registration of registrations) {
