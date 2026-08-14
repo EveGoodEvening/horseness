@@ -364,6 +364,8 @@ The effective C20 ownership is exactly the C20 row in the round-three ownership 
 
 Command 8 is an externally produced, candidate-SHA-bound three-OS evidence gate using the C20 v2 profile above. Repository implementation may create the workflow and verifier, but unavailable macOS or Windows execution leaves C20 blocked and not-started/pending evidence; it is not a skip, reduced success, hermetic substitution, or permission to complete the chunk. The user-directed C13 receipt waiver was expressly C13-only and creates no C20 precedent.
 
+Independent review of this C20 planning correction completed cleanly after all actionable findings were resolved; ADR 0007 and this correction are accepted for implementation.
+
 ### Unified C22-C25 external-effect protocol
 
 C22-C25 all own `docs/publication-journal/**` and their append-only side-effect receipt namespace. Before KMS signing, retention-locked upload, registry/release-asset/tag/channel/pointer mutation, exact-public verification-state recording, promotion, or announcement, the current attempt integrates a signed intent. Recovery always performs lookup first; exact digest integrates observed/reconciled, definite absence permits only an idempotent request with the same key, ambiguity blocks, and mismatch records abandoned/revoked. Intermediate receipt commits contain no source changes, bind claim attempt/candidate tree/operation ID/prior journal and checkpoint heads, and the final ordinary receipt binds the complete side-effect head.

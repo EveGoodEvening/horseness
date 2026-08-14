@@ -1,7 +1,7 @@
 # ADR 0007: Neutral signed install bundles
 
 ## Status
-Proposed as the C20 pre-claim architecture correction; pending independent review and integration.
+Accepted.
 
 ## Context
 C20 must install the four native host contributions, but `packages/installer` is provider-neutral core and cannot depend on adapter packages. The completed adapters expose contribution metadata and bytes, while the signed release train is the authority that can bind those bytes to supported host/platform tuples. C20 also requires exact cross-platform target ownership, a genuinely non-mutating doctor, and a top-level bootstrap that can compose installer and daemon public APIs.
