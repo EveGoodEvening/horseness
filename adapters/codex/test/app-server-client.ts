@@ -1,13 +1,39 @@
-import { createHash } from "node:crypto";
-import { mkdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { mkdir, readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
 const MAX_WIRE_BYTES = 4 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 120_000;
 export const CODEX_MCP_SERVER = "horseness-worker";
 export const CODEX_MCP_TOOL = "horseness_worker_return";
 export const CODEX_MODEL_TOOL = "mcp__horseness-worker__horseness_worker_return";
+const SAFE_ENVIRONMENT_KEYS = ["HOME", "CODEX_HOME", "LANG", "LC_ALL", "TZ", "NO_COLOR", "CODEX_DISABLE_UPDATE_CHECK"] as const;
+const HORSENESS_MCP_ENVIRONMENT_KEYS = ["HORSENESS_CODEX_RUNTIME_SOCKET", "HORSENESS_CODEX_RUNTIME_NONCE", "HORSENESS_CODEX_THREAD_CLAIM"] as const;
+const ALLOWED_ENVIRONMENT_KEYS: Readonly<Record<string, true>> = Object.fromEntries(["PATH", "TMPDIR", "TMP", "TEMP", ...SAFE_ENVIRONMENT_KEYS, ...HORSENESS_MCP_ENVIRONMENT_KEYS].map(key => [key, true]));
+export function codexNativeEnvironment(binary: string, temporaryDirectory: string, source: NodeJS.ProcessEnv, mcp?: { socket: string; nonce: string; threadClaim: string }): NodeJS.ProcessEnv {
+  if (source.HOME === undefined || source.HOME.length === 0) throw new Error("CODEX_NATIVE_HOME_REQUIRED");
+  const environment: NodeJS.ProcessEnv = {
+    PATH: [...new Set([dirname(binary), dirname(process.execPath)])].join(":"),
+    HOME: source.HOME,
+    CODEX_HOME: source.CODEX_HOME ?? join(source.HOME, ".codex"),
+    TMPDIR: temporaryDirectory,
+    TMP: temporaryDirectory,
+    TEMP: temporaryDirectory,
+  };
+  for (const key of SAFE_ENVIRONMENT_KEYS) if (source[key] !== undefined) environment[key] = source[key];
+  if (mcp !== undefined) {
+    environment.HORSENESS_CODEX_RUNTIME_SOCKET = mcp.socket;
+    environment.HORSENESS_CODEX_RUNTIME_NONCE = mcp.nonce;
+    environment.HORSENESS_CODEX_THREAD_CLAIM = mcp.threadClaim;
+  }
+  return environment;
+}
+export function assertSafeCodexEnvironment(environment: NodeJS.ProcessEnv): void {
+  for (const key of Object.keys(environment)) if (ALLOWED_ENVIRONMENT_KEYS[key] !== true) throw new Error(`CODEX_NATIVE_ENVIRONMENT_KEY_FORBIDDEN_${key}`);
+  for (const key of Object.keys(environment)) if (/(?:SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|AUTHORIZATION|COOKIE|API_KEY|ACCESS_KEY|PRIVATE_KEY|CLIENT_SECRET|PROXY)/i.test(key)) throw new Error(`CODEX_NATIVE_ENVIRONMENT_SECRET_KEY_FORBIDDEN_${key}`);
+}
 
 type JsonObject = Record<string, unknown>;
 type Pending = { resolve(value: unknown): void; reject(error: Error): void; timer: NodeJS.Timeout };
@@ -105,6 +131,10 @@ export class CodexAppServerClient {
   }
 
   stderr(): string { return this.#stderr; }
+  observedEnvironment(): Readonly<Record<string, string>> {
+    const bytes = readFileSync(`/proc/${this.#child.pid}/environ`);
+    return Object.freeze(Object.fromEntries(bytes.toString("utf8").split("\0").filter(Boolean).map(entry => { const separator = entry.indexOf("="); return [entry.slice(0, separator), entry.slice(separator + 1)]; })));
+  }
 
   #send(message: JsonObject): void { this.#child.stdin.write(`${JSON.stringify(message)}\n`); }
 
@@ -150,21 +180,13 @@ const responseObject = (value: unknown, label: string): JsonObject => {
   return value as JsonObject;
 };
 
-export const threadConfig = (serverPath: string, socketPath: string, nonce: string, threadClaim: string): JsonObject => ({
-  mcp_servers: {
-    [CODEX_MCP_SERVER]: {
-      command: process.execPath,
-      args: [serverPath],
-      env: { HORSENESS_CODEX_RUNTIME_SOCKET: socketPath, HORSENESS_CODEX_RUNTIME_NONCE: nonce, HORSENESS_CODEX_THREAD_CLAIM: threadClaim },
-      startup_timeout_sec: 10,
-      tool_timeout_sec: 20,
-      enabled: true,
-    },
-  },
-});
 
 export async function waitForMcpReady(client: CodexAppServerClient, threadId: string): Promise<JsonObject> {
-  await client.waitFor(message => message.method === "mcpServer/startupStatus/updated" && responseObject(message.params, "MCP_NOTIFICATION").threadId === threadId && responseObject(message.params, "MCP_NOTIFICATION").name === CODEX_MCP_SERVER && responseObject(message.params, "MCP_NOTIFICATION").status === "ready", "MCP_READY", 20_000);
+  await client.waitFor(message => {
+    if (message.method !== "mcpServer/startupStatus/updated") return false;
+    const params = responseObject(message.params, "MCP_NOTIFICATION");
+    return params.threadId === threadId && params.name === CODEX_MCP_SERVER && params.status === "ready";
+  }, "MCP_READY", 20_000);
   const inventory = responseObject(await client.request("mcpServerStatus/list", { threadId, detail: "full" }), "MCP_INVENTORY");
   const servers = inventory.data;
   if (!Array.isArray(servers)) throw new Error("CODEX_NATIVE_INVENTORY_INVALID");

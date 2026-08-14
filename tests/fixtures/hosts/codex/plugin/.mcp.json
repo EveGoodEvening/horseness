@@ -2,7 +2,9 @@
   "mcpServers": {
     "horseness-worker": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/servers/horseness-worker.mjs"]
+      "cwd": ".",
+      "args": ["servers/horseness-worker.mjs"],
+      "env_vars": ["HORSENESS_CODEX_RUNTIME_SOCKET", "HORSENESS_CODEX_RUNTIME_NONCE", "HORSENESS_CODEX_THREAD_CLAIM"]
     }
   }
 }

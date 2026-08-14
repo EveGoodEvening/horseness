@@ -13,7 +13,7 @@ import { SQLiteAuthority } from "@horseness/store-sqlite";
 import type { BoundAdapterOperationV1, WorkerAdapterV1, WorkerReturnV1 } from "@horseness/protocol";
 import type { WorkerReturnClientV1 } from "@horseness/adapter-kit";
 import { acquireUpstreamArtifact, verifyOfficialValidation, type C11HostFixtureV1 } from "./c11-upstream-artifact.mjs";
-import { CODEX_MCP_SERVER, CODEX_MCP_TOOL, CodexAppServerClient, observeTurn, threadConfig, validatePinnedSchemas, waitForMcpReady, type CodexTurnObservation } from "./app-server-client.js";
+import { CODEX_MCP_SERVER, CODEX_MCP_TOOL, CodexAppServerClient, assertSafeCodexEnvironment, codexNativeEnvironment, observeTurn, validatePinnedSchemas, waitForMcpReady, type CodexTurnObservation } from "./app-server-client.js";
 import { CODEX_ADAPTER_ID, CODEX_NATIVE_PACKAGE_METADATA, codexDoctorV1, codexNativePackageDigestV1, createCodexAdapterV1, createCodexNativeContributionRuntimeV1, createCodexRetainedDeliveryAuthorityV1, validateCodexSubscriptionLiveReceiptV1, type CodexNativeAttemptV1, type CodexNativeContributionRuntimeV1, type CodexNativeRuntimeV1, type CodexNativeWorkerReturnBatchEvidenceV1, type CodexNativeWorkerReturnBatchResultV1, type CodexWorkerReturnRegistrationV1, type CodexSubscriptionLiveReceiptV1 } from "../src/index.js";
 
 const MAX_WALL_MS = 120_000;
@@ -59,8 +59,9 @@ async function runTurn(client: CodexAppServerClient, threadId: string, skillPath
   const observation = await observeTurn(client, threadId, {
     additionalContext: { "horseness-bound-attempt": { kind: "application", value: context } },
     input: [
+      { type: "mention", name: "horseness-codex", path: "plugin://horseness-codex@horseness-c18" },
       { type: "skill", name: "horseness-worker", path: skillPath },
-      { type: "text", text: prompt, text_elements: [] },
+      { type: "text", text: `@horseness-codex ${prompt}`, text_elements: [] },
     ],
   });
   let batchResult: CodexNativeWorkerReturnBatchResultV1 | null = null;
@@ -165,9 +166,13 @@ try {
   await writeFile(marketplaceManifest, JSON.stringify({ name: "horseness-c18", interface: { displayName: "Horseness C18" }, plugins: [{ name: "horseness-codex", source: { source: "local", path: "./plugins/horseness-codex" }, policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" }, category: "Developer Tools" }] }), { mode: 0o600 });
   const doctor = codexDoctorV1({ nativePackageVersion: fixture.artifact.version, loaderDigest: fixture.artifact.executable.sha256, contributions: observedContributions.map(({ name, digest }) => ({ name, digest })) });
   if (doctor.checks.some(check => check.status !== "ok") || observedPackageDigest !== CODEX_NATIVE_PACKAGE_METADATA.packageDigest) throw new Error("CODEX_NATIVE_PACKAGE_PROVENANCE_MISMATCH");
-  const nativeEnvironment = { ...process.env, TMPDIR: join(root, "tmp"), TMP: join(root, "tmp"), TEMP: join(root, "tmp") };
-  await mkdir(nativeEnvironment.TMPDIR, { recursive: true, mode: 0o700 });
-  appServer = await CodexAppServerClient.start(binary, root, nativeEnvironment);
+  const temporaryDirectory = join(root, "tmp");
+  await mkdir(temporaryDirectory, { recursive: true, mode: 0o700 });
+  const seededEnvironment = { ...process.env, OPENAI_API_KEY: "forbidden-seeded-api-key", ANTHROPIC_API_KEY: "forbidden-seeded-api-key", AWS_SECRET_ACCESS_KEY: "forbidden-seeded-cloud-secret", CI_JOB_TOKEN: "forbidden-seeded-ci-token", HTTPS_PROXY: "http://forbidden-seeded-proxy" };
+  const installEnvironment = codexNativeEnvironment(binary, temporaryDirectory, seededEnvironment);
+  assertSafeCodexEnvironment(installEnvironment);
+  appServer = await CodexAppServerClient.start(binary, root, installEnvironment);
+  assertSafeCodexEnvironment(appServer.observedEnvironment());
   const addedMarketplace = objectValue(await appServer.request("marketplace/add", { source: marketplace }), "MARKETPLACE_ADD");
   const marketplaceName = String(addedMarketplace.marketplaceName ?? "");
   if (marketplaceName.length === 0) throw new Error("CODEX_MARKETPLACE_ID_MISSING");
@@ -236,9 +241,13 @@ try {
   if (!skillBytes.includes("horseness_worker_return") || !developerInstructions.includes("horseness-worker")) throw new Error("CODEX_VERIFIED_PLUGIN_INSTRUCTIONS_INVALID");
   const initialClaim = randomBytes(32).toString("hex");
   runtime.registerThreadClaim({ claim: initialClaim, attemptCapabilityReferences: registrations.slice(0, 5).map(item => item.capabilityReference), primaryAttemptCapabilityReference: acceptedRegistration.capabilityReference });
-  const config = threadConfig(serverPath, socket, nonce, initialClaim);
+  await appServer.close();
+  const initialEnvironment = codexNativeEnvironment(binary, temporaryDirectory, seededEnvironment, { socket, nonce, threadClaim: initialClaim });
+  assertSafeCodexEnvironment(initialEnvironment);
+  appServer = await CodexAppServerClient.start(binary, root, initialEnvironment);
+  assertSafeCodexEnvironment(appServer.observedEnvironment());
   smokeStage = "thread-start";
-  const started = objectValue(await appServer.request("thread/start", { cwd: root, config, developerInstructions: `${developerInstructions}\n${immutableContext}`, approvalPolicy: "never", sandbox: "read-only" }), "THREAD_START");
+  const started = objectValue(await appServer.request("thread/start", { cwd: root, developerInstructions: `${developerInstructions}\n${immutableContext}`, approvalPolicy: "never", sandbox: "read-only" }), "THREAD_START");
   const startedThread = objectValue(started.thread, "THREAD_START_THREAD");
   acceptedSession = String(startedThread.id ?? "");
   if (acceptedSession.length === 0) throw new Error("CODEX_THREAD_ID_MISSING");
@@ -251,9 +260,13 @@ try {
   if (invocation.mcpCalls.length !== 1) throw new Error("CODEX_NATIVE_TOOL_CALL_COUNT_INVALID");
   const nativeCall = invocation.mcpCalls[0]!;
   if (nativeCall.server !== CODEX_MCP_SERVER || nativeCall.tool !== CODEX_MCP_TOOL || nativeCall.status !== "completed" || nativeCall.result === null || nativeCall.error !== null) throw new Error("CODEX_NATIVE_MCP_CALL_INVALID");
-  if (nativeCall.pluginId !== null) throw new Error("CODEX_PINNED_THREAD_OVERRIDE_PLUGIN_ATTRIBUTION_CHANGED");
+  if (nativeCall.pluginId !== pluginId) throw new Error("CODEX_NATIVE_PLUGIN_ATTRIBUTION_INVALID");
   const batchResult = invocation.batchResult;
   if (batchResult === null || batchResult.schemaVersion !== "HorsenessCodexWorkerReturnBatchResultV1" || batchResult.sessionId !== acceptedSession || batchResult.results.length !== 5) throw new Error("CODEX_NATIVE_BATCH_RESULT_INVALID");
+  const childEnvironmentAudit = objectValue((batchResult as CodexNativeWorkerReturnBatchResultV1 & { readonly environmentAudit?: unknown }).environmentAudit, "MCP_ENVIRONMENT_AUDIT");
+  const childEnvironmentKeys = childEnvironmentAudit.keys;
+  if (childEnvironmentAudit.passed !== true || !Array.isArray(childEnvironmentKeys) || childEnvironmentKeys.some(key => typeof key !== "string") || childEnvironmentKeys.some(key => /(?:SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|AUTHORIZATION|COOKIE|API_KEY|ACCESS_KEY|PRIVATE_KEY|CLIENT_SECRET|PROXY)/i.test(String(key)))) throw new Error("CODEX_MCP_CHILD_ENVIRONMENT_INVALID");
+  for (const required of ["HORSENESS_CODEX_RUNTIME_SOCKET", "HORSENESS_CODEX_RUNTIME_NONCE", "HORSENESS_CODEX_THREAD_CLAIM"]) if (!childEnvironmentKeys.includes(required)) throw new Error("CODEX_MCP_CHILD_ENVIRONMENT_INVALID");
   const observed: string[] = [];
   for (const [index, outcome] of decisions.entries()) {
     const binding = registrations[index]!.binding;
@@ -272,13 +285,15 @@ try {
   retainedAuthority = createCodexRetainedDeliveryAuthorityV1(retainedRoot);
   runtime = makeRuntime(); runtimes = new Map(registrations.map(item => [item.capabilityReference, runtime]));
   server = await runtimeServer(socket, nonce, runtimes);
-  appServer = await CodexAppServerClient.start(binary, root, nativeEnvironment);
-  const restartedInstalled = objectValue(await appServer.request("plugin/installed", { cwds: [root] }), "RESTARTED_PLUGIN_INSTALLED");
-  if (!JSON.stringify(restartedInstalled).includes(pluginId)) throw new Error("CODEX_RESTARTED_PLUGIN_DISCOVERY_MISSING");
   const resumeClaim = randomBytes(32).toString("hex");
   runtime.registerThreadClaim({ claim: resumeClaim, attemptCapabilityReferences: [acceptedRegistration.capabilityReference], primaryAttemptCapabilityReference: acceptedRegistration.capabilityReference });
-  const resumeConfig = threadConfig(serverPath, socket, nonce, resumeClaim);
-  const resumedResponse = objectValue(await appServer.request("thread/resume", { threadId: acceptedSession, cwd: root, config: resumeConfig, developerInstructions: `${developerInstructions}\n${immutableContext}` }), "THREAD_RESUME");
+  const resumeEnvironment = codexNativeEnvironment(binary, temporaryDirectory, seededEnvironment, { socket, nonce, threadClaim: resumeClaim });
+  assertSafeCodexEnvironment(resumeEnvironment);
+  appServer = await CodexAppServerClient.start(binary, root, resumeEnvironment);
+  assertSafeCodexEnvironment(appServer.observedEnvironment());
+  const restartedInstalled = objectValue(await appServer.request("plugin/installed", { cwds: [root] }), "RESTARTED_PLUGIN_INSTALLED");
+  if (!JSON.stringify(restartedInstalled).includes(pluginId)) throw new Error("CODEX_RESTARTED_PLUGIN_DISCOVERY_MISSING");
+  const resumedResponse = objectValue(await appServer.request("thread/resume", { threadId: acceptedSession, cwd: root, developerInstructions: `${developerInstructions}\n${immutableContext}` }), "THREAD_RESUME");
   const resumedThread = objectValue(resumedResponse.thread, "THREAD_RESUME_THREAD");
   assert.equal(resumedThread.id, acceptedSession);
   await runtime.bindThreadClaim(resumeClaim, acceptedSession, { source: "resume", previousSessionId: acceptedSession });
@@ -293,8 +308,13 @@ try {
   const forkContext = `horseness-context-v1; attemptCapabilityReference=${forkBinding.attemptCapability}; forkPinDigest=${forkBinding.forkPinDigest}; contextManifestCoreDigest=${forkBinding.contextManifestCoreDigest}; attemptContextBindingDigest=${forkBinding.attemptContextBindingDigest}`;
   const forkClaim = randomBytes(32).toString("hex");
   runtime.registerThreadClaim({ claim: forkClaim, attemptCapabilityReferences: [forkBinding.attemptCapability], primaryAttemptCapabilityReference: forkBinding.attemptCapability });
+  await appServer.close();
+  const forkEnvironment = codexNativeEnvironment(binary, temporaryDirectory, seededEnvironment, { socket, nonce, threadClaim: forkClaim });
+  assertSafeCodexEnvironment(forkEnvironment);
+  appServer = await CodexAppServerClient.start(binary, root, forkEnvironment);
+  assertSafeCodexEnvironment(appServer.observedEnvironment());
   smokeStage = "session-fork-marker";
-  const forkResponse = objectValue(await appServer.request("thread/fork", { threadId: acceptedSession, cwd: root, config: threadConfig(serverPath, socket, nonce, forkClaim), developerInstructions: `${developerInstructions}\n${forkContext}` }), "THREAD_FORK");
+  const forkResponse = objectValue(await appServer.request("thread/fork", { threadId: acceptedSession, cwd: root, developerInstructions: `${developerInstructions}\n${forkContext}` }), "THREAD_FORK");
   const forkThread = objectValue(forkResponse.thread, "THREAD_FORK_THREAD");
   forkSession = String(forkThread.id ?? "");
   if (forkSession.length === 0 || forkSession === acceptedSession) throw new Error("CODEX_FORK_THREAD_ID_INVALID");
@@ -333,7 +353,7 @@ try {
     if (phase === "discovery_disabled") { await runtime.revoke(); await persistUninstall("authority_revoked"); injectCrash("authority_revoked", crashAfter); phase = "authority_revoked"; }
     if (phase === "authority_revoked") await persistUninstall("complete");
   };
-  const restartForRecovery = async () => { await appServer!.close(); appServer = await CodexAppServerClient.start(binary, root, nativeEnvironment); };
+  const restartForRecovery = async () => { await appServer!.close(); appServer = await CodexAppServerClient.start(binary, root, installEnvironment); assertSafeCodexEnvironment(appServer.observedEnvironment()); };
   const assertFreshAbsent = async (boundary: string) => {
     const freshResponse = objectValue(await appServer!.request("thread/start", { cwd: root, developerInstructions: "post-uninstall inventory verification", approvalPolicy: "never", sandbox: "read-only" }), "POST_UNINSTALL_THREAD");
     const freshThread = objectValue(freshResponse.thread, "POST_UNINSTALL_THREAD_VALUE");
@@ -361,9 +381,9 @@ try {
   const gitTree = spawnSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: resolve(fileURLToPath(new URL("../../..", import.meta.url))), encoding: "utf8", timeout: 5_000, maxBuffer: 4096 });
   if (gitHead.status !== 0 || gitTree.status !== 0) throw new Error("CODEX_CANDIDATE_PROVENANCE_UNAVAILABLE");
   const finishedAtMs = Date.now();
-  const receipt = validateCodexSubscriptionLiveReceiptV1({ schemaVersion: "CodexSubscriptionLiveReceiptV1", host: "codex", authMode: "existing-user-subscription-session", hostVersion: fixture.artifact.version, observedModel: String(started.model ?? ""), candidate: { head: gitHead.stdout.trim(), tree: gitTree.stdout.trim() }, command: { argv: commandArgv, digest: sha(JSON.stringify(commandArgv)), scenarioSetDigest: sha(JSON.stringify({ schemaVersion: "HorsenessCodexExactScenarioBatchV1", capabilityReferences: scenarioInputs.map(item => item.attemptCapabilityReference) })), batchResponseDigest: sha(JSON.stringify(batchResult)) }, provenance: { archiveDigest: fixture.artifact.archiveSha256, archiveIdentity: fixture.artifact.identity, memberPath: fixture.artifact.executable.path, executableDigest: fixture.artifact.executable.sha256, packageDigest: observedPackageDigest, contributions: observedContributions.map(({ name, digest }) => ({ name, digest })), nativePlugin: { observedPluginId: pluginId, nativeItemPluginId: null, nativeItemPluginIdReason: "PINNED_HOST_THREAD_OVERRIDE", resolvedDeclarationDigest: resolvedMcpDeclarationDigest } }, bindings: liveBindings, redactionAudit: { passed: true, prohibitedFields: ["account", "email", "subscriptionId", "credential", "authorization", "token", "cookie", "authPath", "tokenFingerprint"] }, timing: { startedAt: new Date(smokeStartedAtMs).toISOString(), finishedAt: new Date(finishedAtMs).toISOString(), durationMs: finishedAtMs - smokeStartedAtMs }, terminal: { result: "succeeded", reason: "CODEX_LIVE_SMOKE_SUCCEEDED" } });
+  const receipt = validateCodexSubscriptionLiveReceiptV1({ schemaVersion: "CodexSubscriptionLiveReceiptV1", host: "codex", authMode: "existing-user-subscription-session", hostVersion: fixture.artifact.version, observedModel: String(started.model ?? ""), candidate: { head: gitHead.stdout.trim(), tree: gitTree.stdout.trim() }, command: { argv: commandArgv, digest: sha(JSON.stringify(commandArgv)), scenarioSetDigest: sha(JSON.stringify({ schemaVersion: "HorsenessCodexExactScenarioBatchV1", capabilityReferences: scenarioInputs.map(item => item.attemptCapabilityReference) })), batchResponseDigest: sha(JSON.stringify(batchResult)) }, provenance: { archiveDigest: fixture.artifact.archiveSha256, archiveIdentity: fixture.artifact.identity, memberPath: fixture.artifact.executable.path, executableDigest: fixture.artifact.executable.sha256, packageDigest: observedPackageDigest, contributions: observedContributions.map(({ name, digest }) => ({ name, digest })), nativePlugin: { observedPluginId: pluginId, nativeItemPluginId: nativeCall.pluginId, resolvedDeclarationDigest: resolvedMcpDeclarationDigest } }, bindings: liveBindings, redactionAudit: { passed: true, prohibitedFields: ["account", "email", "subscriptionId", "credential", "authorization", "token", "cookie", "authPath", "tokenFingerprint"] }, timing: { startedAt: new Date(smokeStartedAtMs).toISOString(), finishedAt: new Date(finishedAtMs).toISOString(), durationMs: finishedAtMs - smokeStartedAtMs }, terminal: { result: "succeeded", reason: "CODEX_LIVE_SMOKE_SUCCEEDED" } });
   process.stdout.write(`${JSON.stringify(receipt)}\n`);
-  process.stdout.write(`${JSON.stringify({ schemaVersion: "CodexHostSmokeResultV1", host: "codex", version: fixture.artifact.version, authMode: "existing-user-subscription-session", executableDigest: fixture.artifact.executable.sha256, packageDigest: observedPackageDigest, schemaDigest, resolvedMcpDeclarationDigest, pluginId, threadItemPluginId: nativeCall.pluginId, mcp: { server: nativeCall.server, tool: nativeCall.tool, inventory }, receiptDigest: acceptedReceipt, decisions: observed, canonicalRevision: acceptedRevision, canonicalDocument: acceptedDocument, sessions: { initial: acceptedSession, resumed: acceptedSession, forked: forkSession }, bounds: { scenarios: 5, providerInvocations: 6, workerToolCalls: 1, maxToolCallsPerInvocation: 1, maxTurns: 3, maxContextBytes: 4096, maxOutputBytes: 1024, maxEvidenceBytes: 1024, wallClockMs: MAX_WALL_MS }, lifecycle: { resume: "same-thread-app-server-resume-with-config-and-skill", fork: "new-thread-app-server-fork-with-immutable-binding-config-and-skill", uninstallDiscovery: "native-plugin-uninstall-marketplace-remove-fresh-thread-inventory-absent", horsenessGrant: "revoked", codexLogout: "not-performed" } })}\n`);
+  process.stdout.write(`${JSON.stringify({ schemaVersion: "CodexHostSmokeResultV1", host: "codex", version: fixture.artifact.version, authMode: "existing-user-subscription-session", executableDigest: fixture.artifact.executable.sha256, packageDigest: observedPackageDigest, schemaDigest, resolvedMcpDeclarationDigest, pluginId, threadItemPluginId: nativeCall.pluginId, mcp: { server: nativeCall.server, tool: nativeCall.tool, inventory }, receiptDigest: acceptedReceipt, decisions: observed, canonicalRevision: acceptedRevision, canonicalDocument: acceptedDocument, sessions: { initial: acceptedSession, resumed: acceptedSession, forked: forkSession }, bounds: { scenarios: 5, providerInvocations: 6, workerToolCalls: 1, maxToolCallsPerInvocation: 1, maxTurns: 3, maxContextBytes: 4096, maxOutputBytes: 1024, maxEvidenceBytes: 1024, wallClockMs: MAX_WALL_MS }, lifecycle: { resume: "same-thread-fresh-app-server-native-plugin-resume", fork: "new-thread-fresh-app-server-native-plugin-fork", uninstallDiscovery: "native-plugin-uninstall-marketplace-remove-fresh-thread-inventory-absent", horsenessGrant: "revoked", codexLogout: "not-performed" } })}\n`);
 } catch (error) {
   process.stderr.write(`${redactedReason(error)}:${smokeStage}\n`);
   process.exitCode = 1;

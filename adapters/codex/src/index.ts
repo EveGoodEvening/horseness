@@ -18,10 +18,10 @@ export function codexNativePackageDigestV1(contributions: readonly CodexNativeCo
 }
 const CODEX_NATIVE_CONTRIBUTIONS = Object.freeze([
   Object.freeze({ kind: "manifest", name: "plugin/.codex-plugin/plugin.json", digest: "sha256:415074c1915211d7fff075c9b9766f103f0d333109372c6951feb0165ee623bc" }),
-  Object.freeze({ kind: "manifest", name: "plugin/.mcp.json", digest: "sha256:fe18f342428a35e722d8b104ac4b16772bc4c4e179b4d17670b9eb3e9fbb2762" }),
+  Object.freeze({ kind: "manifest", name: "plugin/.mcp.json", digest: "sha256:bb7e4e5e1b5308c9a2a707b6da146c7b1ab31b497e6a7857fe10c90e75c8a4d2" }),
   Object.freeze({ kind: "context", name: "plugin/AGENTS.md", digest: "sha256:cd540129304ac027174d9afefbf1903cc97a78b89b34036bfb2d15328fd0aad2" }),
   Object.freeze({ kind: "skill", name: "plugin/skills/horseness-worker/SKILL.md", digest: "sha256:eb743ae05ccb2616264680ce20dd74d0293eac2d1b6bf4beb4f60e2f421d083e" }),
-  Object.freeze({ kind: "mcp-server", name: "plugin/servers/horseness-worker.mjs", digest: "sha256:4ac950143b5bb4643e8c91eb82af906a63b6500a1af8bcbe46a015b28154d919" }),
+  Object.freeze({ kind: "mcp-server", name: "plugin/servers/horseness-worker.mjs", digest: "sha256:71e11ebf8ea39956998957ef3ddb66af4d061c89396283c226b7ee2385b18e33" }),
 ]) satisfies readonly CodexNativeContributionDigestV1[];
 function observedCodexContribution(item: { readonly name: string; readonly digest: string }): CodexNativeContributionDigestV1 | null {
   const expected = CODEX_NATIVE_CONTRIBUTIONS.find(contribution => contribution.name === item.name);
@@ -33,7 +33,7 @@ export const CODEX_NATIVE_PACKAGE_METADATA = Object.freeze({
   adapterVersion: CODEX_ADAPTER_VERSION,
   hostId: CODEX_HOST_ID,
   hostVersionRange: "=0.144.1-linux-x64",
-  packageDigest: "sha256:82cd4b927c69cae31bcc078ad72eefe7171feb83e32eee825c4eaf3c129c2238",
+  packageDigest: "sha256:b956415fe5ce831ecb94509e3153d084b4a6ef18b5b93c6b2cf37daab4b1d828",
   contributions: CODEX_NATIVE_CONTRIBUTIONS,
 }) satisfies NativePackageMetadataV1;
 
@@ -49,7 +49,7 @@ export interface CodexSubscriptionLiveReceiptV1 {
   readonly observedModel: string;
   readonly candidate: { readonly head: string; readonly tree: string };
   readonly command: { readonly argv: readonly string[]; readonly digest: string; readonly scenarioSetDigest: string; readonly batchResponseDigest: string };
-  readonly provenance: { readonly archiveDigest: string; readonly archiveIdentity: string; readonly memberPath: string; readonly executableDigest: string; readonly packageDigest: string; readonly contributions: readonly { readonly name: string; readonly digest: string }[]; readonly nativePlugin: { readonly observedPluginId: string; readonly nativeItemPluginId: null; readonly nativeItemPluginIdReason: "PINNED_HOST_THREAD_OVERRIDE"; readonly resolvedDeclarationDigest: string } };
+  readonly provenance: { readonly archiveDigest: string; readonly archiveIdentity: string; readonly memberPath: string; readonly executableDigest: string; readonly packageDigest: string; readonly contributions: readonly { readonly name: string; readonly digest: string }[]; readonly nativePlugin: { readonly observedPluginId: string; readonly nativeItemPluginId: string; readonly resolvedDeclarationDigest: string } };
   readonly bindings: readonly { readonly workspaceId: string; readonly runId: string; readonly taskId: string; readonly attemptId: string; readonly generation: number; readonly forkPinDigest: string; readonly contextManifestCoreDigest: string; readonly attemptContextBindingDigest: string; readonly receiptDigest: string; readonly proposalDigest: string; readonly outputDigest: string; readonly evidenceDigests: readonly string[] }[];
   readonly redactionAudit: { readonly passed: true; readonly prohibitedFields: readonly string[] };
   readonly timing: { readonly startedAt: string; readonly finishedAt: string; readonly durationMs: number };
@@ -58,7 +58,7 @@ export interface CodexSubscriptionLiveReceiptV1 {
 export function validateCodexSubscriptionLiveReceiptV1(value: CodexSubscriptionLiveReceiptV1): CodexSubscriptionLiveReceiptV1 {
   const bindingIdentities = value.bindings.map(item => `${item.workspaceId}:${item.runId}:${item.taskId}:${item.attemptId}:${item.generation}`);
   const authMode: unknown = value.authMode;
-  if (value.schemaVersion !== "CodexSubscriptionLiveReceiptV1" || value.host !== "codex" || authMode !== "existing-user-subscription-session" || value.observedModel.length === 0 || value.candidate.head.length === 0 || value.candidate.tree.length === 0 || value.command.argv.length === 0 || value.bindings.length !== 5 || new Set(bindingIdentities).size !== 5 || value.provenance.contributions.length === 0 || value.provenance.nativePlugin.observedPluginId.length === 0 || value.provenance.nativePlugin.nativeItemPluginId !== null || value.provenance.nativePlugin.nativeItemPluginIdReason !== "PINNED_HOST_THREAD_OVERRIDE" || value.timing.durationMs < 0 || value.terminal.reason.length === 0 || value.redactionAudit.passed !== true) throw new Error("CODEX_LIVE_RECEIPT_INVALID");
+  if (value.schemaVersion !== "CodexSubscriptionLiveReceiptV1" || value.host !== "codex" || authMode !== "existing-user-subscription-session" || value.observedModel.length === 0 || value.candidate.head.length === 0 || value.candidate.tree.length === 0 || value.command.argv.length === 0 || value.bindings.length !== 5 || new Set(bindingIdentities).size !== 5 || value.provenance.contributions.length === 0 || value.provenance.nativePlugin.observedPluginId.length === 0 || value.provenance.nativePlugin.nativeItemPluginId !== value.provenance.nativePlugin.observedPluginId || value.timing.durationMs < 0 || value.terminal.reason.length === 0 || value.redactionAudit.passed !== true) throw new Error("CODEX_LIVE_RECEIPT_INVALID");
   const digests = [value.command.digest, value.command.scenarioSetDigest, value.command.batchResponseDigest, value.provenance.archiveDigest, value.provenance.executableDigest, value.provenance.packageDigest, value.provenance.nativePlugin.resolvedDeclarationDigest, ...value.provenance.contributions.map(item => item.digest), ...value.bindings.flatMap(item => [item.forkPinDigest, item.contextManifestCoreDigest, item.attemptContextBindingDigest, item.receiptDigest, item.proposalDigest, item.outputDigest, ...item.evidenceDigests])];
   if (digests.some(digest => !/^(?:sha256:)?[a-f0-9]{64}$/.test(digest))) throw new Error("CODEX_LIVE_RECEIPT_DIGEST_INVALID");
   const observedContributions = value.provenance.contributions.map(observedCodexContribution);
@@ -312,7 +312,11 @@ const publicationPhase = (step: WorkerReturnDeliveryStepV1): CodexRetainedDelive
   if (step !== "publication:0" && step !== "publication:1") throw new Error("Codex retained delivery received an unsupported publication phase");
   return step;
 };
-const completedPhase = (step: WorkerReturnDeliveryStepV1): CodexRetainedDeliveryPhaseV1 => step === "decision-subscription" ? "decision-resume" : step === "decision" ? "decision" : step === "receipt" || step === "proposal" ? step : publicationPhase(step);
+function completedPhase(step: WorkerReturnDeliveryStepV1): CodexRetainedDeliveryPhaseV1 {
+  if (step === "decision-subscription") return "decision-resume";
+  if (step === "decision" || step === "receipt" || step === "proposal") return step;
+  return publicationPhase(step);
+}
 const hasCompleted = (record: CodexRetainedDeliveryV1, step: WorkerReturnDeliveryStepV1): boolean => DELIVERY_PHASES.indexOf(record.phase) >= DELIVERY_PHASES.indexOf(completedPhase(step));
 class CodexRetainedWorkerReturnDeliveryV1 implements WorkerReturnDeliveryAuthorityV1 {
   constructor(private readonly retained: CodexRetainedDeliveryAuthorityV1, private readonly key: string) {}

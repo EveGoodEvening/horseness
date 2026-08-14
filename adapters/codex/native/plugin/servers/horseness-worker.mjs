@@ -8,6 +8,12 @@ const MAX_EVIDENCE_BYTES = 1_024;
 const socketPath = process.env.HORSENESS_CODEX_RUNTIME_SOCKET;
 const runtimeNonce = process.env.HORSENESS_CODEX_RUNTIME_NONCE;
 const threadClaim = process.env.HORSENESS_CODEX_THREAD_CLAIM;
+const environmentKeys = Object.keys(process.env).sort();
+const expectedEnvironmentKeys = ["HORSENESS_CODEX_RUNTIME_NONCE", "HORSENESS_CODEX_RUNTIME_SOCKET", "HORSENESS_CODEX_THREAD_CLAIM"].sort();
+if (environmentKeys.some(key => /(?:SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|AUTHORIZATION|COOKIE|API_KEY|ACCESS_KEY|PRIVATE_KEY|CLIENT_SECRET|PROXY)/i.test(key)) || expectedEnvironmentKeys.some(key => !environmentKeys.includes(key))) {
+  process.stderr.write("HORSENESS_NATIVE_ENVIRONMENT_INVALID\n");
+  process.exit(1);
+}
 if (typeof socketPath !== "string" || socketPath.length === 0 || typeof runtimeNonce !== "string" || runtimeNonce.length < 32 || typeof threadClaim !== "string" || threadClaim.length < 32) {
   process.stderr.write("HORSENESS_NATIVE_RUNTIME_UNAVAILABLE\n");
   process.exit(1);
@@ -20,9 +26,11 @@ function validateScenario(value) {
   if (keys.join(",") !== "attemptCapabilityReference,evidenceClaim,outputText") throw new Error("INVALID_BOUND_WORKER_INPUT");
   const { attemptCapabilityReference, outputText, evidenceClaim } = value;
   if (typeof attemptCapabilityReference !== "string" || attemptCapabilityReference.length < 8 || attemptCapabilityReference.length > 256) throw new Error("INVALID_ATTEMPT_CAPABILITY");
-  if (typeof outputText !== "string" || Buffer.byteLength(outputText) === 0 || Buffer.byteLength(outputText) > MAX_OUTPUT_BYTES) throw new Error("INVALID_OUTPUT_BOUNDS");
-  if (typeof evidenceClaim !== "string" || Buffer.byteLength(evidenceClaim) === 0 || Buffer.byteLength(evidenceClaim) > MAX_EVIDENCE_BYTES) throw new Error("INVALID_EVIDENCE_BOUNDS");
-  return { attemptCapabilityReference, outputText, evidenceClaim };
+  const outputBytes = typeof outputText === "string" ? Buffer.byteLength(outputText) : 0;
+  if (outputBytes === 0 || outputBytes > MAX_OUTPUT_BYTES) throw new Error("INVALID_OUTPUT_BOUNDS");
+  const evidenceBytes = typeof evidenceClaim === "string" ? Buffer.byteLength(evidenceClaim) : 0;
+  if (evidenceBytes === 0 || evidenceBytes > MAX_EVIDENCE_BYTES) throw new Error("INVALID_EVIDENCE_BOUNDS");
+  return { attemptCapabilityReference, outputText, evidenceClaim, outputBytes, evidenceBytes };
 }
 function validateArguments(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value) || Object.keys(value).join(",") !== "scenarios" || !Array.isArray(value.scenarios) || value.scenarios.length !== 5) throw new Error("INVALID_EXACT_SCENARIO_BATCH");
@@ -58,8 +66,8 @@ async function handle(message) {
     try {
       if (message.params?.name !== "horseness_worker_return") throw new Error("UNKNOWN_NATIVE_TOOL");
       const scenarios = validateArguments(message.params.arguments);
-      const result = await invokeRuntime({ scenarios: scenarios.map(input => ({ ...input, output: { digest: digest(input.outputText), mediaType: "text/plain", byteLength: Buffer.byteLength(input.outputText) }, evidence: { digest: digest(input.evidenceClaim), mediaType: "application/json", byteLength: Buffer.byteLength(input.evidenceClaim) } })) });
-      return send({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: JSON.stringify(result) }] } });
+      const result = await invokeRuntime({ scenarios: scenarios.map(input => ({ attemptCapabilityReference: input.attemptCapabilityReference, output: { digest: digest(input.outputText), mediaType: "text/plain", byteLength: input.outputBytes }, evidence: { digest: digest(input.evidenceClaim), mediaType: "application/json", byteLength: input.evidenceBytes } })) });
+      return send({ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: JSON.stringify({ ...result, environmentAudit: { passed: true, keys: environmentKeys } }) }] } });
     } catch (error) {
       return send({ jsonrpc: "2.0", id: message.id, result: { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : "HORSENESS_NATIVE_TOOL_FAILED" }] } });
     }

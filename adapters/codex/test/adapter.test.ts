@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { verifyAttemptReceipt } from "@horseness/domain";
 import { createCodexAdapterV1, createCodexNativeContributionRuntimeV1, createCodexRetainedDeliveryAuthorityV1, validateCodexSubscriptionLiveReceiptV1, CODEX_ADAPTER_ID, CODEX_INSTALL_CONTRIBUTIONS, CODEX_NATIVE_PACKAGE_METADATA, CODEX_PROVIDER_ID, codexDoctorV1, type CodexNativeAttemptV1, type CodexNativeRuntimeV1, type CodexSubscriptionLiveReceiptV1 } from "../src/index.js";
+import { assertSafeCodexEnvironment, codexNativeEnvironment } from "./app-server-client.js";
 
 const binding = { schemaVersion: "1", workspaceId: "ws", runId: "run", taskId: "task", attemptId: "attempt", generation: 1, forkPinDigest: "sha256:fork", contextManifestCoreDigest: "sha256:manifest", attemptContextBindingDigest: "sha256:binding", providerIdempotencyKeyDigest: "sha256:key", attemptCapability: "capability-ref" } as const;
 const attempt: CodexNativeAttemptV1 = { providerOperationId: "codex-operation", nativeSessionId: "codex-session", startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:00:01Z", outcome: "succeeded", outputDigest: "sha256:output", evidence: [{ digest: "sha256:evidence", mediaType: "application/json", size: 42 }], provenance: { package: "@openai/codex", version: "0.144.1-linux-x64", loaderDigest: "sha256:a96f944d1a596dbfb7fdd84f482be5c50e34b04bb371126840d873e4ebf26902" } };
@@ -109,7 +110,7 @@ test("Codex session bindings persist across restart and reject unknown or substi
 test("Codex live receipt validates the required subscription auth mode and rejects auth/account fields", () => {
   const digest = `sha256:${"a".repeat(64)}`;
   const receiptBinding = { workspaceId: "w", runId: "r", taskId: "t", attemptId: "a", generation: 1, forkPinDigest: digest, contextManifestCoreDigest: digest, attemptContextBindingDigest: digest, receiptDigest: digest, proposalDigest: digest, outputDigest: digest, evidenceDigests: [digest] };
-  const receipt: CodexSubscriptionLiveReceiptV1 = { schemaVersion: "CodexSubscriptionLiveReceiptV1", host: "codex", authMode: "existing-user-subscription-session", hostVersion: "0.144.1-linux-x64", observedModel: "codex-model", candidate: { head: "head", tree: "tree" }, command: { argv: ["pnpm", "host:smoke:codex"], digest, scenarioSetDigest: digest, batchResponseDigest: digest }, provenance: { archiveDigest: digest, archiveIdentity: "npm:codex", memberPath: "codex", executableDigest: digest, packageDigest: CODEX_NATIVE_PACKAGE_METADATA.packageDigest, contributions: CODEX_NATIVE_PACKAGE_METADATA.contributions.map(({ name, digest: contributionDigest }) => ({ name, digest: contributionDigest })), nativePlugin: { observedPluginId: "horseness-codex@horseness-c18", nativeItemPluginId: null, nativeItemPluginIdReason: "PINNED_HOST_THREAD_OVERRIDE", resolvedDeclarationDigest: digest } }, bindings: Array.from({ length: 5 }, (_, index) => ({ ...receiptBinding, attemptId: `a-${index}` })), redactionAudit: { passed: true, prohibitedFields: [] }, timing: { startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:00:01Z", durationMs: 1000 }, terminal: { result: "succeeded", reason: "CODEX_LIVE_SMOKE_SUCCEEDED" } };
+  const receipt: CodexSubscriptionLiveReceiptV1 = { schemaVersion: "CodexSubscriptionLiveReceiptV1", host: "codex", authMode: "existing-user-subscription-session", hostVersion: "0.144.1-linux-x64", observedModel: "codex-model", candidate: { head: "head", tree: "tree" }, command: { argv: ["pnpm", "host:smoke:codex"], digest, scenarioSetDigest: digest, batchResponseDigest: digest }, provenance: { archiveDigest: digest, archiveIdentity: "npm:codex", memberPath: "codex", executableDigest: digest, packageDigest: CODEX_NATIVE_PACKAGE_METADATA.packageDigest, contributions: CODEX_NATIVE_PACKAGE_METADATA.contributions.map(({ name, digest: contributionDigest }) => ({ name, digest: contributionDigest })), nativePlugin: { observedPluginId: "horseness-codex@horseness-c18", nativeItemPluginId: "horseness-codex@horseness-c18", resolvedDeclarationDigest: digest } }, bindings: Array.from({ length: 5 }, (_, index) => ({ ...receiptBinding, attemptId: `a-${index}` })), redactionAudit: { passed: true, prohibitedFields: [] }, timing: { startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:00:01Z", durationMs: 1000 }, terminal: { result: "succeeded", reason: "CODEX_LIVE_SMOKE_SUCCEEDED" } };
   assert.throws(() => validateCodexSubscriptionLiveReceiptV1({ ...receipt, authMode: undefined } as unknown as CodexSubscriptionLiveReceiptV1), /INVALID/);
   assert.throws(() => validateCodexSubscriptionLiveReceiptV1({ ...receipt, authMode: "api-key" } as unknown as CodexSubscriptionLiveReceiptV1), /INVALID/);
   const sharedAttemptBindings = receipt.bindings.map((item, index) => ({ ...item, workspaceId: `w-${index}`, attemptId: "shared-attempt" }));
@@ -117,4 +118,24 @@ test("Codex live receipt validates the required subscription auth mode and rejec
   assert.throws(() => validateCodexSubscriptionLiveReceiptV1({ ...receipt, bindings: receipt.bindings.map(() => receipt.bindings[0]!) }), /INVALID/);
   assert.throws(() => validateCodexSubscriptionLiveReceiptV1({ ...receipt, provenance: { ...receipt.provenance, contributions: receipt.provenance.contributions.map((item, index) => index === 0 ? { ...item, digest } : item) } }), /PROVENANCE_MISMATCH/);
   assert.throws(() => validateCodexSubscriptionLiveReceiptV1({ ...receipt, terminal: { ...receipt.terminal, account: "forbidden" } } as unknown as CodexSubscriptionLiveReceiptV1), /REDACTION/);
+});
+
+test("Codex app-server environment allowlists native session state and strips seeded credentials", () => {
+  const environment = codexNativeEnvironment("/verified/codex", "/bounded/tmp", {
+    HOME: "/native/home",
+    CODEX_HOME: "/native/home/.codex",
+    LANG: "C.UTF-8",
+    OPENAI_API_KEY: "seeded",
+    ANTHROPIC_API_KEY: "seeded",
+    AWS_SECRET_ACCESS_KEY: "seeded",
+    CI_JOB_TOKEN: "seeded",
+    HTTPS_PROXY: "http://seeded",
+  }, { socket: "/bounded/runtime.sock", nonce: "n".repeat(64), threadClaim: "c".repeat(64) });
+  assert.deepEqual(environment, {
+    PATH: `${dirname("/verified/codex")}:${dirname(process.execPath)}`,
+    TMPDIR: "/bounded/tmp", TMP: "/bounded/tmp", TEMP: "/bounded/tmp",
+    HOME: "/native/home", CODEX_HOME: "/native/home/.codex", LANG: "C.UTF-8",
+    HORSENESS_CODEX_RUNTIME_SOCKET: "/bounded/runtime.sock", HORSENESS_CODEX_RUNTIME_NONCE: "n".repeat(64), HORSENESS_CODEX_THREAD_CLAIM: "c".repeat(64),
+  });
+  assert.throws(() => assertSafeCodexEnvironment({ ...environment, OPENAI_API_KEY: "forbidden" }), /FORBIDDEN/);
 });
