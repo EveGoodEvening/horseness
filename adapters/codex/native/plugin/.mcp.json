@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "horseness-worker": {
+      "command": "node",
+      "args": ["servers/horseness-worker.mjs"]
+    }
+  }
+}

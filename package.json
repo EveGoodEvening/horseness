@@ -29,6 +29,7 @@
     "host:smoke:pi": "pnpm --filter @horseness/adapter-pi run host:smoke",
     "host:smoke:omp": "pnpm --filter @horseness/adapter-omp run host:smoke",
     "host:smoke:claude": "pnpm --filter @horseness/adapter-claude run host:smoke",
+    "host:smoke:codex": "pnpm --filter @horseness/adapter-codex run host:smoke",
     "acceptance": "node scripts/acceptance.mjs",
     "progress:cas": "node scripts/progress-cas.mjs"
   },

@@ -1,0 +1,13 @@
+{
+  "name": "horseness-codex",
+  "version": "0.1.0",
+  "description": "Horseness Codex native WorkerReturn contribution",
+  "author": { "name": "Horseness" },
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Horseness Codex",
+    "shortDescription": "Bound WorkerReturn delivery",
+    "longDescription": "Delivers immutable attempt output, evidence, receipt, proposal, and resumable authority decisions."
+  }
+}
