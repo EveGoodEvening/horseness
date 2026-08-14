@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:net";
-import { cp, mkdir, mkdtemp, open, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -292,9 +292,12 @@ try {
   for (const scenario of scenarioAuthorities) scenario.authority.close();
   revokedAcceptedRuntime = runtime;
   const uninstallState = join(root, "horseness-uninstall.json");
+  const sentinelBytes = JSON.stringify({ name: "uninstalled", version: "0.0.0", description: "Inert uninstall discovery sentinel" });
   type UninstallPhase = "kill_switch_written" | "discovery_disabled" | "authority_revoked" | "complete";
+  type DiscoveryCrashPoint = "after_rename" | "after_sentinel_fsync";
   type UninstallState = { readonly schemaVersion: "ClaudeUninstallStateV1"; readonly state: UninstallPhase; readonly killSwitch: true; readonly capability: "revoked"; readonly discoveryPath: string };
-  const syncRoot = async () => { const handle = await open(root, "r"); try { await handle.sync(); } finally { await handle.close(); } };
+  const syncDirectory = async (path: string) => { const handle = await open(path, "r"); try { await handle.sync(); } finally { await handle.close(); } };
+  const syncRoot = async () => syncDirectory(root);
   const readUninstall = async (): Promise<UninstallState | null> => {
     try { return JSON.parse(await readFile(uninstallState, "utf8")) as UninstallState; }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
@@ -307,20 +310,84 @@ try {
     await rename(temporary, uninstallState);
     await syncRoot();
   };
+  const optionalLstat = async (path: string) => { try { return await lstat(path); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; } };
+  const assertPlainDirectory = async (path: string, label: string, mode?: number) => {
+    const metadata = await optionalLstat(path);
+    if (metadata === null || metadata.isSymbolicLink() || !metadata.isDirectory() || (mode !== undefined && (metadata.mode & 0o777) !== mode)) throw new Error(`CLAUDE_UNINSTALL_${label}_INVALID`);
+  };
+  const assertDisabledContribution = async (path: string) => {
+    await assertPlainDirectory(path, "DISABLED_DIRECTORY");
+    const expectedFiles = new Map(CLAUDE_NATIVE_PACKAGE_METADATA.contributions.map(item => [item.name.replace(/^plugin\//, ""), item.digest]));
+    const expectedDirectories = new Set<string>();
+    for (const relativePath of expectedFiles.keys()) { const parts = relativePath.split("/"); for (let index = 1; index < parts.length; index++) expectedDirectories.add(parts.slice(0, index).join("/")); }
+    const inspect = async (directory: string, relativeDirectory = ""): Promise<void> => {
+      for (const entry of await readdir(directory)) {
+        const relativePath = relativeDirectory.length === 0 ? entry : `${relativeDirectory}/${entry}`;
+        const absolutePath = join(directory, entry);
+        const metadata = await lstat(absolutePath);
+        if (metadata.isSymbolicLink()) throw new Error("CLAUDE_UNINSTALL_DISABLED_SYMLINK");
+        if (metadata.isDirectory()) { if (!expectedDirectories.has(relativePath)) throw new Error("CLAUDE_UNINSTALL_DISABLED_UNEXPECTED_DIRECTORY"); await inspect(absolutePath, relativePath); continue; }
+        const expectedDigest = expectedFiles.get(relativePath);
+        if (!metadata.isFile() || expectedDigest === undefined) throw new Error("CLAUDE_UNINSTALL_DISABLED_UNEXPECTED_FILE");
+        if (`sha256:${sha(await readFile(absolutePath))}` !== expectedDigest) throw new Error("CLAUDE_UNINSTALL_DISABLED_TAMPER");
+      }
+    };
+    await inspect(path);
+  };
+  const hasValidSentinel = async (path: string): Promise<boolean> => {
+    const metadata = await optionalLstat(path);
+    if (metadata === null) return false;
+    await assertPlainDirectory(path, "SENTINEL_ROOT", 0o700);
+    const rootEntries = await readdir(path);
+    if (rootEntries.length !== 1 || rootEntries[0] !== ".claude-plugin") throw new Error("CLAUDE_UNINSTALL_SENTINEL_UNEXPECTED_ROOT_ENTRY");
+    const manifestDirectory = join(path, ".claude-plugin");
+    await assertPlainDirectory(manifestDirectory, "SENTINEL_MANIFEST_DIRECTORY", 0o700);
+    const manifestEntries = await readdir(manifestDirectory);
+    if (manifestEntries.length !== 1 || manifestEntries[0] !== "plugin.json") throw new Error("CLAUDE_UNINSTALL_SENTINEL_UNEXPECTED_MANIFEST_ENTRY");
+    const manifestPath = join(manifestDirectory, "plugin.json");
+    const manifestMetadata = await lstat(manifestPath);
+    if (manifestMetadata.isSymbolicLink() || !manifestMetadata.isFile() || (manifestMetadata.mode & 0o777) !== 0o600 || await readFile(manifestPath, "utf8") !== sentinelBytes) throw new Error("CLAUDE_UNINSTALL_SENTINEL_MANIFEST_INVALID");
+    return true;
+  };
+  const injectDiscoveryCrash = (point: DiscoveryCrashPoint, crashAfter: DiscoveryCrashPoint | undefined) => { if (point === crashAfter) throw new Error(`CLAUDE_UNINSTALL_CRASH_${point.toUpperCase()}`); };
+  const reconcileDiscoveryDisable = async (discoveryPath: string, crashAfter?: DiscoveryCrashPoint) => {
+    const disabledPath = `${discoveryPath}.disabled`;
+    const activeMetadata = await optionalLstat(discoveryPath);
+    const disabledMetadata = await optionalLstat(disabledPath);
+    if (activeMetadata?.isSymbolicLink() || disabledMetadata?.isSymbolicLink()) throw new Error("CLAUDE_UNINSTALL_DISCOVERY_SYMLINK");
+    if (activeMetadata !== null && disabledMetadata !== null) {
+      if (!await hasValidSentinel(discoveryPath)) throw new Error("CLAUDE_UNINSTALL_ACTIVE_DISABLED_AMBIGUITY");
+      await assertDisabledContribution(disabledPath);
+      return;
+    }
+    if (activeMetadata === null && disabledMetadata === null) throw new Error("CLAUDE_UNINSTALL_DISCOVERY_EVIDENCE_MISSING");
+    if (disabledMetadata === null) {
+      if (!activeMetadata!.isDirectory()) throw new Error("CLAUDE_UNINSTALL_ACTIVE_INVALID");
+      await assertDisabledContribution(discoveryPath);
+      await rename(discoveryPath, disabledPath);
+      await syncRoot();
+      injectDiscoveryCrash("after_rename", crashAfter);
+    } else {
+      await assertDisabledContribution(disabledPath);
+    }
+    await mkdir(discoveryPath, { mode: 0o700 });
+    await syncRoot();
+    const manifestDirectory = join(discoveryPath, ".claude-plugin");
+    await mkdir(manifestDirectory, { mode: 0o700 });
+    await syncDirectory(discoveryPath);
+    const manifest = await open(join(manifestDirectory, "plugin.json"), "wx", 0o600);
+    try { await manifest.writeFile(sentinelBytes); await manifest.sync(); } finally { await manifest.close(); }
+    await syncDirectory(manifestDirectory);
+    await syncDirectory(discoveryPath);
+    await syncRoot();
+    injectDiscoveryCrash("after_sentinel_fsync", crashAfter);
+  };
   const injectCrash = (phase: UninstallPhase, crashAfter: UninstallPhase | undefined) => { if (phase === crashAfter) throw new Error(`CLAUDE_UNINSTALL_CRASH_AFTER_${phase.toUpperCase()}`); };
   const resumeUninstall = async (crashAfter?: UninstallPhase) => {
     let persisted = await readUninstall();
     if (persisted === null) { await persistUninstall("kill_switch_written"); injectCrash("kill_switch_written", crashAfter); persisted = await readUninstall(); }
     if (persisted?.state === "kill_switch_written") {
-      await rename(persisted.discoveryPath, `${persisted.discoveryPath}.disabled`);
-      await syncRoot();
-      await mkdir(join(persisted.discoveryPath, ".claude-plugin"), { recursive: true, mode: 0o700 });
-      const sentinelManifest = await open(join(persisted.discoveryPath, ".claude-plugin", "plugin.json"), "wx", 0o600);
-      try { await sentinelManifest.writeFile(JSON.stringify({ name: "uninstalled", version: "0.0.0", description: "Inert uninstall discovery sentinel" })); await sentinelManifest.sync(); }
-      finally { await sentinelManifest.close(); }
-      const sentinelDirectory = await open(join(persisted.discoveryPath, ".claude-plugin"), "r");
-      try { await sentinelDirectory.sync(); } finally { await sentinelDirectory.close(); }
-      await syncRoot();
+      await reconcileDiscoveryDisable(persisted.discoveryPath);
       await persistUninstall("discovery_disabled", persisted.discoveryPath);
       injectCrash("discovery_disabled", crashAfter);
       persisted = await readUninstall();
@@ -331,16 +398,22 @@ try {
   await writeFile(postUninstallContext, JSON.stringify({ schemaVersion: "HorsenessClaudeContextV1", renderedContext: "post-uninstall inventory check; do not call tools" }), { mode: 0o600 });
   const nativeInventoryAfterCrash = async (boundary: string) => {
     const persisted = await readUninstall();
-    if (persisted === null || persisted.state === "kill_switch_written") throw new Error(`CLAUDE_UNINSTALL_${boundary}_DISCOVERY_NOT_DISABLED`);
+    if (persisted === null) throw new Error(`CLAUDE_UNINSTALL_${boundary}_STATE_MISSING`);
+    await reconcileDiscoveryDisable(persisted.discoveryPath);
     smokeStage = `uninstall-native-restart-${boundary.toLowerCase()}`;
     const observation = await runClaude(binary, root, nativeTemp, postUninstallContext, socket, nonce, "Reply with exactly UNINSTALLED_OK. Do not call tools.", persisted.discoveryPath, undefined, 1, false);
     assertHorsenessInventoryAbsent(observation, boundary);
   };
   await assert.rejects(() => resumeUninstall("kill_switch_written"), /CRASH_AFTER_KILL_SWITCH_WRITTEN/);
   assert.equal((await readUninstall())?.state, "kill_switch_written");
-  await assert.rejects(() => resumeUninstall("discovery_disabled"), /CRASH_AFTER_DISCOVERY_DISABLED/);
-  assert.equal((await readUninstall())?.state, "discovery_disabled");
-  await nativeInventoryAfterCrash("DISCOVERY_DISABLED");
+  await assert.rejects(() => reconcileDiscoveryDisable(plugin, "after_rename"), /CRASH_AFTER_RENAME/);
+  assert.equal((await readUninstall())?.state, "kill_switch_written");
+  await nativeInventoryAfterCrash("AFTER_RENAME_RECOVERY");
+  await rm(plugin, { recursive: true });
+  await syncRoot();
+  await assert.rejects(() => reconcileDiscoveryDisable(plugin, "after_sentinel_fsync"), /CRASH_AFTER_SENTINEL_FSYNC/);
+  assert.equal((await readUninstall())?.state, "kill_switch_written");
+  await nativeInventoryAfterCrash("AFTER_SENTINEL_FSYNC_RECOVERY");
   await assert.rejects(() => resumeUninstall("authority_revoked"), /CRASH_AFTER_AUTHORITY_REVOKED/);
   assert.equal((await readUninstall())?.state, "authority_revoked");
   await nativeInventoryAfterCrash("AUTHORITY_REVOKED");
