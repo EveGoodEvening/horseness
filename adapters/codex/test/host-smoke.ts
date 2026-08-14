@@ -3,7 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:net";
 import { cp, mkdir, mkdtemp, open, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { NO_POLICY_DIGEST, NO_POLICY_V1, attemptContextBindingDigest, contextManifestCoreDigest, createRunGenesis, createWorkspaceGenesis, deltaAuthorityScopeDigest, jsonValueDigest, sealEventEnvelope, sealForkPin, sealProposal, type CapabilityV1, type CompositeCursorV1, type ContextManifestCoreV1, type DeltaAuthorityScopeV1, type JsonValue, type ProposalEnvelopeCoreV1 } from "@horseness/domain";
@@ -118,7 +118,7 @@ async function runtimeServer(path: string, nonce: string, runtimes: Map<string, 
     socket.on("data", chunk => { wire += chunk; if (Buffer.byteLength(wire) > 64 * 1024) socket.destroy(); });
     socket.on("end", async () => {
       try {
-        const request = JSON.parse(wire) as ({ schemaVersion: "HorsenessCodexSessionStartRequestV1"; nonce: string; start: { sessionId: string; source: "startup" | "resume" | "fork" | "clear" | "compact"; previousSessionId?: string; branchEntryId?: string } } | { schemaVersion: "HorsenessCodexRuntimeRequestV1"; nonce: string; sessionId?: string | null; input: { scenarios: readonly { attemptCapabilityReference: string; output: { digest: string; mediaType: string; byteLength: number }; evidence: { digest: string; mediaType: string; byteLength: number } }[] } });
+        const request = JSON.parse(wire) as ({ schemaVersion: "HorsenessCodexSessionStartRequestV1"; nonce: string; start: { sessionId: string; source: "startup" | "resume" | "fork" | "clear" | "compact"; previousSessionId?: string; branchEntryId?: string } } | { schemaVersion: "HorsenessCodexRuntimeRequestV1"; nonce: string; threadClaim: string; input: { scenarios: readonly { attemptCapabilityReference: string; output: { digest: string; mediaType: string; byteLength: number }; evidence: { digest: string; mediaType: string; byteLength: number } }[] } });
         if (request.nonce !== nonce) throw new Error("HORSENESS_RUNTIME_AUTHORITY_REJECTED");
         if (request.schemaVersion === "HorsenessCodexSessionStartRequestV1") {
           const candidates = [...new Set(runtimes.values())]; if (candidates.length !== 1) throw new Error("HORSENESS_SESSION_RUNTIME_AMBIGUOUS");
@@ -128,7 +128,8 @@ async function runtimeServer(path: string, nonce: string, runtimes: Map<string, 
         if (request.input.scenarios.length !== 5) throw new Error("INVALID_EXACT_SCENARIO_BATCH");
         const runtime = runtimes.get(request.input.scenarios[0]!.attemptCapabilityReference);
         if (runtime === undefined || request.input.scenarios.some(item => runtimes.get(item.attemptCapabilityReference) !== runtime)) throw new Error("HORSENESS_ATTEMPT_GRANT_REVOKED");
-        const result = await runtime.deliverBatch(request.input.scenarios, request.sessionId ?? undefined);
+        const sessionId = runtime.sessionForThreadClaim(request.threadClaim);
+        const result = await runtime.deliverBatch(request.input.scenarios, request.threadClaim, sessionId);
         socket.end(`${JSON.stringify({ schemaVersion: "HorsenessCodexRuntimeResponseV1", ok: true, result })}\n`);
       } catch (error) { socket.end(`${JSON.stringify({ schemaVersion: "HorsenessCodexRuntimeResponseV1", ok: false, reason: redactedReason(error) })}\n`); }
     });
@@ -157,13 +158,9 @@ try {
   const marketplace = join(root, "marketplace");
   const plugin = join(marketplace, "plugins", "horseness-codex");
   await mkdir(join(marketplace, ".agents", "plugins"), { recursive: true, mode: 0o700 });
-  await mkdir(join(marketplace, "plugins"), { recursive: true, mode: 0o700 });
   await cp(pluginSource, plugin, { recursive: true });
   const observedContributions = await Promise.all(CODEX_NATIVE_PACKAGE_METADATA.contributions.map(async item => ({ kind: item.kind, name: item.name, digest: `sha256:${sha(await readFile(join(pluginSource, item.name.replace(/^plugin\//, ""))))}` })));
   const observedPackageDigest = codexNativePackageDigestV1(observedContributions);
-  const serverPath = join(plugin, "servers", "horseness-worker.mjs");
-  await writeFile(join(plugin, ".mcp.json"), JSON.stringify({ mcpServers: { "horseness-worker": { command: process.execPath, args: [serverPath] } } }), { mode: 0o600 });
-  const resolvedMcpDeclarationDigest = `sha256:${sha(await readFile(join(plugin, ".mcp.json")))}`;
   const marketplaceManifest = join(marketplace, ".agents", "plugins", "marketplace.json");
   await writeFile(marketplaceManifest, JSON.stringify({ name: "horseness-c18", interface: { displayName: "Horseness C18" }, plugins: [{ name: "horseness-codex", source: { source: "local", path: "./plugins/horseness-codex" }, policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" }, category: "Developer Tools" }] }), { mode: 0o600 });
   const doctor = codexDoctorV1({ nativePackageVersion: fixture.artifact.version, loaderDigest: fixture.artifact.executable.sha256, contributions: observedContributions.map(({ name, digest }) => ({ name, digest })) });
@@ -171,9 +168,35 @@ try {
   const nativeEnvironment = { ...process.env, TMPDIR: join(root, "tmp"), TMP: join(root, "tmp"), TEMP: join(root, "tmp") };
   await mkdir(nativeEnvironment.TMPDIR, { recursive: true, mode: 0o700 });
   appServer = await CodexAppServerClient.start(binary, root, nativeEnvironment);
-  await appServer.request("marketplace/add", { source: marketplace });
+  const addedMarketplace = objectValue(await appServer.request("marketplace/add", { source: marketplace }), "MARKETPLACE_ADD");
+  const marketplaceName = String(addedMarketplace.marketplaceName ?? "");
+  if (marketplaceName.length === 0) throw new Error("CODEX_MARKETPLACE_ID_MISSING");
   await appServer.request("plugin/install", { pluginName: "horseness-codex", marketplacePath: marketplaceManifest });
   const pluginId = "horseness-codex@horseness-c18";
+  const installedInventory = objectValue(await appServer.request("plugin/installed", { cwds: [root] }), "PLUGIN_INSTALLED");
+  if (!JSON.stringify(installedInventory).includes(pluginId) || !JSON.stringify(installedInventory).includes('"enabled":true')) throw new Error("CODEX_INSTALLED_PLUGIN_NOT_ENABLED");
+  const pluginRead = objectValue(await appServer.request("plugin/read", { marketplacePath: marketplaceManifest, pluginName: "horseness-codex" }), "PLUGIN_READ");
+  const pluginDetail = objectValue(pluginRead.plugin, "PLUGIN_DETAIL");
+  if (!JSON.stringify(pluginDetail).includes(pluginId) || !Array.isArray(pluginDetail.mcpServers) || !pluginDetail.mcpServers.includes(CODEX_MCP_SERVER)) throw new Error("CODEX_INSTALLED_PLUGIN_DECLARATION_INVALID");
+  if (String(addedMarketplace.installedRoot ?? "").length === 0) throw new Error("CODEX_INSTALLED_MARKETPLACE_ROOT_MISSING");
+  const skills = pluginDetail.skills;
+  if (!Array.isArray(skills)) throw new Error("CODEX_INSTALLED_SKILL_MISSING");
+  const skillSummary = skills.find(item => item !== null && typeof item === "object" && typeof (item as Record<string, unknown>).path === "string" && String((item as Record<string, unknown>).path).includes("horseness-worker")) as Record<string, unknown> | undefined;
+  const nativeSkillPath = String(skillSummary?.path ?? "");
+  const skillPath = resolve(nativeSkillPath.endsWith("SKILL.md") ? nativeSkillPath : join(nativeSkillPath, "SKILL.md"));
+  if (!skillPath.endsWith("/skills/horseness-worker/SKILL.md")) throw new Error("CODEX_INSTALLED_SKILL_PATH_INVALID");
+  const installedPluginRoot = dirname(dirname(dirname(skillPath)));
+  const installedObserved = await Promise.all(CODEX_NATIVE_PACKAGE_METADATA.contributions.map(async item => ({ kind: item.kind, name: item.name, digest: `sha256:${sha(await readFile(join(installedPluginRoot, item.name.replace(/^plugin\//, ""))))}` })));
+  if (codexNativePackageDigestV1(installedObserved) !== CODEX_NATIVE_PACKAGE_METADATA.packageDigest) throw new Error("CODEX_INSTALLED_PLUGIN_PROVENANCE_MISMATCH");
+  const installedMcp = objectValue(JSON.parse(await readFile(join(installedPluginRoot, ".mcp.json"), "utf8")), "INSTALLED_MCP");
+  const declaredServer = objectValue(objectValue(installedMcp.mcpServers, "INSTALLED_MCP_SERVERS")[CODEX_MCP_SERVER], "INSTALLED_MCP_SERVER");
+  const declaredArgs = declaredServer.args;
+  if (!Array.isArray(declaredArgs) || declaredArgs.length !== 1 || typeof declaredArgs[0] !== "string") throw new Error("CODEX_INSTALLED_MCP_DECLARATION_INVALID");
+  const serverPath = resolve(installedPluginRoot, declaredArgs[0]);
+  if (!serverPath.startsWith(`${resolve(installedPluginRoot)}/`)) throw new Error("CODEX_INSTALLED_MCP_PATH_ESCAPES_PLUGIN");
+  const resolvedMcpDeclarationDigest = `sha256:${sha(JSON.stringify({ pluginId, installedPluginRoot, declaration: installedMcp, serverDigest: `sha256:${sha(await readFile(serverPath))}` }))}`;
+  const skillBytes = await readFile(skillPath, "utf8");
+  const developerInstructions = await readFile(join(installedPluginRoot, "AGENTS.md"), "utf8");
   let acceptedReceipt = ""; let acceptedSession = ""; let forkSession = ""; let acceptedRevision = 0; let acceptedDocument: JsonValue = null; let revokedAcceptedRuntime: CodexNativeContributionRuntimeV1 | null = null; const liveBindings: CodexSubscriptionLiveReceiptV1["bindings"][number][] = [];
   const decisions = ["accepted", "rejected", "conflicted", "quarantined", "approval_required"] as const;
   const retained = createCodexRetainedDeliveryAuthorityV1(join(root, "retained"));
@@ -201,28 +224,36 @@ try {
   const forkAdapter = createCodexAdapterV1({ binding: forkBinding, credential: { schemaVersion: "1", kind: "host-reference", reference: "horseness.grant.accepted.fork", scope: { workspaceId: forkBinding.workspaceId, adapterId: CODEX_ADAPTER_ID, purpose: "horseness-attempt-grant" } }, runtime: forkProvider, producerPrincipalId: "worker", producerGrantDigest: "grant" });
   await forkAdapter.launch({ ...forkBinding, operation: "launch", renderedContextDigest: sha("context-accepted-fork"), providerOptions: {} });
   registrations.push({ ...acceptedRegistration, capabilityReference: forkBinding.attemptCapability, binding: forkBinding, adapter: forkAdapter });
-  const runtime = createCodexNativeContributionRuntimeV1(registrations, { retained, sessionStateDirectory: join(root, "sessions"), attemptContexts: registrations.map(item => ({ attemptCapabilityReference: item.capabilityReference, binding: item.binding, renderedContext: `immutable Codex context for ${item.binding.attemptId}`, renderedContextDigest: sha(`context-${item.binding.attemptId}`) })), initialAttemptCapabilityReference: acceptedRegistration.capabilityReference });
-  const runtimes = new Map(registrations.map(item => [item.capabilityReference, runtime]));
+  const sessionRoot = join(root, "sessions");
+  const retainedRoot = join(root, "retained");
+  const uninstallState = join(root, "horseness-uninstall.json");
+  let retainedAuthority = retained;
+  const makeRuntime = () => createCodexNativeContributionRuntimeV1(registrations, { retained: retainedAuthority, sessionStateDirectory: sessionRoot, killSwitchPath: uninstallState, attemptContexts: registrations.map(item => ({ attemptCapabilityReference: item.capabilityReference, binding: item.binding, renderedContext: `immutable Codex context for ${item.binding.attemptId}`, renderedContextDigest: sha(`context-${item.binding.attemptId}`) })), initialAttemptCapabilityReference: acceptedRegistration.capabilityReference });
+  let runtime = makeRuntime();
+  let runtimes = new Map(registrations.map(item => [item.capabilityReference, runtime]));
   const socket = join(root, "runtime.sock"); const nonce = randomBytes(32).toString("hex"); server = await runtimeServer(socket, nonce, runtimes);
   const immutableContext = `horseness-context-v1; attemptCapabilityReference=${acceptedRegistration.capabilityReference}; forkPinDigest=${acceptedRegistration.binding.forkPinDigest}; contextManifestCoreDigest=${acceptedRegistration.binding.contextManifestCoreDigest}; attemptContextBindingDigest=${acceptedRegistration.binding.attemptContextBindingDigest}`;
-  const skillPath = join(plugin, "skills", "horseness-worker", "SKILL.md");
-  const config = threadConfig(serverPath, socket, nonce);
+  if (!skillBytes.includes("horseness_worker_return") || !developerInstructions.includes("horseness-worker")) throw new Error("CODEX_VERIFIED_PLUGIN_INSTRUCTIONS_INVALID");
+  const initialClaim = randomBytes(32).toString("hex");
+  runtime.registerThreadClaim({ claim: initialClaim, attemptCapabilityReferences: registrations.slice(0, 5).map(item => item.capabilityReference), primaryAttemptCapabilityReference: acceptedRegistration.capabilityReference });
+  const config = threadConfig(serverPath, socket, nonce, initialClaim);
   smokeStage = "thread-start";
-  const started = objectValue(await appServer.request("thread/start", { cwd: root, config, developerInstructions: immutableContext, approvalPolicy: "never", sandbox: "read-only" }), "THREAD_START");
+  const started = objectValue(await appServer.request("thread/start", { cwd: root, config, developerInstructions: `${developerInstructions}\n${immutableContext}`, approvalPolicy: "never", sandbox: "read-only" }), "THREAD_START");
   const startedThread = objectValue(started.thread, "THREAD_START_THREAD");
   acceptedSession = String(startedThread.id ?? "");
   if (acceptedSession.length === 0) throw new Error("CODEX_THREAD_ID_MISSING");
-  await runtime.registerSessionStart({ sessionId: acceptedSession, source: "startup" });
+  await runtime.bindThreadClaim(initialClaim, acceptedSession, { source: "startup" });
   const inventory = await waitForMcpReady(appServer, acceptedSession);
   const scenarioInputs = decisions.map((_outcome, index) => ({ attemptCapabilityReference: registrations[index]!.capabilityReference, outputText: OUTPUT_TEXT, evidenceClaim: EVIDENCE_CLAIM }));
-  const prompt = `Use the explicitly supplied horseness-worker skill. Invoke ${CODEX_MCP_TOOL} exactly once with this exact batch and no substitutions: ${JSON.stringify({ scenarios: scenarioInputs })}. Do not use any other tool. Return the tool result.`;
+  const prompt = `Use the verified installed horseness-worker skill. Invoke ${CODEX_MCP_TOOL} exactly once with this exact batch and no substitutions: ${JSON.stringify({ scenarios: scenarioInputs })}. Do not use any other tool. Return the tool result.`;
   smokeStage = "decision-batch-invoke";
   const invocation = await runTurn(appServer, acceptedSession, skillPath, prompt, immutableContext);
   if (invocation.mcpCalls.length !== 1) throw new Error("CODEX_NATIVE_TOOL_CALL_COUNT_INVALID");
   const nativeCall = invocation.mcpCalls[0]!;
   if (nativeCall.server !== CODEX_MCP_SERVER || nativeCall.tool !== CODEX_MCP_TOOL || nativeCall.status !== "completed" || nativeCall.result === null || nativeCall.error !== null) throw new Error("CODEX_NATIVE_MCP_CALL_INVALID");
+  if (nativeCall.pluginId !== null) throw new Error("CODEX_PINNED_THREAD_OVERRIDE_PLUGIN_ATTRIBUTION_CHANGED");
   const batchResult = invocation.batchResult;
-  if (batchResult === null || batchResult.schemaVersion !== "HorsenessCodexWorkerReturnBatchResultV1" || batchResult.sessionId !== null || batchResult.results.length !== 5) throw new Error("CODEX_NATIVE_BATCH_RESULT_INVALID");
+  if (batchResult === null || batchResult.schemaVersion !== "HorsenessCodexWorkerReturnBatchResultV1" || batchResult.sessionId !== acceptedSession || batchResult.results.length !== 5) throw new Error("CODEX_NATIVE_BATCH_RESULT_INVALID");
   const observed: string[] = [];
   for (const [index, outcome] of decisions.entries()) {
     const binding = registrations[index]!.binding;
@@ -234,69 +265,103 @@ try {
     liveBindings.push({ workspaceId: binding.workspaceId, runId: binding.runId, taskId: binding.taskId, attemptId: binding.attemptId, generation: binding.generation, forkPinDigest: binding.forkPinDigest, contextManifestCoreDigest: binding.contextManifestCoreDigest, attemptContextBindingDigest: binding.attemptContextBindingDigest, receiptDigest: batchEvidence.receiptDigest, proposalDigest: batchEvidence.proposalDigest, outputDigest: batchEvidence.outputDigest, evidenceDigests: batchEvidence.evidenceDigests });
     if (outcome === "accepted") { acceptedReceipt = batchEvidence.receiptDigest; const canonical = loadRevision(scenarioAuthorities[index]!.authority, binding.workspaceId, binding.runId); acceptedRevision = canonical.revision; acceptedDocument = canonical.document; assert.deepEqual(batchResult.canonicalAcceptedAdvance, { workspaceId: binding.workspaceId, runId: binding.runId, revision: canonical.revision, stateHash: canonical.stateHash }); }
   }
-  smokeStage = "session-resume-marker";
-  const resumedResponse = objectValue(await appServer.request("thread/resume", { threadId: acceptedSession, cwd: root, config, developerInstructions: immutableContext }), "THREAD_RESUME");
+  smokeStage = "real-host-restart";
+  await appServer.close(); appServer = undefined;
+  await new Promise<void>((resolveClose, reject) => server!.close(error => error ? reject(error) : resolveClose())); server = undefined;
+  await runtime.shutdown();
+  retainedAuthority = createCodexRetainedDeliveryAuthorityV1(retainedRoot);
+  runtime = makeRuntime(); runtimes = new Map(registrations.map(item => [item.capabilityReference, runtime]));
+  server = await runtimeServer(socket, nonce, runtimes);
+  appServer = await CodexAppServerClient.start(binary, root, nativeEnvironment);
+  const restartedInstalled = objectValue(await appServer.request("plugin/installed", { cwds: [root] }), "RESTARTED_PLUGIN_INSTALLED");
+  if (!JSON.stringify(restartedInstalled).includes(pluginId)) throw new Error("CODEX_RESTARTED_PLUGIN_DISCOVERY_MISSING");
+  const resumeClaim = randomBytes(32).toString("hex");
+  runtime.registerThreadClaim({ claim: resumeClaim, attemptCapabilityReferences: [acceptedRegistration.capabilityReference], primaryAttemptCapabilityReference: acceptedRegistration.capabilityReference });
+  const resumeConfig = threadConfig(serverPath, socket, nonce, resumeClaim);
+  const resumedResponse = objectValue(await appServer.request("thread/resume", { threadId: acceptedSession, cwd: root, config: resumeConfig, developerInstructions: `${developerInstructions}\n${immutableContext}` }), "THREAD_RESUME");
   const resumedThread = objectValue(resumedResponse.thread, "THREAD_RESUME_THREAD");
   assert.equal(resumedThread.id, acceptedSession);
-  await runtime.registerSessionStart({ sessionId: acceptedSession, source: "resume", previousSessionId: acceptedSession });
+  await runtime.bindThreadClaim(resumeClaim, acceptedSession, { source: "resume", previousSessionId: acceptedSession });
   await waitForMcpReady(appServer, acceptedSession);
-  const resumed = await runTurn(appServer, acceptedSession, skillPath, "Use the explicitly supplied horseness-worker skill. Reply with exactly RESUME_OK. Do not call tools.", immutableContext);
+  const resumed = await runTurn(appServer, acceptedSession, skillPath, "Use the verified installed horseness-worker skill. Reply with exactly RESUME_OK. Do not call tools.", immutableContext);
   assert.equal(resumed.threadId, acceptedSession); assert.equal(resumed.mcpCalls.length, 0); assert.ok(resumed.assistantText.includes("RESUME_OK"));
-  runtime.registerBranch({ entryId: "accepted-fork", previousSessionFile: acceptedSession, attemptCapabilityReference: forkBinding.attemptCapability });
-  assert.throws(() => runtime.registerBranch({ entryId: "accepted-fork", previousSessionFile: acceptedSession, attemptCapabilityReference: acceptedRegistration.capabilityReference }), /cannot overwrite or substitute/);
-  const forkContext = `horseness-context-v1; attemptCapabilityReference=${forkBinding.attemptCapability}; forkPinDigest=${forkBinding.forkPinDigest}; contextManifestCoreDigest=${forkBinding.contextManifestCoreDigest}; attemptContextBindingDigest=${forkBinding.attemptContextBindingDigest}`;
-  smokeStage = "session-fork-marker";
-  const forkResponse = objectValue(await appServer.request("thread/fork", { threadId: acceptedSession, cwd: root, config, developerInstructions: forkContext }), "THREAD_FORK");
-  const forkThread = objectValue(forkResponse.thread, "THREAD_FORK_THREAD");
-  forkSession = String(forkThread.id ?? "");
-  if (forkSession.length === 0 || forkSession === acceptedSession) throw new Error("CODEX_FORK_THREAD_ID_INVALID");
-  await runtime.registerSessionStart({ sessionId: forkSession, source: "fork", previousSessionId: acceptedSession, branchEntryId: "accepted-fork" });
-  await waitForMcpReady(appServer, forkSession);
-  const forked = await runTurn(appServer, forkSession, skillPath, "Use the explicitly supplied horseness-worker skill. Reply with exactly FORK_OK. Do not call tools.", forkContext);
-  assert.equal(forked.threadId, forkSession); assert.equal(forked.mcpCalls.length, 0); assert.ok(forked.assistantText.includes("FORK_OK"));
   await acceptedProvider.reconcile({ ...acceptedRegistration.binding, operation: "reconcile", providerOperationId: acceptedProviderAttempt.providerOperationId });
   await acceptedProvider.resume({ ...acceptedRegistration.binding, operation: "reattach", providerOperationId: acceptedProviderAttempt.providerOperationId, nativeSessionId: acceptedSession });
   await acceptedProvider.resume({ ...acceptedRegistration.binding, operation: "resume", providerOperationId: acceptedProviderAttempt.providerOperationId, nativeSessionId: acceptedSession });
+  runtime.registerBranch({ entryId: "accepted-fork", previousSessionFile: acceptedSession, attemptCapabilityReference: forkBinding.attemptCapability });
+  assert.throws(() => runtime.registerBranch({ entryId: "accepted-fork", previousSessionFile: acceptedSession, attemptCapabilityReference: acceptedRegistration.capabilityReference }), /cannot overwrite or substitute/);
+  const forkContext = `horseness-context-v1; attemptCapabilityReference=${forkBinding.attemptCapability}; forkPinDigest=${forkBinding.forkPinDigest}; contextManifestCoreDigest=${forkBinding.contextManifestCoreDigest}; attemptContextBindingDigest=${forkBinding.attemptContextBindingDigest}`;
+  const forkClaim = randomBytes(32).toString("hex");
+  runtime.registerThreadClaim({ claim: forkClaim, attemptCapabilityReferences: [forkBinding.attemptCapability], primaryAttemptCapabilityReference: forkBinding.attemptCapability });
+  smokeStage = "session-fork-marker";
+  const forkResponse = objectValue(await appServer.request("thread/fork", { threadId: acceptedSession, cwd: root, config: threadConfig(serverPath, socket, nonce, forkClaim), developerInstructions: `${developerInstructions}\n${forkContext}` }), "THREAD_FORK");
+  const forkThread = objectValue(forkResponse.thread, "THREAD_FORK_THREAD");
+  forkSession = String(forkThread.id ?? "");
+  if (forkSession.length === 0 || forkSession === acceptedSession) throw new Error("CODEX_FORK_THREAD_ID_INVALID");
+  await runtime.bindThreadClaim(forkClaim, forkSession, { source: "fork", previousSessionId: acceptedSession, branchEntryId: "accepted-fork" });
+  await waitForMcpReady(appServer, forkSession);
+  const forked = await runTurn(appServer, forkSession, skillPath, "Use the verified installed horseness-worker skill. Reply with exactly FORK_OK. Do not call tools.", forkContext);
+  assert.equal(forked.threadId, forkSession); assert.equal(forked.mcpCalls.length, 0); assert.ok(forked.assistantText.includes("FORK_OK"));
   assert.deepEqual(observed, decisions); assert.equal(acceptedRevision, 1); assert.deepEqual(acceptedDocument, { value: 2 });
   await new Promise<void>((resolveClose, reject) => server!.close(error => error ? reject(error) : resolveClose())); server = undefined;
   for (const scenario of scenarioAuthorities) scenario.authority.close();
   revokedAcceptedRuntime = runtime;
-  const uninstallState = join(root, "horseness-uninstall.json");
   type UninstallPhase = "kill_switch_written" | "discovery_disabled" | "authority_revoked" | "complete";
+  type UninstallCrash = UninstallPhase | "after_plugin_uninstall";
+  const syncDirectory = async (path: string) => { const handle = await open(path, "r"); try { await handle.sync(); } finally { await handle.close(); } };
   const persistUninstall = async (state: UninstallPhase) => {
     const temporary = `${uninstallState}.${randomBytes(8).toString("hex")}.tmp`;
     const handle = await open(temporary, "wx", 0o600);
-    try { await handle.writeFile(JSON.stringify({ schemaVersion: "CodexUninstallStateV1", state, pluginId, marketplaceName: "horseness-c18" })); await handle.sync(); } finally { await handle.close(); }
-    await rename(temporary, uninstallState);
+    try { await handle.writeFile(JSON.stringify({ schemaVersion: "CodexUninstallStateV1", state, killSwitch: true, pluginId, marketplaceName, installedPluginRoot })); await handle.sync(); } finally { await handle.close(); }
+    await rename(temporary, uninstallState); await syncDirectory(root);
   };
   const readUninstall = async (): Promise<UninstallPhase | null> => {
-    try { return objectValue(JSON.parse(await readFile(uninstallState, "utf8")), "UNINSTALL_STATE").state as UninstallPhase; }
+    try { const state = objectValue(JSON.parse(await readFile(uninstallState, "utf8")), "UNINSTALL_STATE"); if (state.killSwitch !== true) throw new Error("CODEX_UNINSTALL_KILL_SWITCH_INVALID"); return state.state as UninstallPhase; }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
   };
-  const resumeUninstall = async () => {
+  const injectCrash = (point: UninstallCrash, requested?: UninstallCrash) => { if (point === requested) throw new Error(`CRASH_AFTER_${point.toUpperCase()}`); };
+  const disableDiscovery = async (crashAfter?: UninstallCrash) => {
+    const installed = await appServer!.request("plugin/installed", { cwds: [root] });
+    if (JSON.stringify(installed).includes(pluginId)) await appServer!.request("plugin/uninstall", { pluginId });
+    injectCrash("after_plugin_uninstall", crashAfter);
+    await appServer!.request("marketplace/remove", { marketplaceName });
+  };
+  const resumeUninstall = async (crashAfter?: UninstallCrash) => {
     let phase = await readUninstall();
-    if (phase === null) { await persistUninstall("kill_switch_written"); phase = "kill_switch_written"; }
-    if (phase === "kill_switch_written") { await appServer!.request("plugin/uninstall", { pluginId }); await appServer!.request("marketplace/remove", { marketplaceName: "horseness-c18" }); await persistUninstall("discovery_disabled"); phase = "discovery_disabled"; }
-    if (phase === "discovery_disabled") { await runtime.revoke(); await persistUninstall("authority_revoked"); phase = "authority_revoked"; }
+    if (phase === null) { await persistUninstall("kill_switch_written"); injectCrash("kill_switch_written", crashAfter); phase = "kill_switch_written"; }
+    if (phase === "kill_switch_written") { await disableDiscovery(crashAfter); await persistUninstall("discovery_disabled"); injectCrash("discovery_disabled", crashAfter); phase = "discovery_disabled"; }
+    if (phase === "discovery_disabled") { await runtime.revoke(); await persistUninstall("authority_revoked"); injectCrash("authority_revoked", crashAfter); phase = "authority_revoked"; }
     if (phase === "authority_revoked") await persistUninstall("complete");
   };
+  const restartForRecovery = async () => { await appServer!.close(); appServer = await CodexAppServerClient.start(binary, root, nativeEnvironment); };
+  const assertFreshAbsent = async (boundary: string) => {
+    const freshResponse = objectValue(await appServer!.request("thread/start", { cwd: root, developerInstructions: "post-uninstall inventory verification", approvalPolicy: "never", sandbox: "read-only" }), "POST_UNINSTALL_THREAD");
+    const freshThread = objectValue(freshResponse.thread, "POST_UNINSTALL_THREAD_VALUE");
+    const freshInventory = objectValue(await appServer!.request("mcpServerStatus/list", { threadId: String(freshThread.id ?? ""), detail: "full" }), "POST_UNINSTALL_INVENTORY");
+    assertHorsenessInventoryAbsent(freshInventory, boundary);
+    const installed = await appServer!.request("plugin/installed", { cwds: [root] }); if (JSON.stringify(installed).includes(pluginId)) throw new Error(`CODEX_UNINSTALL_${boundary}_PLUGIN_REMAINS`);
+  };
   smokeStage = "uninstall";
-  await resumeUninstall();
-  await resumeUninstall();
+  smokeStage = "uninstall-kill-switch";
+  await assert.rejects(() => resumeUninstall("kill_switch_written"), /CRASH_AFTER_KILL_SWITCH_WRITTEN/);
+  assert.throws(() => revokedAcceptedRuntime!.sessionForThreadClaim(initialClaim), /kill switch|unknown/);
+  smokeStage = "uninstall-restart-after-kill-switch"; await restartForRecovery();
+  smokeStage = "uninstall-after-plugin-remove"; await assert.rejects(() => resumeUninstall("after_plugin_uninstall"), /CRASH_AFTER_AFTER_PLUGIN_UNINSTALL/);
+  smokeStage = "uninstall-restart-after-plugin-remove"; await restartForRecovery();
+  smokeStage = "uninstall-discovery-disabled"; await resumeUninstall("discovery_disabled").catch(error => { if (!String(error).includes("CRASH_AFTER_DISCOVERY_DISABLED")) throw error; });
+  smokeStage = "uninstall-inventory-discovery-disabled"; await restartForRecovery(); await assertFreshAbsent("DISCOVERY_DISABLED");
+  smokeStage = "uninstall-authority-revoked"; await assert.rejects(() => resumeUninstall("authority_revoked"), /CRASH_AFTER_AUTHORITY_REVOKED/);
+  smokeStage = "uninstall-inventory-authority-revoked"; await restartForRecovery(); await assertFreshAbsent("AUTHORITY_REVOKED");
+  smokeStage = "uninstall-complete"; await resumeUninstall();
   if (revokedAcceptedRuntime === null) throw new Error("CODEX_UNINSTALL_RUNTIME_MISSING");
-  await assert.rejects(() => revokedAcceptedRuntime!.deliver("codex-attempt-accepted", { digest: sha(OUTPUT_TEXT), mediaType: "text/plain", byteLength: Buffer.byteLength(OUTPUT_TEXT) }, { digest: sha(EVIDENCE_CLAIM), mediaType: "application/json", byteLength: Buffer.byteLength(EVIDENCE_CLAIM) }), /unknown or revoked/);
-  const freshResponse = objectValue(await appServer.request("thread/start", { cwd: root, developerInstructions: "post-uninstall inventory verification", approvalPolicy: "never", sandbox: "read-only" }), "POST_UNINSTALL_THREAD");
-  const freshThread = objectValue(freshResponse.thread, "POST_UNINSTALL_THREAD_VALUE");
-  const freshThreadId = String(freshThread.id ?? "");
-  const freshInventory = objectValue(await appServer.request("mcpServerStatus/list", { threadId: freshThreadId, detail: "full" }), "POST_UNINSTALL_INVENTORY");
-  assertHorsenessInventoryAbsent(freshInventory, "FRESH_THREAD");
+  await assert.rejects(() => revokedAcceptedRuntime!.deliver("codex-attempt-accepted", { digest: sha(OUTPUT_TEXT), mediaType: "text/plain", byteLength: Buffer.byteLength(OUTPUT_TEXT) }, { digest: sha(EVIDENCE_CLAIM), mediaType: "application/json", byteLength: Buffer.byteLength(EVIDENCE_CLAIM) }, acceptedSession), /kill switch|unknown or revoked|runtime is revoked/);
   await appServer.close(); appServer = undefined;
   const commandArgv = ["corepack", "pnpm", "run", "host:smoke:codex"] as const;
   const gitHead = spawnSync("git", ["rev-parse", "HEAD"], { cwd: resolve(fileURLToPath(new URL("../../..", import.meta.url))), encoding: "utf8", timeout: 5_000, maxBuffer: 4096 });
   const gitTree = spawnSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: resolve(fileURLToPath(new URL("../../..", import.meta.url))), encoding: "utf8", timeout: 5_000, maxBuffer: 4096 });
   if (gitHead.status !== 0 || gitTree.status !== 0) throw new Error("CODEX_CANDIDATE_PROVENANCE_UNAVAILABLE");
   const finishedAtMs = Date.now();
-  const receipt = validateCodexSubscriptionLiveReceiptV1({ schemaVersion: "CodexSubscriptionLiveReceiptV1", host: "codex", authMode: "existing-user-subscription-session", hostVersion: fixture.artifact.version, observedModel: String(started.model ?? ""), candidate: { head: gitHead.stdout.trim(), tree: gitTree.stdout.trim() }, command: { argv: commandArgv, digest: sha(JSON.stringify(commandArgv)), scenarioSetDigest: sha(JSON.stringify({ schemaVersion: "HorsenessCodexExactScenarioBatchV1", capabilityReferences: scenarioInputs.map(item => item.attemptCapabilityReference) })), batchResponseDigest: sha(JSON.stringify(batchResult)) }, provenance: { archiveDigest: fixture.artifact.archiveSha256, archiveIdentity: fixture.artifact.identity, memberPath: fixture.artifact.executable.path, executableDigest: fixture.artifact.executable.sha256, packageDigest: observedPackageDigest, contributions: observedContributions.map(({ name, digest }) => ({ name, digest })) }, bindings: liveBindings, redactionAudit: { passed: true, prohibitedFields: ["account", "email", "subscriptionId", "credential", "authorization", "token", "cookie", "authPath", "tokenFingerprint"] }, timing: { startedAt: new Date(smokeStartedAtMs).toISOString(), finishedAt: new Date(finishedAtMs).toISOString(), durationMs: finishedAtMs - smokeStartedAtMs }, terminal: { result: "succeeded", reason: "CODEX_LIVE_SMOKE_SUCCEEDED" } });
+  const receipt = validateCodexSubscriptionLiveReceiptV1({ schemaVersion: "CodexSubscriptionLiveReceiptV1", host: "codex", authMode: "existing-user-subscription-session", hostVersion: fixture.artifact.version, observedModel: String(started.model ?? ""), candidate: { head: gitHead.stdout.trim(), tree: gitTree.stdout.trim() }, command: { argv: commandArgv, digest: sha(JSON.stringify(commandArgv)), scenarioSetDigest: sha(JSON.stringify({ schemaVersion: "HorsenessCodexExactScenarioBatchV1", capabilityReferences: scenarioInputs.map(item => item.attemptCapabilityReference) })), batchResponseDigest: sha(JSON.stringify(batchResult)) }, provenance: { archiveDigest: fixture.artifact.archiveSha256, archiveIdentity: fixture.artifact.identity, memberPath: fixture.artifact.executable.path, executableDigest: fixture.artifact.executable.sha256, packageDigest: observedPackageDigest, contributions: observedContributions.map(({ name, digest }) => ({ name, digest })), nativePlugin: { observedPluginId: pluginId, nativeItemPluginId: null, nativeItemPluginIdReason: "PINNED_HOST_THREAD_OVERRIDE", resolvedDeclarationDigest: resolvedMcpDeclarationDigest } }, bindings: liveBindings, redactionAudit: { passed: true, prohibitedFields: ["account", "email", "subscriptionId", "credential", "authorization", "token", "cookie", "authPath", "tokenFingerprint"] }, timing: { startedAt: new Date(smokeStartedAtMs).toISOString(), finishedAt: new Date(finishedAtMs).toISOString(), durationMs: finishedAtMs - smokeStartedAtMs }, terminal: { result: "succeeded", reason: "CODEX_LIVE_SMOKE_SUCCEEDED" } });
   process.stdout.write(`${JSON.stringify(receipt)}\n`);
   process.stdout.write(`${JSON.stringify({ schemaVersion: "CodexHostSmokeResultV1", host: "codex", version: fixture.artifact.version, authMode: "existing-user-subscription-session", executableDigest: fixture.artifact.executable.sha256, packageDigest: observedPackageDigest, schemaDigest, resolvedMcpDeclarationDigest, pluginId, threadItemPluginId: nativeCall.pluginId, mcp: { server: nativeCall.server, tool: nativeCall.tool, inventory }, receiptDigest: acceptedReceipt, decisions: observed, canonicalRevision: acceptedRevision, canonicalDocument: acceptedDocument, sessions: { initial: acceptedSession, resumed: acceptedSession, forked: forkSession }, bounds: { scenarios: 5, providerInvocations: 6, workerToolCalls: 1, maxToolCallsPerInvocation: 1, maxTurns: 3, maxContextBytes: 4096, maxOutputBytes: 1024, maxEvidenceBytes: 1024, wallClockMs: MAX_WALL_MS }, lifecycle: { resume: "same-thread-app-server-resume-with-config-and-skill", fork: "new-thread-app-server-fork-with-immutable-binding-config-and-skill", uninstallDiscovery: "native-plugin-uninstall-marketplace-remove-fresh-thread-inventory-absent", horsenessGrant: "revoked", codexLogout: "not-performed" } })}\n`);
 } catch (error) {

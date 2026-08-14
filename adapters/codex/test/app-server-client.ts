@@ -150,12 +150,12 @@ const responseObject = (value: unknown, label: string): JsonObject => {
   return value as JsonObject;
 };
 
-export const threadConfig = (serverPath: string, socketPath: string, nonce: string): JsonObject => ({
+export const threadConfig = (serverPath: string, socketPath: string, nonce: string, threadClaim: string): JsonObject => ({
   mcp_servers: {
     [CODEX_MCP_SERVER]: {
       command: process.execPath,
       args: [serverPath],
-      env: { HORSENESS_CODEX_RUNTIME_SOCKET: socketPath, HORSENESS_CODEX_RUNTIME_NONCE: nonce },
+      env: { HORSENESS_CODEX_RUNTIME_SOCKET: socketPath, HORSENESS_CODEX_RUNTIME_NONCE: nonce, HORSENESS_CODEX_THREAD_CLAIM: threadClaim },
       startup_timeout_sec: 10,
       tool_timeout_sec: 20,
       enabled: true,

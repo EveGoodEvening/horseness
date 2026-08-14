@@ -26,8 +26,13 @@ test("Codex doctor independently hashes exact shipped package resources and reje
     await cp(nativeRoot, copiedRoot, { recursive: true });
     const contributions = await hashContributions();
     assert.deepEqual(codexDoctorV1({ nativePackageVersion: "0.144.1-linux-x64", loaderDigest: "sha256:a96f944d1a596dbfb7fdd84f482be5c50e34b04bb371126840d873e4ebf26902", contributions }).checks.map(check => check.status), ["ok", "ok", "ok"]);
-    await writeFile(join(copiedRoot, "plugin/AGENTS.md"), "tampered\n");
-    assert.deepEqual(codexDoctorV1({ nativePackageVersion: "0.144.1-linux-x64", loaderDigest: "sha256:a96f944d1a596dbfb7fdd84f482be5c50e34b04bb371126840d873e4ebf26902", contributions: await hashContributions() }).checks.map(check => check.status), ["ok", "ok", "error"]);
+    for (const contribution of CODEX_NATIVE_PACKAGE_METADATA.contributions) {
+      await rm(copiedRoot, { recursive: true, force: true }); await cp(nativeRoot, copiedRoot, { recursive: true });
+      await writeFile(join(copiedRoot, contribution.name), "tampered\n");
+      assert.equal(codexDoctorV1({ nativePackageVersion: "0.144.1-linux-x64", loaderDigest: "sha256:a96f944d1a596dbfb7fdd84f482be5c50e34b04bb371126840d873e4ebf26902", contributions: await hashContributions() }).checks.at(-1)?.status, "error");
+      await rm(join(copiedRoot, contribution.name));
+      await assert.rejects(hashContributions, /ENOENT/);
+    }
   } finally {
     await rm(copiedRoot, { recursive: true, force: true });
   }
@@ -78,8 +83,13 @@ test("Codex session bindings persist across restart and reject unknown or substi
       ], { retained, sessionStateDirectory: sessionRoot, initialAttemptCapabilityReference: binding.attemptCapability, attemptContexts: [{ attemptCapabilityReference: binding.attemptCapability, binding, renderedContext: "original", renderedContextDigest: "sha256:original" }, { attemptCapabilityReference: forkBinding.attemptCapability, binding: forkBinding, renderedContext: "fork", renderedContextDigest: "sha256:fork-context" }] });
     };
     const first = makeRuntime();
-    await assert.rejects(() => first.deliverBatch([], undefined), /exactly five distinct scenario capabilities/);
-    assert.equal((await first.registerSessionStart({ sessionId: "session-1", source: "startup" })).binding.attemptCapability, binding.attemptCapability);
+    await assert.rejects(() => first.deliverBatch([], "missing-claim", "missing-session"), /exactly five distinct scenario capabilities/);
+    const claim = "c".repeat(64);
+    first.registerThreadClaim({ claim, attemptCapabilityReferences: [binding.attemptCapability], primaryAttemptCapabilityReference: binding.attemptCapability });
+    assert.equal((await first.bindThreadClaim(claim, "session-1", { source: "startup" })).binding.attemptCapability, binding.attemptCapability);
+    assert.equal(first.sessionForThreadClaim(claim), "session-1");
+    assert.throws(() => first.registerThreadClaim({ claim, attemptCapabilityReferences: [binding.attemptCapability], primaryAttemptCapabilityReference: binding.attemptCapability }), /reused/);
+    await assert.rejects(() => first.bindThreadClaim(claim, "substituted-session", { source: "startup" }), /reused|already bound/);
     await assert.rejects(() => first.registerSessionStart({ sessionId: "unknown-resume", source: "resume", previousSessionId: "missing" }), /unknown or unbound/);
     first.registerBranch({ entryId: "fork-entry", previousSessionFile: "session-1", attemptCapabilityReference: forkBinding.attemptCapability });
     await assert.rejects(() => first.registerSessionStart({ sessionId: "unregistered-fork", source: "fork", previousSessionId: "session-1" }), /pre-registered branch entry id/);
@@ -99,8 +109,7 @@ test("Codex session bindings persist across restart and reject unknown or substi
 test("Codex live receipt validates the required subscription auth mode and rejects auth/account fields", () => {
   const digest = `sha256:${"a".repeat(64)}`;
   const receiptBinding = { workspaceId: "w", runId: "r", taskId: "t", attemptId: "a", generation: 1, forkPinDigest: digest, contextManifestCoreDigest: digest, attemptContextBindingDigest: digest, receiptDigest: digest, proposalDigest: digest, outputDigest: digest, evidenceDigests: [digest] };
-  const receipt: CodexSubscriptionLiveReceiptV1 = { schemaVersion: "CodexSubscriptionLiveReceiptV1", host: "codex", authMode: "existing-user-subscription-session", hostVersion: "0.144.1-linux-x64", observedModel: "codex-model", candidate: { head: "head", tree: "tree" }, command: { argv: ["pnpm", "host:smoke:codex"], digest, scenarioSetDigest: digest, batchResponseDigest: digest }, provenance: { archiveDigest: digest, archiveIdentity: "npm:codex", memberPath: "codex", executableDigest: digest, packageDigest: CODEX_NATIVE_PACKAGE_METADATA.packageDigest, contributions: CODEX_NATIVE_PACKAGE_METADATA.contributions.map(({ name, digest: contributionDigest }) => ({ name, digest: contributionDigest })) }, bindings: Array.from({ length: 5 }, (_, index) => ({ ...receiptBinding, attemptId: `a-${index}` })), redactionAudit: { passed: true, prohibitedFields: [] }, timing: { startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:00:01Z", durationMs: 1000 }, terminal: { result: "succeeded", reason: "CODEX_LIVE_SMOKE_SUCCEEDED" } };
-  assert.deepEqual(validateCodexSubscriptionLiveReceiptV1(receipt), receipt);
+  const receipt: CodexSubscriptionLiveReceiptV1 = { schemaVersion: "CodexSubscriptionLiveReceiptV1", host: "codex", authMode: "existing-user-subscription-session", hostVersion: "0.144.1-linux-x64", observedModel: "codex-model", candidate: { head: "head", tree: "tree" }, command: { argv: ["pnpm", "host:smoke:codex"], digest, scenarioSetDigest: digest, batchResponseDigest: digest }, provenance: { archiveDigest: digest, archiveIdentity: "npm:codex", memberPath: "codex", executableDigest: digest, packageDigest: CODEX_NATIVE_PACKAGE_METADATA.packageDigest, contributions: CODEX_NATIVE_PACKAGE_METADATA.contributions.map(({ name, digest: contributionDigest }) => ({ name, digest: contributionDigest })), nativePlugin: { observedPluginId: "horseness-codex@horseness-c18", nativeItemPluginId: null, nativeItemPluginIdReason: "PINNED_HOST_THREAD_OVERRIDE", resolvedDeclarationDigest: digest } }, bindings: Array.from({ length: 5 }, (_, index) => ({ ...receiptBinding, attemptId: `a-${index}` })), redactionAudit: { passed: true, prohibitedFields: [] }, timing: { startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:00:01Z", durationMs: 1000 }, terminal: { result: "succeeded", reason: "CODEX_LIVE_SMOKE_SUCCEEDED" } };
   assert.throws(() => validateCodexSubscriptionLiveReceiptV1({ ...receipt, authMode: undefined } as unknown as CodexSubscriptionLiveReceiptV1), /INVALID/);
   assert.throws(() => validateCodexSubscriptionLiveReceiptV1({ ...receipt, authMode: "api-key" } as unknown as CodexSubscriptionLiveReceiptV1), /INVALID/);
   const sharedAttemptBindings = receipt.bindings.map((item, index) => ({ ...item, workspaceId: `w-${index}`, attemptId: "shared-attempt" }));

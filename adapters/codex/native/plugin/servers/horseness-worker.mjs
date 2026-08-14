@@ -7,7 +7,8 @@ const MAX_OUTPUT_BYTES = 1_024;
 const MAX_EVIDENCE_BYTES = 1_024;
 const socketPath = process.env.HORSENESS_CODEX_RUNTIME_SOCKET;
 const runtimeNonce = process.env.HORSENESS_CODEX_RUNTIME_NONCE;
-if (typeof socketPath !== "string" || socketPath.length === 0 || typeof runtimeNonce !== "string" || runtimeNonce.length < 32) {
+const threadClaim = process.env.HORSENESS_CODEX_THREAD_CLAIM;
+if (typeof socketPath !== "string" || socketPath.length === 0 || typeof runtimeNonce !== "string" || runtimeNonce.length < 32 || typeof threadClaim !== "string" || threadClaim.length < 32) {
   process.stderr.write("HORSENESS_NATIVE_RUNTIME_UNAVAILABLE\n");
   process.exit(1);
 }
@@ -35,7 +36,7 @@ function invokeRuntime(input) {
     let response = "";
     const timer = setTimeout(() => socket.destroy(new Error("HORSENESS_NATIVE_RUNTIME_TIMEOUT")), 10_000);
     socket.setEncoding("utf8");
-    socket.once("connect", () => socket.end(`${JSON.stringify({ schemaVersion: "HorsenessCodexRuntimeRequestV1", nonce: runtimeNonce, sessionId: null, input })}\n`));
+    socket.once("connect", () => socket.end(`${JSON.stringify({ schemaVersion: "HorsenessCodexRuntimeRequestV1", nonce: runtimeNonce, threadClaim, input })}\n`));
     socket.on("data", chunk => { response += chunk; if (Buffer.byteLength(response) > MAX_LINE_BYTES) socket.destroy(new Error("HORSENESS_NATIVE_RUNTIME_RESPONSE_TOO_LARGE")); });
     socket.once("error", reject);
     socket.once("end", () => {

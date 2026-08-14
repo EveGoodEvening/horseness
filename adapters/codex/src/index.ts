@@ -21,7 +21,7 @@ const CODEX_NATIVE_CONTRIBUTIONS = Object.freeze([
   Object.freeze({ kind: "manifest", name: "plugin/.mcp.json", digest: "sha256:fe18f342428a35e722d8b104ac4b16772bc4c4e179b4d17670b9eb3e9fbb2762" }),
   Object.freeze({ kind: "context", name: "plugin/AGENTS.md", digest: "sha256:cd540129304ac027174d9afefbf1903cc97a78b89b34036bfb2d15328fd0aad2" }),
   Object.freeze({ kind: "skill", name: "plugin/skills/horseness-worker/SKILL.md", digest: "sha256:eb743ae05ccb2616264680ce20dd74d0293eac2d1b6bf4beb4f60e2f421d083e" }),
-  Object.freeze({ kind: "mcp-server", name: "plugin/servers/horseness-worker.mjs", digest: "sha256:288b01416253288cfc8502d8ad331fa94b546d03080202f033478f4aa9469bd7" }),
+  Object.freeze({ kind: "mcp-server", name: "plugin/servers/horseness-worker.mjs", digest: "sha256:4ac950143b5bb4643e8c91eb82af906a63b6500a1af8bcbe46a015b28154d919" }),
 ]) satisfies readonly CodexNativeContributionDigestV1[];
 function observedCodexContribution(item: { readonly name: string; readonly digest: string }): CodexNativeContributionDigestV1 | null {
   const expected = CODEX_NATIVE_CONTRIBUTIONS.find(contribution => contribution.name === item.name);
@@ -33,7 +33,7 @@ export const CODEX_NATIVE_PACKAGE_METADATA = Object.freeze({
   adapterVersion: CODEX_ADAPTER_VERSION,
   hostId: CODEX_HOST_ID,
   hostVersionRange: "=0.144.1-linux-x64",
-  packageDigest: "sha256:2aea14ae2cc93a6c2d32e3a9e47c85c50361730918e6da79fd9d43ce0e0a87f5",
+  packageDigest: "sha256:82cd4b927c69cae31bcc078ad72eefe7171feb83e32eee825c4eaf3c129c2238",
   contributions: CODEX_NATIVE_CONTRIBUTIONS,
 }) satisfies NativePackageMetadataV1;
 
@@ -49,7 +49,7 @@ export interface CodexSubscriptionLiveReceiptV1 {
   readonly observedModel: string;
   readonly candidate: { readonly head: string; readonly tree: string };
   readonly command: { readonly argv: readonly string[]; readonly digest: string; readonly scenarioSetDigest: string; readonly batchResponseDigest: string };
-  readonly provenance: { readonly archiveDigest: string; readonly archiveIdentity: string; readonly memberPath: string; readonly executableDigest: string; readonly packageDigest: string; readonly contributions: readonly { readonly name: string; readonly digest: string }[] };
+  readonly provenance: { readonly archiveDigest: string; readonly archiveIdentity: string; readonly memberPath: string; readonly executableDigest: string; readonly packageDigest: string; readonly contributions: readonly { readonly name: string; readonly digest: string }[]; readonly nativePlugin: { readonly observedPluginId: string; readonly nativeItemPluginId: null; readonly nativeItemPluginIdReason: "PINNED_HOST_THREAD_OVERRIDE"; readonly resolvedDeclarationDigest: string } };
   readonly bindings: readonly { readonly workspaceId: string; readonly runId: string; readonly taskId: string; readonly attemptId: string; readonly generation: number; readonly forkPinDigest: string; readonly contextManifestCoreDigest: string; readonly attemptContextBindingDigest: string; readonly receiptDigest: string; readonly proposalDigest: string; readonly outputDigest: string; readonly evidenceDigests: readonly string[] }[];
   readonly redactionAudit: { readonly passed: true; readonly prohibitedFields: readonly string[] };
   readonly timing: { readonly startedAt: string; readonly finishedAt: string; readonly durationMs: number };
@@ -58,8 +58,8 @@ export interface CodexSubscriptionLiveReceiptV1 {
 export function validateCodexSubscriptionLiveReceiptV1(value: CodexSubscriptionLiveReceiptV1): CodexSubscriptionLiveReceiptV1 {
   const bindingIdentities = value.bindings.map(item => `${item.workspaceId}:${item.runId}:${item.taskId}:${item.attemptId}:${item.generation}`);
   const authMode: unknown = value.authMode;
-  if (value.schemaVersion !== "CodexSubscriptionLiveReceiptV1" || value.host !== "codex" || authMode !== "existing-user-subscription-session" || value.observedModel.length === 0 || value.candidate.head.length === 0 || value.candidate.tree.length === 0 || value.command.argv.length === 0 || value.bindings.length !== 5 || new Set(bindingIdentities).size !== 5 || value.provenance.contributions.length === 0 || value.timing.durationMs < 0 || value.terminal.reason.length === 0 || value.redactionAudit.passed !== true) throw new Error("CODEX_LIVE_RECEIPT_INVALID");
-  const digests = [value.command.digest, value.command.scenarioSetDigest, value.command.batchResponseDigest, value.provenance.archiveDigest, value.provenance.executableDigest, value.provenance.packageDigest, ...value.provenance.contributions.map(item => item.digest), ...value.bindings.flatMap(item => [item.forkPinDigest, item.contextManifestCoreDigest, item.attemptContextBindingDigest, item.receiptDigest, item.proposalDigest, item.outputDigest, ...item.evidenceDigests])];
+  if (value.schemaVersion !== "CodexSubscriptionLiveReceiptV1" || value.host !== "codex" || authMode !== "existing-user-subscription-session" || value.observedModel.length === 0 || value.candidate.head.length === 0 || value.candidate.tree.length === 0 || value.command.argv.length === 0 || value.bindings.length !== 5 || new Set(bindingIdentities).size !== 5 || value.provenance.contributions.length === 0 || value.provenance.nativePlugin.observedPluginId.length === 0 || value.provenance.nativePlugin.nativeItemPluginId !== null || value.provenance.nativePlugin.nativeItemPluginIdReason !== "PINNED_HOST_THREAD_OVERRIDE" || value.timing.durationMs < 0 || value.terminal.reason.length === 0 || value.redactionAudit.passed !== true) throw new Error("CODEX_LIVE_RECEIPT_INVALID");
+  const digests = [value.command.digest, value.command.scenarioSetDigest, value.command.batchResponseDigest, value.provenance.archiveDigest, value.provenance.executableDigest, value.provenance.packageDigest, value.provenance.nativePlugin.resolvedDeclarationDigest, ...value.provenance.contributions.map(item => item.digest), ...value.bindings.flatMap(item => [item.forkPinDigest, item.contextManifestCoreDigest, item.attemptContextBindingDigest, item.receiptDigest, item.proposalDigest, item.outputDigest, ...item.evidenceDigests])];
   if (digests.some(digest => !/^(?:sha256:)?[a-f0-9]{64}$/.test(digest))) throw new Error("CODEX_LIVE_RECEIPT_DIGEST_INVALID");
   const observedContributions = value.provenance.contributions.map(observedCodexContribution);
   if (observedContributions.some(item => item === null) || JSON.stringify(value.provenance.contributions) !== JSON.stringify(CODEX_NATIVE_CONTRIBUTIONS.map(({ name, digest }) => ({ name, digest }))) || value.provenance.packageDigest !== codexNativePackageDigestV1(observedContributions as CodexNativeContributionDigestV1[]) || value.provenance.packageDigest !== CODEX_NATIVE_PACKAGE_METADATA.packageDigest) throw new Error("CODEX_LIVE_RECEIPT_PROVENANCE_MISMATCH");
@@ -244,6 +244,7 @@ export interface CodexNativeContributionRuntimeOptionsV1 {
   readonly attemptContexts?: readonly CodexNativeAttemptContextV1[];
   readonly initialAttemptCapabilityReference?: string;
   readonly sessionStateDirectory?: string;
+  readonly killSwitchPath?: string;
 }
 export interface CodexNativeBranchRegistrationV1 {
   readonly entryId: string;
@@ -255,6 +256,11 @@ export interface CodexNativeSessionStartV1 {
   readonly source: "startup" | "resume" | "fork" | "clear" | "compact";
   readonly previousSessionId?: string;
   readonly branchEntryId?: string;
+}
+export interface CodexNativeThreadClaimV1 {
+  readonly claim: string;
+  readonly attemptCapabilityReferences: readonly string[];
+  readonly primaryAttemptCapabilityReference: string;
 }
 export interface CodexNativeWorkerReturnInputV1 {
   readonly attemptCapabilityReference: string;
@@ -276,14 +282,17 @@ export interface CodexNativeWorkerReturnBatchEvidenceV1 {
 }
 export interface CodexNativeWorkerReturnBatchResultV1 {
   readonly schemaVersion: "HorsenessCodexWorkerReturnBatchResultV1";
-  readonly sessionId: string | null;
+  readonly sessionId: string;
   readonly results: readonly CodexNativeWorkerReturnBatchEvidenceV1[];
   readonly canonicalAcceptedAdvance: { readonly workspaceId: string; readonly runId: string; readonly revision: number; readonly stateHash: string };
 }
 
 export interface CodexNativeContributionRuntimeV1 {
-  deliver(capabilityReference: string, output: CodexNativeWorkerReturnInputV1["output"], evidence: CodexNativeWorkerReturnInputV1["evidence"], sessionId?: string): Promise<CodexNativeWorkerReturnResultV1>;
-  deliverBatch(inputs: readonly CodexNativeWorkerReturnInputV1[], sessionId?: string): Promise<CodexNativeWorkerReturnBatchResultV1>;
+  deliver(capabilityReference: string, output: CodexNativeWorkerReturnInputV1["output"], evidence: CodexNativeWorkerReturnInputV1["evidence"], sessionId: string): Promise<CodexNativeWorkerReturnResultV1>;
+  deliverBatch(inputs: readonly CodexNativeWorkerReturnInputV1[], claim: string, sessionId: string): Promise<CodexNativeWorkerReturnBatchResultV1>;
+  registerThreadClaim(registration: CodexNativeThreadClaimV1): void;
+  bindThreadClaim(claim: string, sessionId: string, start: Omit<CodexNativeSessionStartV1, "sessionId">): Promise<CodexNativeAttemptContextV1>;
+  sessionForThreadClaim(claim: string): string;
   state(): Promise<{ readonly attemptKeys: readonly string[] }>;
   contextForAttempt(): Promise<CodexNativeAttemptContextV1 | null>;
   registerSessionStart(start: CodexNativeSessionStartV1): Promise<CodexNativeAttemptContextV1>;
@@ -345,10 +354,12 @@ function assertCanonicalTuple(record: CodexRetainedDeliveryV1, receipt: AttemptR
   const publications = record.workerReturn.publications;
   if (record.workerReturn.receipt.receiptDigest !== receipt.receiptDigest || publications.length !== 2 || publications[0]?.kind !== "artifact" || publications[0].digest !== outputDigest || publications[1]?.kind !== "evidence" || publications[1].digest !== evidenceDigest) throw new Error("replayed Codex worker return substituted the canonical output/evidence tuple");
 }
+type CodexThreadClaimStateV1 = { readonly attemptCapabilityReferences: readonly string[]; readonly primaryAttemptCapabilityReference: string; readonly sessionId: string | null };
 type CodexSessionBindingStateV1 = {
   readonly schemaVersion: "CodexSessionBindingStateV1";
   readonly sessions: Readonly<Record<string, string>>;
   readonly branches: Readonly<Record<string, CodexNativeBranchRegistrationV1>>;
+  readonly claims: Readonly<Record<string, CodexThreadClaimStateV1>>;
 };
 function createSessionBindingStore(directory: string | undefined) {
   if (directory === undefined || !isAbsolute(directory)) throw new Error("Codex session binding state directory must be absolute");
@@ -361,9 +372,9 @@ function createSessionBindingStore(directory: string | undefined) {
       if (details.isSymbolicLink() || !details.isFile() || (details.mode & 0o077) !== 0) throw new Error("Codex session binding state must be a private regular file");
       const parsed = JSON.parse(readFileSync(path, "utf8")) as CodexSessionBindingStateV1;
       if (parsed.schemaVersion !== "CodexSessionBindingStateV1" || parsed.sessions === null || parsed.branches === null) throw new Error("Codex session binding state is invalid");
-      return parsed;
+      return { ...parsed, claims: parsed.claims ?? {} };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { schemaVersion: "CodexSessionBindingStateV1", sessions: {}, branches: {} };
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { schemaVersion: "CodexSessionBindingStateV1", sessions: {}, branches: {}, claims: {} };
       throw error;
     }
   };
@@ -390,11 +401,18 @@ export function createCodexNativeContributionRuntimeV1(registrations: readonly C
   const branchesByEntry = new Map(Object.entries(persisted.branches));
   const branchesBySession = new Map(Object.values(persisted.branches).map(branch => [branch.previousSessionFile, branch]));
   const sessions = new Map(Object.entries(persisted.sessions));
+  const claims = new Map(Object.entries(persisted.claims));
   let selectedCapability = options.initialAttemptCapabilityReference ?? registrations[0]?.capabilityReference ?? null;
   let pendingBranch: CodexNativeBranchRegistrationV1 | null = null;
   let revoker: (() => Promise<void>) | null = null;
   let revoked = false;
-  const persistSessions = () => sessionStore.publish({ schemaVersion: "CodexSessionBindingStateV1", sessions: Object.fromEntries(sessions), branches: Object.fromEntries(branchesByEntry) });
+  const assertEnabled = () => {
+    if (revoked) throw new Error("Codex native contribution runtime is revoked");
+    if (options.killSwitchPath === undefined) return;
+    try { const value = JSON.parse(readFileSync(options.killSwitchPath, "utf8")) as { killSwitch?: unknown }; if (value.killSwitch === true) throw new Error("Codex native contribution kill switch is active"); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  };
+  const persistSessions = () => sessionStore.publish({ schemaVersion: "CodexSessionBindingStateV1", sessions: Object.fromEntries(sessions), branches: Object.fromEntries(branchesByEntry), claims: Object.fromEntries(claims) });
   for (const registration of registrations) {
     const reference = parseCredentialReferenceV1({ schemaVersion: "1", kind: "host-reference", reference: registration.capabilityReference, scope: { workspaceId: registration.binding.workspaceId, adapterId: CODEX_ADAPTER_ID, purpose: "codex-attempt-return" } });
     if (reference.reference !== registration.binding.attemptCapability) throw new Error("Codex attempt capability reference does not match immutable binding");
@@ -402,12 +420,14 @@ export function createCodexNativeContributionRuntimeV1(registrations: readonly C
     active.set(reference.reference, registration);
   }
   return Object.freeze({
-    async deliver(capabilityReference: string, output: { readonly digest: string; readonly mediaType: string; readonly byteLength: number }, evidence: { readonly digest: string; readonly mediaType: string; readonly byteLength: number }, sessionId?: string) {
-      if (sessionId !== undefined && sessions.get(sessionId) !== capabilityReference) throw new Error("Codex session capability substitution rejected");
+    async deliver(capabilityReference: string, output: { readonly digest: string; readonly mediaType: string; readonly byteLength: number }, evidence: { readonly digest: string; readonly mediaType: string; readonly byteLength: number }, sessionId: string) {
+      assertEnabled();
+      if (sessionId.length === 0 || sessions.get(sessionId) !== capabilityReference) throw new Error("Codex session capability substitution rejected");
       const registration = active.get(capabilityReference);
       if (registration === undefined) throw new Error("unknown or revoked Codex attempt capability reference");
       const key = attemptKey(registration.binding);
       return retained.runExclusive(key, async () => {
+        assertEnabled();
         const receipt = await registration.adapter.collectReceipt(registration.binding);
         if (receipt.outputDigest !== output.digest) throw new Error("Codex provider output digest does not match the bound attempt receipt");
         if (receipt.evidence.length !== 1 || receipt.evidence[0]?.digest !== evidence.digest) throw new Error("Codex provider evidence digest does not match the bound attempt receipt");
@@ -425,28 +445,53 @@ export function createCodexNativeContributionRuntimeV1(registrations: readonly C
         return structuredClone({ workerReturn: record.workerReturn, delivery });
       });
     },
-    async deliverBatch(inputs: readonly CodexNativeWorkerReturnInputV1[], sessionId?: string) {
+    async deliverBatch(inputs: readonly CodexNativeWorkerReturnInputV1[], claim: string, sessionId: string) {
+      assertEnabled();
       if (inputs.length !== 5 || new Set(inputs.map(input => input.attemptCapabilityReference)).size !== 5) throw new Error("Codex native worker return batch requires exactly five distinct scenario capabilities");
-      if (sessionId !== undefined && !sessions.has(sessionId)) throw new Error("Codex worker return batch session is unknown or unbound");
+      const claimState = claims.get(claim);
+      if (claimState === undefined || claimState.sessionId !== sessionId) throw new Error("Codex worker return thread claim is unknown, unbound, reused, or substituted");
+      const expected = [...claimState.attemptCapabilityReferences].sort();
+      const supplied = inputs.map(input => input.attemptCapabilityReference).sort();
+      if (JSON.stringify(expected) !== JSON.stringify(supplied)) throw new Error("Codex worker return thread claim capability substitution rejected");
+      claims.delete(claim); persistSessions();
       const results: CodexNativeWorkerReturnBatchEvidenceV1[] = [];
       let canonicalAcceptedAdvance: CodexNativeWorkerReturnBatchResultV1["canonicalAcceptedAdvance"] | null = null;
       for (const input of inputs) {
-        const result = await this.deliver(input.attemptCapabilityReference, input.output, input.evidence);
-        const { binding, receipt, proposal } = result.workerReturn;
-        results.push({ workspaceId: binding.workspaceId, runId: binding.runId, taskId: binding.taskId, attemptId: binding.attemptId, generation: binding.generation, decision: result.delivery.decision, receiptDigest: receipt.receiptDigest, proposalDigest: proposal.proposalDigest, outputDigest: receipt.outputDigest!, evidenceDigests: receipt.evidence.map(item => item.digest) });
-        if (result.delivery.decision === "accepted") {
+        sessions.set(sessionId, input.attemptCapabilityReference);
+        const delivered = await this.deliver(input.attemptCapabilityReference, input.output, input.evidence, sessionId);
+        const { binding, receipt, proposal } = delivered.workerReturn;
+        results.push({ workspaceId: binding.workspaceId, runId: binding.runId, taskId: binding.taskId, attemptId: binding.attemptId, generation: binding.generation, decision: delivered.delivery.decision, receiptDigest: receipt.receiptDigest, proposalDigest: proposal.proposalDigest, outputDigest: receipt.outputDigest!, evidenceDigests: receipt.evidence.map(item => item.digest) });
+        if (delivered.delivery.decision === "accepted") {
           const authority = active.get(input.attemptCapabilityReference)?.authority;
           if (canonicalAcceptedAdvance !== null || authority?.canonicalAcceptedAdvance === undefined) throw new Error("Codex native worker return batch lacks one authoritative accepted canonical advance");
           canonicalAcceptedAdvance = await authority.canonicalAcceptedAdvance();
         }
       }
+      sessions.set(sessionId, claimState.primaryAttemptCapabilityReference); persistSessions();
       if (canonicalAcceptedAdvance === null) throw new Error("Codex native worker return batch lacks one authoritative accepted canonical advance");
-      return structuredClone({ schemaVersion: "HorsenessCodexWorkerReturnBatchResultV1" as const, sessionId: sessionId ?? null, results, canonicalAcceptedAdvance });
+      return structuredClone({ schemaVersion: "HorsenessCodexWorkerReturnBatchResultV1" as const, sessionId, results, canonicalAcceptedAdvance });
     },
+    registerThreadClaim(registration: CodexNativeThreadClaimV1) {
+      assertEnabled();
+      if (registration.claim.length < 32 || claims.has(registration.claim) || registration.attemptCapabilityReferences.length === 0 || !registration.attemptCapabilityReferences.includes(registration.primaryAttemptCapabilityReference) || registration.attemptCapabilityReferences.some(reference => !active.has(reference))) throw new Error("invalid or reused Codex thread claim");
+      claims.set(registration.claim, { attemptCapabilityReferences: [...registration.attemptCapabilityReferences], primaryAttemptCapabilityReference: registration.primaryAttemptCapabilityReference, sessionId: null }); persistSessions();
+    },
+    async bindThreadClaim(claim: string, sessionId: string, start: Omit<CodexNativeSessionStartV1, "sessionId">) {
+      assertEnabled();
+      const claimState = claims.get(claim);
+      if (claimState === undefined || claimState.sessionId !== null) throw new Error("Codex thread claim is unknown, reused, or already bound");
+      selectedCapability = claimState.primaryAttemptCapabilityReference;
+      const context = await this.registerSessionStart({ ...start, sessionId });
+      if (context.attemptCapabilityReference !== claimState.primaryAttemptCapabilityReference) throw new Error("Codex thread claim context substitution rejected");
+      claims.set(claim, { ...claimState, sessionId }); persistSessions();
+      return context;
+    },
+    sessionForThreadClaim(claim: string) { assertEnabled(); const value = claims.get(claim); if (value?.sessionId === null || value === undefined) throw new Error("Codex thread claim is unknown or unbound"); return value.sessionId; },
     async state() { return { attemptKeys: registrations.map(registration => attemptKey(registration.binding)).filter(key => retained.load(key) !== undefined) }; },
     async contextForAttempt() { if (revoked || selectedCapability === null) return null; const context = contexts.get(selectedCapability); return context === undefined ? null : structuredClone(context); },
     async registerSessionStart(start: CodexNativeSessionStartV1) {
-      if (revoked || start.sessionId.length === 0) throw new Error("invalid Codex session start");
+      assertEnabled();
+      if (start.sessionId.length === 0) throw new Error("invalid Codex session start");
       const existing = sessions.get(start.sessionId);
       if (existing !== undefined) {
         if (start.source === "startup" || (start.previousSessionId !== undefined && sessions.get(start.previousSessionId) !== existing)) throw new Error("Codex session binding substitution rejected");
@@ -469,7 +514,7 @@ export function createCodexNativeContributionRuntimeV1(registrations: readonly C
       return structuredClone(contexts.get(capability)!);
     },
     registerBranch(registration: CodexNativeBranchRegistrationV1) {
-      if (revoked) throw new Error("Codex native contribution runtime is revoked");
+      assertEnabled();
       const { entryId, previousSessionFile, attemptCapabilityReference } = registration;
       if (entryId.length === 0 || previousSessionFile.length === 0) throw new Error("invalid Codex branch registration identifiers");
       if (!active.has(attemptCapabilityReference) || !contexts.has(attemptCapabilityReference)) throw new Error("Codex branch registration references an unknown attempt capability");
@@ -487,13 +532,14 @@ export function createCodexNativeContributionRuntimeV1(registrations: readonly C
       persistSessions();
     },
     async beforeBranch(entryId: string) {
-      if (revoked || typeof entryId !== "string" || entryId.length === 0) throw new Error("invalid Codex branch entry id");
+      assertEnabled();
+      if (typeof entryId !== "string" || entryId.length === 0) throw new Error("invalid Codex branch entry id");
       const branch = branchesByEntry.get(entryId);
       if (branch === undefined) throw new Error("unknown Codex branch entry id");
       pendingBranch = branch;
     },
     async activateSession(previousSessionFile: string | null) {
-      if (revoked) return null;
+      assertEnabled();
       if (previousSessionFile !== null) {
         const pending = pendingBranch;
         pendingBranch = null;
@@ -506,9 +552,9 @@ export function createCodexNativeContributionRuntimeV1(registrations: readonly C
       return context === undefined ? null : { forkPinDigest: context.binding.forkPinDigest };
     },
     registerRevoker(next: () => Promise<void>) { if (revoker !== null) throw new Error("Codex native grant revoker is already registered"); revoker = next; },
-    async revoke() { if (revoked) return; revoked = true; active.clear(); contexts.clear(); branchesByEntry.clear(); branchesBySession.clear(); sessions.clear(); selectedCapability = null; pendingBranch = null; persistSessions(); const current = revoker; revoker = null; if (current !== null) await current(); else retained.close(); },
-    async sessionShutdown() { pendingBranch = null; },
-    async shutdown() { active.clear(); contexts.clear(); branchesByEntry.clear(); branchesBySession.clear(); sessions.clear(); selectedCapability = null; pendingBranch = null; retained.close(); },
+    async revoke() { if (revoked) return; revoked = true; active.clear(); contexts.clear(); branchesByEntry.clear(); branchesBySession.clear(); sessions.clear(); claims.clear(); selectedCapability = null; pendingBranch = null; persistSessions(); const current = revoker; revoker = null; if (current !== null) await current(); else retained.close(); },
+    async sessionShutdown() { assertEnabled(); pendingBranch = null; },
+    async shutdown() { active.clear(); contexts.clear(); branchesByEntry.clear(); branchesBySession.clear(); sessions.clear(); claims.clear(); selectedCapability = null; pendingBranch = null; retained.close(); },
   });
 }
 
