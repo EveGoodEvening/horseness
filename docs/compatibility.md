@@ -31,11 +31,11 @@ Unknown cursor kinds, fork-pin/snapshot/scope/completion-policy versions, propos
 Readers reject unknown schema, cursor, canonicalizer, hash, operation, policy, dispatch, receipt, and authorization variants before mutation. The public compatibility train is the eleven-family vector set under `docs/vectors/{events,cursors,proposal,delta,fork-pin,dependency-join,delta-authority,context-binding,receipt,task-dispatch,authorization}`. Each vector freezes canonical JSON bytes and its domain-separated digest; downstream protocol, policy, storage, orchestration, SDK, and adapter packages consume these identities rather than redefining them.
 
 The domain package exposes `horseness-vectors-verify`, its package-local `vectors:verify` script, and the repository root forwards the frozen vector gate.
- 
+
 ## Protocol v1 implementation train
- 
+
 `@horseness/protocol` now freezes the exhaustive JSON-RPC 2.0 method registry and omitted-deny authorization matrix for the full coordinator and adapter SPI surface. Runtime readers require exact request fields, protocol version `1`, method-specific observation cursor scope, command idempotency keys, and role authorization before dispatch. Unknown methods, versions, cursor kinds, extra fields, or unauthorized role/method combinations fail closed.
- 
+
 Pagination names `afterObservationCursor` separately from emitted result cursors. Subscription resumption binds subscription ID, after-observation cursor, and opaque resume token. Stable success/error envelopes, local-only transport metadata, domain-owned receipt/proposal mappings, capability detection, provider lifecycle SPI, and `WorkerReturnV1` are public v1 contracts. Generated canonical schemas/manifests and executable vectors are checked byte-for-byte; no v1 reader infers missing cursor scope, transport identity, idempotency, or authority.
 
 ## Adapter-kit v1 implementation train
@@ -59,6 +59,12 @@ The adapter-owned `host:smoke:pi` gate resolves the real installed Pi 0.73.1 pac
 OMP support is pinned to `@oh-my-pi/pi-coding-agent@17.2.15` and its same-distribution Bun extension loader (`src/extensibility/extensions/loader.ts`, SHA-256 `c0076ad052d435ee1075abfa0682e83ad4a075a1415c720bbbdf71d9affcc48f`). The smoke executes that interface only from the C11 digest-verified archive copied into an isolated work root with offline-installed dependencies. The shipped native contribution uses OMP `registerTool`, `registerCommand`, `before_agent_start`, `agent_start`, and exact 17.2.15 session event fields; Pi names, paths, and lifecycle assumptions are not compatibility aliases.
 
 The `host:smoke:omp` gate proves attempt-scoped immutable context injection and the complete native-origin `WorkerReturnV1` path through the real loaded extension, durable tuple-bound cross-instance deduplication, resumable decision-subscription checkpoints, all five authority outcomes, accepted canonical advance, restart/reconcile/reattach/resume, real branch lifecycle signaling, and uninstall as contribution removal plus loader rediscovery and trusted runtime credential revocation. `session_shutdown` is ordinary teardown because OMP 17.2.15 exposes no uninstall reason.
+
+## Claude Code adapter v1 implementation train
+
+Claude Code support is pinned to the verified `@anthropic-ai/claude-code-linux-x64@2.1.228` distribution and executable SHA-256 `d535985e6941a3eb00179ccd7f52ceb0c6623a0305a518ebc4e6514f84a94c99`. Its live gate uses only the invoking OS user's already logged-in native subscription session under ADR 0006. Horseness never reads, copies, hashes, logs, exports, or persists Claude authentication material, and an absent or unusable session fails with a stable redacted reason.
+
+The `host:smoke:claude` gate validates the real plugin and inventory, then invokes the digest-verified executable headlessly with the shipped command, agent, skill, SessionStart hook, and namespaced stdio MCP server. It observes native stream initialization plus real `tool_use`/`tool_result`, delivers complete tuple-bound `WorkerReturnV1` values through adapter-kit, covers all five authority decisions and accepted canonical advance, verifies durable restart/concurrency recovery, maps real `--resume` and `--fork-session` identities to immutable attempt/ForkPin bindings, and proves contribution removal plus Horseness grant revocation without logging out or modifying the provider-owned subscription session.
 
 ## Daemon v1 implementation train
 

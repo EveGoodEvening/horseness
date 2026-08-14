@@ -41,9 +41,17 @@
     "credentials": "disabled"
   },
   "livePolicy": {
-    "credentialReference": "HORSENESS_CLAUDE_CREDENTIAL_REF",
-    "publicationRequired": false,
-    "timeoutMs": 30000,
-    "budget": {"maxCostUsd": 0.25, "maxAttempts": 1}
+    "authMode": "existing-user-subscription-session",
+    "publicationRequired": true,
+    "timeoutMs": 120000,
+    "bounds": {
+      "maxScenarios": 5,
+      "maxTurnsPerInvocation": 3,
+      "maxToolCallsPerInvocation": 1,
+      "maxContextBytes": 4096,
+      "maxStreamBytes": 262144,
+      "maxOutputBytes": 1024,
+      "maxEvidenceBytes": 1024
+    }
   }
 }
