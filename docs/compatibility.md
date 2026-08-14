@@ -73,6 +73,17 @@ Codex support is pinned to the digest-verified `@openai/codex@0.144.1-linux-x64`
 
 The live gate uses ADR 0006's invoking-user subscription session without inspecting or mutating provider authentication state. App-server processes receive only verified runtime paths, required native session homes, locale, bounded temp paths, reviewed nonsecret controls, and the active Horseness claim variables; secret-shaped, provider API key, cloud/CI credential, and proxy variables are stripped. Fresh processes carry the initial, resume, and fork claims before plugin MCP startup. Structured plugin mention plus skill input selects the installed contribution, a real model-native batch originates five durable tuple-bound `WorkerReturnV1` deliveries, and crash-injected uninstall removes plugin/marketplace discovery before authority revocation.
 
+
+## Installer journal and trust implementation train
+
+`@horseness/installer` writes the exact `horseness.installer-journal-record.v1`, `horseness.installer-state.v1`, `horseness.release-manifest.v1`, `horseness.signed-release-manifest.v1`, `horseness.project-trust-root.v1`, and `horseness.install-consent.v1` forms. Journal readers support v0/v1, authenticate raw record bytes and the complete generation hash chain before upcast, and refuse unknown newer journal or state schemas before mutation.
+
+Migration generations durably record backup, staged-tree, activation, compensation, repair-required, and uninstall-after-upgrade transitions. Backups and staging are confined to an owner-private authority root and use write/fsync/rename/directory-fsync publication. The crash matrix freezes recovery at every publication boundary. Downgrades require a reversible migration and cross-major downgrades additionally require an explicit gate.
+
+Release trust verifies Ed25519 project-root delegations, release signatures, anti-replay sequence/version state, rotation windows and revocation, exact artifact and dependency-graph digests, and exact Sigstore issuer/repository/workflow/protected-environment identity. Lifecycle scripts, wrong identity, wrong key, replay, and tamper fail closed. Consent binds the release and artifact digests, hosts, executable capabilities, scope, OS identity, timestamp, and interactive-explicit or unattended-digest mode before mutation.
+
+The frozen non-public `0.0.0-compat.1` train reproducibly packs prior database, journal, daemon, CLI, and installer behavior sufficient to initiate migration. Offline build and verify commands bind its source digest, artifact digest, release-manifest digest, dependency graph, and fixture project-root signing provenance.
+
 ## Daemon v1 implementation train
 
 `@horseness/daemon` serves the local authority through versioned stdio, Unix-domain socket, and Windows named-pipe endpoints. Stdio is process-inherited; filesystem endpoints require an owner-only parent and endpoint. TCP is not a v1 transport and remains disabled by default. Transport implementations authenticate peers and frame newline-delimited JSON-RPC 2.0 messages, while daemon services alone own bootstrap, grants, dispatch, and authority mutations.

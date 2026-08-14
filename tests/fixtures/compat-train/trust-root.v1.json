@@ -1,0 +1,8 @@
+{
+  "schema":"horseness.project-trust-root.v1",
+  "rootKeyId":"project-root-compat-1",
+  "rootPublicKeyPem":"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAeXhhZN9ddQ6OOlcNPwTsiToCwT0Ho5vURF6ECxvEKOo=\n-----END PUBLIC KEY-----\n",
+  "delegations":[{"keyId":"release-compat-1","publicKeyPem":"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAfLDXTC6L9/DL6ZiDQLfPDBXlmzlSPxtTdb6CNfnCY9w=\n-----END PUBLIC KEY-----\n","validFromSequence":1,"validThroughSequence":1,"rootSignature":"T6ApTsEBHRT4+wlgV0fh1MN9hJIJg6iwZOwzZYIeEXi6e0Xevg9bZZyhJ+RT0XBCOvO5mbUtZE3K2zJ7439LCA=="}],
+  "revokedKeyIds":[],
+  "requiredSigstoreIdentity":{"issuer":"https://token.actions.githubusercontent.com","repository":"EveGoodEvening/horseness","workflow":".github/workflows/release.yml@refs/heads/main","protectedEnvironment":"release"}
+}

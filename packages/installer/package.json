@@ -11,9 +11,16 @@
     }
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p ../../tsconfig.base.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src --max-warnings=0",
-    "test": "node --test"
+    "test": "node --import tsx --test test/**/*.test.ts",
+    "test:journal-crash": "node --import tsx --test test/journal/*.test.ts test/migrations/*.test.ts",
+    "test:trust-consent": "node --import tsx --test test/trust/*.test.ts test/consent/*.test.ts"
   },
-  "dependencies": {}
+  "dependencies": {
+    "@horseness/domain": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "4.20.5"
+  }
 }

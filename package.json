@@ -31,7 +31,9 @@
     "host:smoke:claude": "pnpm --filter @horseness/adapter-claude run host:smoke",
     "host:smoke:codex": "pnpm --filter @horseness/adapter-codex run host:smoke",
     "acceptance": "node scripts/acceptance.mjs",
-    "progress:cas": "node scripts/progress-cas.mjs"
+    "progress:cas": "node scripts/progress-cas.mjs",
+    "compat-train:build": "node scripts/compat-train/build.mjs",
+    "compat-train:verify": "node scripts/compat-train/verify.mjs"
   },
   "markdownlint-cli2": {
     "config": {
