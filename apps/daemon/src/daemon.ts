@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import { dirname } from "node:path";
 import { canonicalJson, type JsonValue } from "@horseness/domain";
@@ -10,7 +10,22 @@ import { resolveDaemonConfig, type DaemonConfigV1, type ResolvedDaemonConfigV1 }
 import { GrantStore } from "./grant-store.js";
 import { DaemonServer } from "./server.js";
 
-export interface EndpointStateV1 { readonly schemaVersion: "1"; readonly workspaceId: string; readonly transport: "stdio" | "unix-socket"; readonly endpointPath: string | null; readonly processId: number; readonly startedAt: string; }
+export interface EndpointStateV1 { readonly schemaVersion: "1"; readonly workspaceId: string; readonly transport: "stdio" | "unix-socket"; readonly endpointPath: string | null; readonly processId: number; readonly processIncarnation?: string; readonly startedAt: string; }
+
+export function daemonProcessIncarnation(processId: number): string {
+  if (process.platform !== "linux") throw new Error("verifiable daemon process incarnation is unsupported on this platform");
+  let stat: string;
+  try { stat = readFileSync(`/proc/${processId}/stat`, "utf8"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("daemon process is not live");
+    throw new Error("daemon process incarnation could not be verified", { cause: error });
+  }
+  const commandEnd = stat.lastIndexOf(")");
+  if (commandEnd < 2 || stat[commandEnd + 1] !== " ") throw new Error("daemon process incarnation is invalid");
+  const starttime = stat.slice(commandEnd + 2).trim().split(/\s+/u)[19];
+  if (starttime === undefined || !/^[0-9]+$/u.test(starttime)) throw new Error("daemon process incarnation is invalid");
+  return `linux-proc-starttime:${starttime}`;
+}
 
 export class Daemon {
   readonly config: ResolvedDaemonConfigV1;
@@ -72,7 +87,7 @@ export class Daemon {
     await this.transportServer.start();
     try {
       mkdirSync(this.config.stateDirectory, { recursive: true, mode: 0o700 }); chmodSync(this.config.stateDirectory, 0o700);
-      const state: EndpointStateV1 = Object.freeze({ schemaVersion: "1", workspaceId: this.config.workspaceId, transport: this.config.transport.kind === "stdio" ? "stdio" : "unix-socket", endpointPath: this.config.transport.kind === "unix-socket" ? this.config.transport.endpointPath : null, processId: process.pid, startedAt: this.config.authorityTime() });
+      const state: EndpointStateV1 = Object.freeze({ schemaVersion: "1", workspaceId: this.config.workspaceId, transport: this.config.transport.kind === "stdio" ? "stdio" : "unix-socket", endpointPath: this.config.transport.kind === "unix-socket" ? this.config.transport.endpointPath : null, processId: process.pid, processIncarnation: daemonProcessIncarnation(process.pid), startedAt: this.config.authorityTime() });
       const temporary=`${this.config.endpointStatePath}.${process.pid}.tmp`;const descriptor=openSync(temporary,"wx",0o600);
       try{writeFileSync(descriptor,`${canonicalJson(state as unknown as JsonValue)}\n`);fsyncSync(descriptor);}finally{closeSync(descriptor);}
       renameSync(temporary,this.config.endpointStatePath);chmodSync(this.config.endpointStatePath,0o600);const directory=openSync(this.config.stateDirectory,"r");try{fsyncSync(directory);}finally{closeSync(directory);}

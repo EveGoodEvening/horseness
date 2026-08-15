@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -57,8 +57,45 @@ test("restart reopens workspace and preserves isolated grants", async () => {
   assert.equal((await reopened.grants.lookupActiveGrant("user-a", one.grantReference))?.principalId, "a"); assert.equal(await reopened.grants.lookupActiveGrant("user-a", two.grantReference), null); reopened.close();
 });
 
-test("endpoint discovery is owner-only and process smoke succeeds", async () => {
-  const { daemon } = fixture(process.env.USER ?? "owner"); const result = bootstrap(daemon); await daemon.start(result.grantReference);
-  const endpoint = discoverDaemonEndpoint(daemon.config.endpointStatePath, daemon.config.workspaceId); assert.equal(endpoint.processId, process.pid); assert.equal(statSync(daemon.config.endpointStatePath).mode & 0o777, 0o600); assert.match(readFileSync(daemon.config.endpointStatePath, "utf8"), /unix-socket/); await daemon.stop(); daemon.close();
-  const smoke = spawnSync(process.execPath, ["--input-type=module", "-e", "process.stdout.write(JSON.stringify({ok:true,pid:process.pid}))"], { encoding: "utf8" }); assert.equal(smoke.status, 0); assert.equal(JSON.parse(smoke.stdout).ok, true);
+test("endpoint discovery accepts only the live exact process incarnation", async () => {
+  if (process.platform !== "linux") return;
+  const { daemon } = fixture(process.env.USER ?? "owner");
+  const result = bootstrap(daemon);
+  await daemon.start(result.grantReference);
+  try {
+    const endpoint = discoverDaemonEndpoint(daemon.config.endpointStatePath, daemon.config.workspaceId);
+    assert.equal(endpoint.processId, process.pid);
+    assert.match(endpoint.processIncarnation ?? "", /^linux-proc-starttime:[0-9]+$/u);
+    assert.equal(statSync(daemon.config.endpointStatePath).mode & 0o777, 0o600);
+    const persisted = JSON.parse(readFileSync(daemon.config.endpointStatePath, "utf8")) as Record<string, unknown>;
+    const genuineIncarnation = persisted.processIncarnation;
+    assert.equal(typeof genuineIncarnation, "string");
+    const starttime = BigInt((genuineIncarnation as string).slice("linux-proc-starttime:".length));
+    writeFileSync(daemon.config.endpointStatePath, `${JSON.stringify({ ...persisted, processIncarnation: `linux-proc-starttime:${starttime + 1n}` })}\n`, { mode: 0o600 });
+    assert.throws(() => discoverDaemonEndpoint(daemon.config.endpointStatePath, daemon.config.workspaceId), /incarnation mismatch/u);
+    writeFileSync(daemon.config.endpointStatePath, `${JSON.stringify(persisted)}\n`, { mode: 0o600 });
+    assert.equal(discoverDaemonEndpoint(daemon.config.endpointStatePath, daemon.config.workspaceId).processIncarnation, genuineIncarnation);
+  } finally {
+    await daemon.stop();
+    daemon.close();
+  }
+  const smoke = spawnSync(process.execPath, ["--input-type=module", "-e", "process.stdout.write(JSON.stringify({ok:true,pid:process.pid}))"], { encoding: "utf8" });
+  assert.equal(smoke.status, 0);
+  assert.equal(JSON.parse(smoke.stdout).ok, true);
+});
+
+test("legacy endpoint state without an incarnation fails closed", async () => {
+  if (process.platform !== "linux") return;
+  const { daemon } = fixture(process.env.USER ?? "owner");
+  const result = bootstrap(daemon);
+  await daemon.start(result.grantReference);
+  try {
+    const persisted = JSON.parse(readFileSync(daemon.config.endpointStatePath, "utf8")) as Record<string, unknown>;
+    delete persisted.processIncarnation;
+    writeFileSync(daemon.config.endpointStatePath, `${JSON.stringify(persisted)}\n`, { mode: 0o600 });
+    assert.throws(() => discoverDaemonEndpoint(daemon.config.endpointStatePath, daemon.config.workspaceId), /incarnation unavailable/u);
+  } finally {
+    await daemon.stop();
+    daemon.close();
+  }
 });

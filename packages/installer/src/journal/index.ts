@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { dirname, join, resolve } from "node:path";
@@ -135,6 +135,65 @@ async function fsyncDirectory(path: string): Promise<void> {
   try { await handle.sync(); } finally { await handle.close(); }
 }
 
+interface JournalLockOwnerV1 {
+  readonly schema: "horseness.installer-journal-lock-owner.v1";
+  readonly nonce: string;
+  readonly processId: number;
+  readonly processIncarnation: string;
+}
+interface JournalLockOwnerReadV1 {
+  readonly owner: JournalLockOwnerV1;
+  readonly bytes: string;
+}
+
+
+async function processIncarnation(processId: number): Promise<string> {
+  if (process.platform !== "linux") throw new InstallerJournalError("JOURNAL_LOCK_LIVENESS_UNSUPPORTED");
+  let stat: string;
+  try { stat = await readFile(`/proc/${processId}/stat`, "utf8"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new InstallerJournalError("JOURNAL_LOCK_OWNER_ABSENT");
+    throw new InstallerJournalError("JOURNAL_LOCK_LIVENESS_UNVERIFIABLE");
+  }
+  const commandEnd = stat.lastIndexOf(")");
+  if (commandEnd < 2 || stat[commandEnd + 1] !== " ") throw new InstallerJournalError("JOURNAL_LOCK_LIVENESS_UNVERIFIABLE");
+  const starttime = stat.slice(commandEnd + 2).trim().split(/\s+/u)[19];
+  if (starttime === undefined || !/^[0-9]+$/u.test(starttime)) throw new InstallerJournalError("JOURNAL_LOCK_LIVENESS_UNVERIFIABLE");
+  return `linux-proc-starttime:${starttime}`;
+}
+
+function validateLockOwner(value: unknown): JournalLockOwnerV1 {
+  exactObject(value, ["schema", "nonce", "processId", "processIncarnation"], "JOURNAL_LOCK_OWNER_INVALID");
+  if (value.schema !== "horseness.installer-journal-lock-owner.v1" || typeof value.nonce !== "string" || !TOKEN.test(value.nonce)
+    || !Number.isSafeInteger(value.processId) || (value.processId as number) <= 0
+    || typeof value.processIncarnation !== "string" || !/^linux-proc-starttime:[0-9]+$/u.test(value.processIncarnation)) throw new InstallerJournalError("JOURNAL_LOCK_OWNER_INVALID");
+  return value as unknown as JournalLockOwnerV1;
+}
+
+async function readLockOwner(lockPath: string): Promise<{ readonly owner: JournalLockOwnerV1; readonly bytes: string }> {
+  const lockInfo = await lstat(lockPath);
+  if (!lockInfo.isDirectory() || lockInfo.isSymbolicLink() || (lockInfo.mode & 0o777) !== 0o700) throw new InstallerJournalError("JOURNAL_LOCK_UNSAFE");
+  const ownerPath = join(lockPath, "owner.json");
+  const ownerInfo = await lstat(ownerPath);
+  if (!ownerInfo.isFile() || ownerInfo.isSymbolicLink() || (ownerInfo.mode & 0o777) !== 0o600) throw new InstallerJournalError("JOURNAL_LOCK_UNSAFE");
+  const bytes = await readFile(ownerPath, "utf8");
+  let value: unknown;
+  try { value = JSON.parse(bytes) as unknown; } catch { throw new InstallerJournalError("JOURNAL_LOCK_OWNER_INVALID"); }
+  return { owner: validateLockOwner(value), bytes };
+}
+
+async function ownerIsLive(owner: JournalLockOwnerV1): Promise<boolean> {
+  try { return await processIncarnation(owner.processId) === owner.processIncarnation; }
+  catch (error) {
+    if (error instanceof InstallerJournalError && error.code === "JOURNAL_LOCK_OWNER_ABSENT") return false;
+    throw error;
+  }
+}
+
+function sameLockOwner(left: JournalLockOwnerV1, right: JournalLockOwnerV1): boolean {
+  return left.nonce === right.nonce && left.processId === right.processId && left.processIncarnation === right.processIncarnation;
+}
+
 export class InstallerJournal {
   readonly root: string;
   private constructor(root: string) { this.root = root; }
@@ -172,11 +231,35 @@ export class InstallerJournal {
   async append(payload: InstallerJournalPayloadV1, generation = 1): Promise<InstallerJournalRecordV1> {
     validatePayload(payload);
     const lockPath = join(this.root, `.generation-${generation}.lock`);
+    const owner: JournalLockOwnerV1 = Object.freeze({ schema: "horseness.installer-journal-lock-owner.v1", nonce: randomUUID(), processId: process.pid, processIncarnation: await processIncarnation(process.pid) });
     let acquired = false;
-    for (let attempt = 0; attempt < 500; attempt += 1) {
-      try { await mkdir(lockPath, { mode: 0o700 }); acquired = true; break; } catch (error) {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      try {
+        await mkdir(lockPath, { mode: 0o700 });
+        const ownerHandle = await open(join(lockPath, "owner.json"), "wx", 0o600);
+        try { await ownerHandle.writeFile(`${canonical(owner)}\n`, "utf8"); await ownerHandle.sync(); } finally { await ownerHandle.close(); }
+        await fsyncDirectory(lockPath);
+        await fsyncDirectory(this.root);
+        acquired = true;
+        break;
+      } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        await delay(10);
+        let observed: JournalLockOwnerReadV1;
+        try { observed = await readLockOwner(lockPath); }
+        catch (readError) {
+          if ((readError as NodeJS.ErrnoException).code === "ENOENT") { await delay(10); continue; }
+          throw readError;
+        }
+        if (await ownerIsLive(observed.owner)) { await delay(10); continue; }
+        const current = await readLockOwner(lockPath);
+        if (current.bytes !== observed.bytes || !sameLockOwner(current.owner, observed.owner)) { await delay(10); continue; }
+        const abandoned = `${lockPath}.abandoned-${owner.nonce}`;
+        try { await rename(lockPath, abandoned); }
+        catch (renameError) { if ((renameError as NodeJS.ErrnoException).code === "ENOENT") continue; throw renameError; }
+        await fsyncDirectory(this.root);
+        await rm(abandoned, { recursive: true });
+        await fsyncDirectory(this.root);
       }
     }
     if (!acquired) throw new InstallerJournalError("JOURNAL_APPEND_LOCK_TIMEOUT");
@@ -200,7 +283,12 @@ export class InstallerJournal {
       await fsyncDirectory(dirname(path));
       return record;
     } finally {
-      await rm(lockPath, { recursive: true, force: true });
+      const current = await readLockOwner(lockPath);
+      if (!sameLockOwner(current.owner, owner)) throw new InstallerJournalError("JOURNAL_LOCK_OWNER_CHANGED");
+      const released = `${lockPath}.released-${owner.nonce}`;
+      await rename(lockPath, released);
+      await fsyncDirectory(this.root);
+      await rm(released, { recursive: true });
       await fsyncDirectory(this.root);
     }
   }
