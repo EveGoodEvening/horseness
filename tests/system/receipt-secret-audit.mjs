@@ -5,7 +5,25 @@ const FORBIDDEN_ENV_KEYS = new Set([
   "OPENAI_API_KEY",
 ]);
 
-const FORBIDDEN_FIELD_NAMES = /^(?:api[_-]?key|authorization|cookie|credential|password|private[_-]?key|secret|session[_-]?token|token)$/iu;
+const ALLOWED_NONSECRET_FIELD_NAMES = new Set(["authMode"]);
+const FORBIDDEN_FIELD_TOKENS = new Set(["authorization", "cookie", "credential", "password", "secret", "token"]);
+
+function fieldNameTokens(key) {
+  return key
+    .replace(/([A-Z]+)([A-Z][a-z])/gu, "$1 $2")
+    .replace(/([a-z0-9])([A-Z])/gu, "$1 $2")
+    .split(/[^A-Za-z0-9]+/u)
+    .filter(Boolean)
+    .map(token => token.toLowerCase());
+}
+
+function isCredentialBearingFieldName(key) {
+  if (ALLOWED_NONSECRET_FIELD_NAMES.has(key)) return false;
+  const tokens = fieldNameTokens(key);
+  if (tokens.some(token => FORBIDDEN_FIELD_TOKENS.has(token))) return true;
+  return tokens.some((token, index) => token === "key" && (tokens[index - 1] === "api" || tokens[index - 1] === "private"));
+}
+
 const FORBIDDEN_VALUE_PATTERNS = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/u,
   /\b(?:basic|bearer)\s+[A-Za-z0-9._~+/=-]+/iu,
@@ -31,7 +49,7 @@ export function findReceiptAuthMaterial(value) {
     if (current !== null && typeof current === "object") {
       for (const [key, child] of Object.entries(current)) {
         const childPath = [...path, key];
-        if (FORBIDDEN_ENV_KEYS.has(key.toUpperCase()) || FORBIDDEN_FIELD_NAMES.test(key)) {
+        if (FORBIDDEN_ENV_KEYS.has(key.toUpperCase()) || isCredentialBearingFieldName(key)) {
           findings.push(`${pathLabel(childPath)} has a credential-bearing key`);
         }
         visit(child, childPath);
@@ -40,8 +58,7 @@ export function findReceiptAuthMaterial(value) {
     }
 
     if (typeof current !== "string") return;
-    const containerKey = path.at(-2);
-    if (containerKey === "prohibitedFields") return;
+
     if (FORBIDDEN_ENV_KEYS.has(current.toUpperCase())) {
       findings.push(`${pathLabel(path)} names a credential environment variable`);
       return;
