@@ -366,6 +366,30 @@ Command 8 is an externally produced, candidate-SHA-bound three-OS evidence gate 
 
 Independent review of this C20 planning correction completed cleanly after all actionable findings were resolved; ADR 0007 and this correction are accepted for implementation.
 
+### C20 repository-completion OS-receipt correction (2026-08-15)
+
+By explicit user direction on 2026-08-15, and governed by ADR 0008 once independently reviewed and accepted, this correction supersedes only the C20 repository-completion clauses that make `corepack pnpm run ci:require-os-receipts -- C20 linux macos windows` mandatory, including the ten-command C20 row and the 2026-08-14 statement that missing receipts block C20. C20 ownership, implementation, every non-receipt acceptance command, neutral-bundle semantics, runtime security controls, and the C21–C25 contracts are unchanged.
+
+The sole effective C20 completion sequence is exactly the following nine commands, in order:
+
+1. `corepack pnpm --filter @horseness/installer --filter @horseness/cli --filter @horseness/bootstrap run typecheck`
+2. `corepack pnpm --filter @horseness/installer --filter @horseness/cli run test`
+3. `corepack pnpm run bootstrap:build`
+4. `corepack pnpm run install:blackbox -- --clean-home --workspace /tmp/horseness-fixture-workspace --create-workspace --host all --accept-executable-risk fixture-release-digest`
+5. `corepack pnpm run install:blackbox:offline -- --clean-home --workspace /tmp/horseness-fixture-workspace --create-workspace --host all --accept-executable-risk fixture-release-digest`
+6. `corepack pnpm run doctor:hostile-no-side-effects`
+7. `corepack pnpm run uninstall:failure-matrix`
+8. `corepack pnpm run cli:lifecycle:blackbox -- install upgrade downgrade rollback retry-install uninstall doctor repair rebind-workspace smoke`
+9. `corepack pnpm run boundaries:check`
+
+These are the commands formerly numbered 1–7, 9, and 10. Former command 8 is `waived/unobserved by explicit user direction on 2026-08-15`; it is removed from the completion predicate and is not passed, skipped, substituted, or synthesized.
+
+No candidate-bound `horseness.os-receipt.v2` artifact exists for Linux, macOS, or Windows. The C20 completion record makes no Linux, macOS, or Windows receipt claim and no three-OS or cross-OS C20 validation claim. The exact observed Linux scope is limited to the recorded Node 22 results for former gates 1–7, 9, and 10 and the clean definitive review. The accepted evidence gap includes unobserved macOS behavior and unobserved Windows `%LOCALAPPDATA%`, DACL, named-pipe integration, backslash path resolution, and marker/refcount behavior; C20 implementation candidate `e49c5e1c` is unchanged.
+
+`.github/workflows/install-smoke.yml`, `scripts/bootstrap/write-c20-os-receipt.mjs`, `scripts/ci-require-os-receipts.mjs`, `tests/ci-require-os-receipts.test.mjs`, and `horseness.os-receipt.v2` remain intact as optional future evidence mechanisms. Future receipts supplement but do not retroactively alter C20 completion.
+
+This correction is independent of the historical C13 waiver and creates zero precedent for C21–C25. C21 does not inherit it; C21's existing security, system, install-recovery, and four-host closed-loop contract remains unchanged. C24's exact-public commands 3–8 and OS-receipt command 18 remain mandatory, and C25 still requires fresh successful C24 evidence with no skip, synthetic or hermetic substitution, or receipt reuse. Any later relaxation requires separate explicit user direction, a reviewed planning correction, and an ADR. After independent review accepts ADR 0008 and this correction, C20 is eligible for a separate tracker-only completion transaction; this correction does not itself complete C20 or make C21 eligible.
+
 ### Unified C22-C25 external-effect protocol
 
 C22-C25 all own `docs/publication-journal/**` and their append-only side-effect receipt namespace. Before KMS signing, retention-locked upload, registry/release-asset/tag/channel/pointer mutation, exact-public verification-state recording, promotion, or announcement, the current attempt integrates a signed intent. Recovery always performs lookup first; exact digest integrates observed/reconciled, definite absence permits only an idempotent request with the same key, ambiguity blocks, and mismatch records abandoned/revoked. Intermediate receipt commits contain no source changes, bind claim attempt/candidate tree/operation ID/prior journal and checkpoint heads, and the final ordinary receipt binds the complete side-effect head.

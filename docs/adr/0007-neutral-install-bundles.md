@@ -1,7 +1,7 @@
 # ADR 0007: Neutral signed install bundles
 
 ## Status
-Accepted.
+Accepted. ADR 0008, once accepted after independent review, supersedes only the C20 repository-completion receipt requirement in the second Consequences paragraph and the matching final Rejected Alternative; every other decision in this ADR remains in force.
 
 ## Context
 C20 must install the four native host contributions, but `packages/installer` is provider-neutral core and cannot depend on adapter packages. The completed adapters expose contribution metadata and bytes, while the signed release train is the authority that can bind those bytes to supported host/platform tuples. C20 also requires exact cross-platform target ownership, a genuinely non-mutating doctor, and a top-level bootstrap that can compose installer and daemon public APIs.

@@ -201,6 +201,14 @@ Every managed target has an owner-private marker under the state root binding sc
 
 Release artifacts—packages, native bundles, self-contained bootstrap, offline archive, manifests, checksums, SBOM, provenance, compatibility/migration data, changelog, rollback instructions, and key/revocation metadata—are one signed train. Publication is staged under immutable versions, verified before tags move, and followed by exact-public-artifact install, doctor, native load, upgrade/rollback, uninstall, signature/provenance, and cross-platform checks. Two clean builds must compare canonical archives byte-for-byte.
 
+### C20 repository-completion evidence boundary
+
+Repository chunk-completion evidence is distinct from product runtime and exact-public release evidence. By explicit user direction on 2026-08-15, C20 may complete without candidate-bound `horseness.os-receipt.v2` artifacts for Linux, macOS, or Windows. The C20 ledger MUST record former gate 8 as `waived/unobserved by explicit user direction on 2026-08-15`, never `passed` or `skipped`, and MUST limit its Linux execution claim to the recorded Node 22 results for the commands formerly numbered 1–7, 9, and 10. No Linux, macOS, or Windows C20 receipt and no three-OS or cross-OS C20 validation is claimed.
+
+This exception changes repository completion evidence only. `NeutralInstallBundleV1`, signed contribution verification, support classification, path and realpath confinement, owner-private roots and markers, refcounts, POSIX modes, Windows DACLs, pure read-only doctor, separate repair, fail-safe uninstall and quarantine, daemon authorization, and every other runtime security control remain unchanged. The accepted validation gap includes unobserved macOS behavior and unobserved Windows `%LOCALAPPDATA%`, DACL, named-pipe integration, backslash path resolution, and marker/refcount behavior; it is not a code change.
+
+The C20 install-smoke workflow, receipt writer, versioned verifier, verifier tests, and `horseness.os-receipt.v2` profile remain intact for optional future candidate-bound evidence. Later receipts may supplement but MUST NOT retroactively rewrite C20 completion. C21 does not inherit this exception. It creates no precedent for C22–C25, especially C24 exact-public OS installs and OS receipts or C25 promotion; any later relaxation requires separate explicit user direction, a reviewed planning correction, and an ADR.
+
 
 ## Normative contract freeze — review round three
 
