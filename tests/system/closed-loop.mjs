@@ -1,19 +1,11 @@
 import assert from "node:assert/strict";
+import { parseHosts } from "./closed-loop-args.mjs";
 import { jsonObjects, requireSuccess, runCommand } from "./process-helper.mjs";
 
-const HOSTS = ["pi", "omp", "claude", "codex"];
 const EXPECTED_VERSIONS = { pi: "0.73.1", omp: "17.2.15", claude: "2.1.228", codex: "0.144.1" };
 const EXPECTED_DECISIONS = ["accepted", "approval_required", "conflicted", "quarantined", "rejected"].sort();
 const HASH = /^(?:sha256:)?[0-9a-f]{64}$/u;
 const SUBSCRIPTION_HOSTS = new Set(["claude", "codex"]);
-
-function parseHosts(argv) {
-  assert.equal(argv.length, 2, "usage: test:closed-loop -- --hosts pi,omp,claude,codex");
-  assert.equal(argv[0], "--hosts", "the only accepted option is --hosts");
-  const hosts = argv[1].split(",");
-  assert.deepEqual(hosts, HOSTS, "--hosts must be exactly pi,omp,claude,codex in dependency order");
-  return hosts;
-}
 
 function requireDigest(value, label) {
   assert.equal(typeof value, "string", `${label} is missing`);
