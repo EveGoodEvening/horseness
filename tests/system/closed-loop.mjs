@@ -44,18 +44,33 @@ function requireFiveOutcomes(result) {
 }
 
 function requireLifecycle(result) {
-  assert.equal(result.lifecycle?.uninstallDiscovery?.includes("disable") ?? false, true, `${result.host} did not prove discovery removal`);
-  if (result.host === "pi" || result.host === "omp") {
-    assert.deepEqual(result.lifecycle.calls, ["launch", "reconcile", "reattach", "resume", "collect"]);
-    assert.equal(result.lifecycle.credential, "revoked");
-    requireDigest(result.lifecycle.activeForkPinDigest, `${result.host} active fork pin`);
-    requireDigest(result.loaderDigest, `${result.host} native loader provenance`);
-  } else {
-    assert.equal(typeof result.sessions?.resumed, "string", `${result.host} resume session missing`);
-    assert.equal(typeof result.sessions?.forked, "string", `${result.host} fork session missing`);
-    assert.notEqual(result.sessions.forked, result.sessions.resumed, `${result.host} fork reused its source session`);
-    assert.equal(result.authMode, "existing-user-subscription-session");
-    requireDigest(result.executableDigest, `${result.host} native executable provenance`);
+  switch (result.host) {
+    case "pi":
+    case "omp":
+      assert.equal(result.lifecycle?.uninstallDiscovery, "disabled", `${result.host} did not prove discovery was disabled`);
+      assert.deepEqual(result.lifecycle.calls, ["launch", "reconcile", "reattach", "resume", "collect"]);
+      assert.equal(result.lifecycle.credential, "revoked");
+      requireDigest(result.lifecycle.activeForkPinDigest, `${result.host} active fork pin`);
+      requireDigest(result.loaderDigest, `${result.host} native loader provenance`);
+      break;
+    case "claude":
+      assert.equal(result.lifecycle?.uninstallDiscovery, "same-path-native-init-after-discovery-disable-authority-revoke-and-recovery", "claude did not prove exact discovery-disable lifecycle");
+      assert.equal(typeof result.sessions?.resumed, "string", "claude resume session missing");
+      assert.equal(typeof result.sessions?.forked, "string", "claude fork session missing");
+      assert.notEqual(result.sessions.forked, result.sessions.resumed, "claude fork reused its source session");
+      assert.equal(result.authMode, "existing-user-subscription-session");
+      requireDigest(result.executableDigest, "claude native executable provenance");
+      break;
+    case "codex":
+      assert.equal(result.lifecycle?.uninstallDiscovery, "native-plugin-uninstall-marketplace-remove-fresh-thread-inventory-absent", "codex did not prove marketplace removal and absent inventory");
+      assert.equal(typeof result.sessions?.resumed, "string", "codex resume session missing");
+      assert.equal(typeof result.sessions?.forked, "string", "codex fork session missing");
+      assert.notEqual(result.sessions.forked, result.sessions.resumed, "codex fork reused its source session");
+      assert.equal(result.authMode, "existing-user-subscription-session");
+      requireDigest(result.executableDigest, "codex native executable provenance");
+      break;
+    default:
+      assert.fail(`unsupported lifecycle contract for host ${String(result.host)}`);
   }
 }
 
