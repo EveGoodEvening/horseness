@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { parseHosts } from "./closed-loop-args.mjs";
 import { jsonObjects, requireSuccess, runCommand } from "./process-helper.mjs";
+import { findReceiptAuthMaterial } from "./receipt-secret-audit.mjs";
 
 const EXPECTED_VERSIONS = { pi: "0.73.1", omp: "17.2.15", claude: "2.1.228", codex: "0.144.1" };
 const EXPECTED_DECISIONS = ["accepted", "approval_required", "conflicted", "quarantined", "rejected"].sort();
@@ -92,8 +93,8 @@ function requireReceipt(receipt, host, head, tree, invocationStartedAt) {
   const finishedAt = Date.parse(receipt.timing?.finishedAt);
   assert.ok(Number.isFinite(startedAt) && startedAt >= invocationStartedAt - 1_000, `${host} receipt is stale`);
   assert.ok(Number.isFinite(finishedAt) && finishedAt >= startedAt && finishedAt <= Date.now() + 1_000, `${host} receipt timing is invalid`);
-  const serialized = JSON.stringify(receipt);
-  for (const forbidden of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AWS_SECRET_ACCESS_KEY", "CI_JOB_TOKEN", "authorization\"", "cookie\""]) assert.equal(serialized.includes(forbidden), false, `${host} receipt exposed auth material`);
+  const authMaterial = findReceiptAuthMaterial(receipt);
+  assert.deepEqual(authMaterial, [], `${host} receipt exposed auth material: ${authMaterial.join(", ")}`);
 }
 
 const hosts = parseHosts(process.argv.slice(2));
