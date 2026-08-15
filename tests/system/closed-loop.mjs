@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { parseHosts } from "./closed-loop-args.mjs";
+import { expectedNativeVersion } from "./closed-loop-native-versions.mjs";
 import { jsonObjects, requireSuccess, runCommand } from "./process-helper.mjs";
 import { findReceiptAuthMaterial } from "./receipt-secret-audit.mjs";
 
-const EXPECTED_VERSIONS = { pi: "0.73.1", omp: "17.2.15", claude: "2.1.228", codex: "0.144.1" };
 const EXPECTED_DECISIONS = ["accepted", "approval_required", "conflicted", "quarantined", "rejected"].sort();
 const HASH = /^(?:sha256:)?[0-9a-f]{64}$/u;
 const SUBSCRIPTION_HOSTS = new Set(["claude", "codex"]);
@@ -80,7 +80,7 @@ function requireReceipt(receipt, host, head, tree, invocationStartedAt) {
   assert.equal(receipt.host, host);
   assert.equal(receipt.authMode, "existing-user-subscription-session");
   assert.deepEqual(receipt.candidate, { head, tree }, `${host} receipt is not candidate-bound to the current C21 HEAD/tree`);
-  assert.equal(receipt.hostVersion, EXPECTED_VERSIONS[host]);
+  assert.equal(receipt.hostVersion, expectedNativeVersion(host));
   assert.equal(receipt.terminal?.result, "succeeded");
   assert.equal(receipt.redactionAudit?.passed, true);
   assert.ok(Array.isArray(receipt.bindings) && receipt.bindings.length === 5, `${host} receipt lacks five exact bindings`);
@@ -116,7 +116,7 @@ for (const host of hosts) {
   const result = values.find((value) => value?.schemaVersion === hostSmokeSchemaVersion(host));
   assert.ok(result, `${host} smoke did not emit its JSON result`);
   assert.equal(result.host, host);
-  assert.equal(result.version, EXPECTED_VERSIONS[host], `${host} did not execute the pinned native version`);
+  assert.equal(result.version, expectedNativeVersion(host), `${host} did not execute the pinned native version`);
   requireDigest(result.packageDigest, `${host} packageDigest`);
   requireFiveOutcomes(result);
   requireLifecycle(result);
