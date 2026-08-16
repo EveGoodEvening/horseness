@@ -19,7 +19,7 @@ Hermetic feasibility uses the repository deterministic provider with frozen requ
 ## Release train
 
 All packages, applications, native bundles, bootstrap binaries, offline archives, schemas, migration data, SBOM, provenance, signatures, trust metadata, and rollback instructions share one coherent immutable release version and manifest digest.
-C22 enforces this train across exactly fifteen publishable manifests. Until an approved version and access policy exist, manifests remain at their development values and `release:coherence` fails closed; tooling does not guess a version, remove `private`, or choose registry policy. Production bootstrap trust is materialized only from a verified witnessed ceremony and never from the C20 fixture trust root.
+C22 establishes `1.0.0` as the first stable train across exactly fifteen public npm packages under MIT. Repository manifests pin internal dependencies as `workspace:1.0.0`, preserving pnpm workspace linking while pnpm serializes packed manifests with exact `1.0.0` dependencies. There are no supported prerelease package ranges or compatibility aliases. Production bootstrap trust is materialized only from a verified witnessed ceremony and never from the C20 fixture trust root.
 
 ## Frozen v1 boundary rules
 
@@ -31,7 +31,7 @@ Unknown cursor kinds, fork-pin/snapshot/scope/completion-policy versions, propos
 
 Readers reject unknown schema, cursor, canonicalizer, hash, operation, policy, dispatch, receipt, and authorization variants before mutation. The public compatibility train is the eleven-family vector set under `docs/vectors/{events,cursors,proposal,delta,fork-pin,dependency-join,delta-authority,context-binding,receipt,task-dispatch,authorization}`. Each vector freezes canonical JSON bytes and its domain-separated digest; downstream protocol, policy, storage, orchestration, SDK, and adapter packages consume these identities rather than redefining them.
 
-The domain package exposes `horseness-vectors-verify`, its package-local `vectors:verify` script, and the repository root forwards the frozen vector gate.
+The domain vectors verifier is repository-only: run it through the root `vectors:verify` script. The former `horseness-vectors-verify` package binary is not published because the authoritative vectors and documentation remain repository-owned.
 
 ## Protocol v1 implementation train
 

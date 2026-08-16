@@ -1,7 +1,7 @@
 {
   "name": "@horseness/adapter-pi",
-  "version": "0.0.0",
-  "private": true,
+  "version": "1.0.0",
+  "private": false,
   "type": "module",
   "sideEffects": false,
   "files": [
@@ -23,15 +23,19 @@
     "host:smoke": "node --import tsx test/host-smoke.ts"
   },
   "dependencies": {
-    "@horseness/adapter-kit": "workspace:*",
-    "@horseness/domain": "workspace:*",
-    "@horseness/orchestrator": "workspace:*",
-    "@horseness/policy": "workspace:*",
-    "@horseness/protocol": "workspace:*",
-    "@horseness/sdk": "workspace:*",
-    "@horseness/store-sqlite": "workspace:*"
+    "@horseness/adapter-kit": "workspace:1.0.0",
+    "@horseness/domain": "workspace:1.0.0",
+    "@horseness/orchestrator": "workspace:1.0.0",
+    "@horseness/policy": "workspace:1.0.0",
+    "@horseness/protocol": "workspace:1.0.0",
+    "@horseness/sdk": "workspace:1.0.0",
+    "@horseness/store-sqlite": "workspace:1.0.0"
   },
   "devDependencies": {
     "tsx": "4.20.5"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
   }
 }

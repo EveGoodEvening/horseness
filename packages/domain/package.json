@@ -1,7 +1,4 @@
 {
-  "bin": {
-    "horseness-vectors-verify": "./bin/vectors-verify.mjs"
-  },
   "dependencies": {},
   "devDependencies": {
     "tsx": "4.20.5"
@@ -13,7 +10,7 @@
     }
   },
   "name": "@horseness/domain",
-  "private": true,
+  "private": false,
   "scripts": {
     "lint": "eslint src test --max-warnings=0",
     "test": "node ./bin/test-runner.mjs",
@@ -22,5 +19,12 @@
   },
   "sideEffects": false,
   "type": "module",
-  "version": "0.0.0"
+  "version": "1.0.0",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src"
+  ]
 }

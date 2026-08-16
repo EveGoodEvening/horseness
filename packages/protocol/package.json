@@ -1,7 +1,7 @@
 {
   "name": "@horseness/protocol",
-  "version": "0.0.0",
-  "private": true,
+  "version": "1.0.0",
+  "private": false,
   "type": "module",
   "sideEffects": false,
   "exports": {
@@ -11,7 +11,7 @@
     }
   },
   "dependencies": {
-    "@horseness/domain": "workspace:*"
+    "@horseness/domain": "workspace:1.0.0"
   },
   "devDependencies": {
     "tsx": "4.20.5"
@@ -23,5 +23,14 @@
     "protocol:conformance": "node --import tsx ./bin/conformance.ts",
     "generated:check": "node --import tsx ./bin/generate.ts --check",
     "generate": "node --import tsx ./bin/generate.ts"
-  }
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "bin",
+    "generated"
+  ]
 }

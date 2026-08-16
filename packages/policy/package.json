@@ -1,7 +1,7 @@
 {
   "name": "@horseness/policy",
-  "version": "0.0.0",
-  "private": true,
+  "version": "1.0.0",
+  "private": false,
   "type": "module",
   "sideEffects": false,
   "exports": {
@@ -16,9 +16,17 @@
     "test": "node ./bin/test-runner.mjs"
   },
   "dependencies": {
-    "@horseness/domain": "workspace:*"
+    "@horseness/domain": "workspace:1.0.0"
   },
   "devDependencies": {
     "tsx": "4.20.5"
-  }
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "bin"
+  ]
 }

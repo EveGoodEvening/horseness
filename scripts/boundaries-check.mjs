@@ -25,6 +25,27 @@ export function importBoundaryError({ file, packageDir, specifier, workspaceName
   }
   return null;
 }
+export function metadataBoundaryErrors(manifests) {
+ const errors = [];
+ const versions = new Set(manifests.map(({ manifest }) => manifest.version));
+ if (versions.size !== 1) return ["workspace manifests must use one coherent version"];
+ const version = manifests[0]?.manifest.version;
+ const development = version === "0.0.0";
+ for (const { manifest } of manifests) {
+  if ((development ? manifest.private !== true : manifest.private === true) || manifest.type !== "module") {
+   errors.push(`${manifest.name}: must be ${development ? "private" : "public"} ESM`);
+  }
+  const expectedSpecifier = development ? "workspace:*" : `workspace:${version}`;
+  const allDeps = { ...manifest.dependencies, ...manifest.devDependencies, ...manifest.optionalDependencies, ...manifest.peerDependencies };
+  for (const [dependency, specifier] of Object.entries(allDeps)) {
+   if (manifests.some(({ manifest: candidate }) => candidate.name === dependency) && specifier !== expectedSpecifier) {
+    errors.push(`${manifest.name}: ${dependency} must use ${expectedSpecifier}`);
+   }
+  }
+ }
+ return errors;
+}
+
 
 export async function checkBoundaries(cwd = process.cwd()) {
  const root = await realpath(cwd);
@@ -39,16 +60,17 @@ export async function checkBoundaries(cwd = process.cwd()) {
   }
  }
  const names = new Set(manifests.map(({ manifest }) => manifest.name));
+ errors.push(...metadataBoundaryErrors(manifests));
  for (const { dir, group, manifest } of manifests) {
   if (!layers.has(manifest.name)) errors.push(`${manifest.name}: unknown workspace boundary`);
-  if (manifest.private !== true || manifest.type !== "module") errors.push(`${manifest.name}: must be private ESM`);
+
   if (manifest.exports?.["."]?.import !== "./src/index.ts") errors.push(`${manifest.name}: public import must be src/index.ts`);
   const index = path.join(dir, "src/index.ts");
   if (!(await stat(index)).isFile()) errors.push(`${manifest.name}: missing src/index.ts`);
   const allDeps = { ...manifest.dependencies, ...manifest.devDependencies, ...manifest.peerDependencies };
   for (const [dependency, specifier] of Object.entries(allDeps)) {
     if (!names.has(dependency)) continue;
-    if (specifier !== "workspace:*") errors.push(`${manifest.name}: ${dependency} must use workspace:*`);
+
     if ((layers.get(dependency) ?? Infinity) >= (layers.get(manifest.name) ?? -1)) errors.push(`${manifest.name}: invalid inward dependency on ${dependency}`);
   }
   if (group === "packages" && Object.keys(allDeps).some((name) => name.startsWith("@horseness/adapter-"))) errors.push(`${manifest.name}: core package depends on adapter`);

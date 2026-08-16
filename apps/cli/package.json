@@ -1,7 +1,7 @@
 {
   "name": "@horseness/cli",
-  "version": "0.0.0",
-  "private": true,
+  "version": "1.0.0",
+  "private": false,
   "type": "module",
   "sideEffects": false,
   "bin": {
@@ -20,11 +20,18 @@
     "smoke": "node --import tsx --test test/smoke*.test.ts"
   },
   "dependencies": {
-    "@horseness/installer": "workspace:*",
-    "@horseness/protocol": "workspace:*",
-    "@horseness/sdk": "workspace:*"
-  },
-  "devDependencies": {
+    "@horseness/installer": "workspace:1.0.0",
+    "@horseness/protocol": "workspace:1.0.0",
+    "@horseness/sdk": "workspace:1.0.0",
     "tsx": "4.20.5"
-  }
+  },
+  "devDependencies": {},
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "bin"
+  ]
 }

@@ -1,4 +1,0 @@
----
-"@horseness/adapter-pi": minor
----
-Add the real Pi 0.73.1 native contribution bundle, immutable adapter lifecycle, opaque scoped credential boundary, declarative package metadata and doctor contract, receipt collection, adapter conformance coverage, and end-to-end native host smoke. Production native delivery now requires a C15-owned durable, private-directory-confined file authority using per-attempt hashed record files published by atomic write, fsync, rename, and directory fsync, with cross-process/cross-instance atomic per-attempt lock directories whose ownership records carry nonce, PID, and verifiable Linux process incarnation identity for bounded stale-owner recovery that remains safe across PID reuse. Decision delivery exposes a compatible two-step subscription/observation protocol so the resumable token is durably checkpointed before terminal observation without repeating prior side effects.

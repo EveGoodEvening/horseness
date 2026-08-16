@@ -1,7 +1,7 @@
 {
   "name": "@horseness/orchestrator",
-  "version": "0.0.0",
-  "private": true,
+  "version": "1.0.0",
+  "private": false,
   "type": "module",
   "sideEffects": false,
   "exports": {
@@ -22,12 +22,19 @@
     "test:dispatch-restart-races": "tsx --test test/dispatch/**/*.test.ts test/recovery/**/*.test.ts"
   },
   "dependencies": {
-    "@horseness/domain": "workspace:*",
-    "@horseness/policy": "workspace:*",
-    "@horseness/protocol": "workspace:*",
-    "@horseness/store-sqlite": "workspace:*"
+    "@horseness/domain": "workspace:1.0.0",
+    "@horseness/policy": "workspace:1.0.0",
+    "@horseness/protocol": "workspace:1.0.0",
+    "@horseness/store-sqlite": "workspace:1.0.0"
   },
   "devDependencies": {
     "tsx": "4.20.5"
-  }
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src"
+  ]
 }

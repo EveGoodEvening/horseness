@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync, sign } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
+import { stringify } from "yaml";
 import { canonical, C22_COMMANDS, PUBLISHABLE_MANIFESTS, RELEASE_IDENTITY, provenanceSubjects, reconcileImmutableObject, run, sha256 } from "../lib.mjs";
 import { verifyCoherence } from "../coherence.mjs";
 import { verifyRootCeremony, verifyRootCeremonyCommand } from "../verify-root-ceremony.mjs";
@@ -101,7 +102,48 @@ test("root ceremony verifier derives offline 2-of-2 policy from the exact signed
 test("ceremony and delegation verifiers accept witnessed fixture bytes and reject tamper", async () => { const fixture = await ceremonyFixture(); await verifyRootCeremony({ schemaPath: resolve(import.meta.dirname, "../../../docs/trust/root-ceremony-v1.schema.json"), recordPath: fixture.recordPath, evidenceRoot: fixture.evidence }); await run(process.execPath, [resolve(import.meta.dirname, "../verify-delegation.mjs"), "--root-record", fixture.recordPath, "--require-version-range", "--require-kms-policy", "--require-two-approvals", "--release-version", "1.2.3"]); fixture.record.delegation.validThroughSequence = 11; await writeFile(fixture.recordPath, `${canonical(fixture.record)}\n`); await assert.rejects(run(process.execPath, [resolve(import.meta.dirname, "../verify-delegation.mjs"), "--root-record", fixture.recordPath, "--require-version-range", "--require-kms-policy", "--require-two-approvals", "--release-version", "1.2.3"]), /ROOT_DELEGATION_SIGNATURE_INVALID/u); });
 test("delegation versionRange rejects below, above, and malformed release versions", async () => { const fixture = await ceremonyFixture(); const verify = (version) => run(process.execPath, [resolve(import.meta.dirname, "../verify-delegation.mjs"), "--root-record", fixture.recordPath, "--require-version-range", "--require-kms-policy", "--require-two-approvals", "--release-version", version]); await assert.rejects(verify("0.9.9"), /DELEGATION_VERSION_BELOW_RANGE/u); await assert.rejects(verify("2.0.0"), /DELEGATION_VERSION_ABOVE_RANGE/u); await assert.rejects(verify("not-a-version"), /DELEGATION_RELEASE_VERSION_INVALID/u); await assert.rejects(verify("1.2"), /DELEGATION_RELEASE_VERSION_INVALID/u); await assert.rejects(verify(""), /DELEGATION_RELEASE_VERSION_INVALID/u); const malformed = structuredClone(fixture.record); malformed.delegation.versionRange = { minimum: "1.0.0", maximum: "0.9.0" }; await writeFile(fixture.recordPath, `${canonical(malformed)}\n`); await assert.rejects(verify("1.2.3"), /DELEGATION_VERSION_RANGE_INVALID/u); });
 
-test("coherence requires one approved version and exact internal pins", async () => { const root = await mkdtemp(resolve(tmpdir(), "horseness-c22-coherence-")); for (const path of PUBLISHABLE_MANIFESTS) { await mkdir(resolve(root, path, ".."), { recursive: true }); await writeFile(resolve(root, path), `${JSON.stringify({ name: `@horseness/${path.replaceAll("/", "-")}`, version: "1.2.3", private: false, dependencies: {} })}\n`); } await writeFile(resolve(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\nversion: 1.2.3\n"); assert.equal((await verifyCoherence(root)).version, "1.2.3"); const first = resolve(root, PUBLISHABLE_MANIFESTS[0]); const value = JSON.parse(await readFile(first, "utf8")); value.version = "0.0.0"; await writeFile(first, JSON.stringify(value)); await assert.rejects(verifyCoherence(root), /RELEASE_VERSION_INCOHERENT|APPROVED_RELEASE_VERSION_REQUIRED/u); });
+test("coherence requires public MIT metadata and an exact structural workspace graph", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "horseness-c22-coherence-"));
+  const manifests = [];
+  for (const [index, path] of PUBLISHABLE_MANIFESTS.entries()) {
+    const value = { name: `@horseness/package-${index}`, version: "1.2.3", private: false, license: "MIT", publishConfig: { access: "public" }, dependencies: {} };
+    manifests.push({ path, value });
+    await mkdir(resolve(root, path, ".."), { recursive: true });
+    await writeFile(resolve(root, path), `${JSON.stringify(value)}\n`);
+  }
+  manifests[0].value.optionalDependencies = { [manifests[1].value.name]: "workspace:1.2.3" };
+  await writeFile(resolve(root, manifests[0].path), `${JSON.stringify(manifests[0].value)}\n`);
+  const importers = Object.fromEntries(manifests.map(({ path, value }) => {
+    const importerName = dirname(path);
+    const importer = {};
+    for (const group of ["dependencies", "optionalDependencies", "peerDependencies", "devDependencies"]) {
+      const entries = Object.entries(value[group] ?? {}).filter(([name]) => name.startsWith("@horseness/"));
+      if (entries.length > 0) importer[group] = Object.fromEntries(entries.map(([name, specifier]) => {
+        const target = dirname(manifests.find(({ value: candidate }) => candidate.name === name).path);
+        return [name, { specifier, version: `link:${relative(importerName, target)}` }];
+      }));
+    }
+    return [importerName, importer];
+  }));
+  const writeLock = () => writeFile(resolve(root, "pnpm-lock.yaml"), stringify({ lockfileVersion: "9.0", importers }));
+  await writeLock();
+  assert.equal((await verifyCoherence(root)).version, "1.2.3");
+  importers[dirname(manifests[0].path)].optionalDependencies[manifests[1].value.name].specifier = "workspace:*";
+  await writeLock();
+  await assert.rejects(verifyCoherence(root), /LOCKFILE_INTERNAL_SPECIFIER_INVALID/u);
+  importers[dirname(manifests[0].path)].optionalDependencies[manifests[1].value.name].specifier = "workspace:1.2.3";
+  manifests[0].value.optionalDependencies[manifests[1].value.name] = "workspace:*";
+  await writeFile(resolve(root, manifests[0].path), JSON.stringify(manifests[0].value));
+  await assert.rejects(verifyCoherence(root), /INTERNAL_DEPENDENCY_NOT_EXACT/u);
+  manifests[0].value.optionalDependencies[manifests[1].value.name] = "workspace:1.2.3";
+  manifests[0].value.publishConfig.access = "restricted";
+  await writeFile(resolve(root, manifests[0].path), JSON.stringify(manifests[0].value));
+  await assert.rejects(verifyCoherence(root), /PUBLICATION_ACCESS_DECISION_REQUIRED/u);
+  manifests[0].value.publishConfig.access = "public";
+  manifests[0].value.license = "UNLICENSED";
+  await writeFile(resolve(root, manifests[0].path), JSON.stringify(manifests[0].value));
+  await assert.rejects(verifyCoherence(root), /PUBLICATION_LICENSE_REQUIRED/u);
+});
 
 test("side-effect journal is signed and hash chained", async () => { const root = await mkdtemp(resolve(tmpdir(), "horseness-c22-journal-")); const keys = pair(); const keyPath = resolve(root, "key.pem"); await writeFile(keyPath, keys.privateKey.export({ type: "pkcs8", format: "pem" })); const signer = resolve(root, "signer.mjs"); await writeFile(signer, `#!/usr/bin/env node\nconst {readFileSync}=await import('node:fs');const {createPrivateKey,sign}=await import('node:crypto');const key=createPrivateKey(readFileSync(${JSON.stringify(keyPath)}));process.stdout.write(JSON.stringify({keyId:'release-kms-v1',signature:sign(null,Buffer.from(process.argv[2]),key).toString('base64')}));\n`); await chmod(signer, 0o700); const old = process.env.HORSENESS_KMS_SIGNER; process.env.HORSENESS_KMS_SIGNER = signer; try { const path = resolve(root, "journal.jsonl"); const one = await appendSignedJournal(path, { phase: "intent" }); const two = await appendSignedJournal(path, { phase: "observed" }); assert.equal(two.previousHash, one.recordHash); assert.equal(two.sequence, 2); assert.equal((await readFile(path, "utf8")).trim().split("\n").length, 2); } finally { if (old === undefined) delete process.env.HORSENESS_KMS_SIGNER; else process.env.HORSENESS_KMS_SIGNER = old; } });
 

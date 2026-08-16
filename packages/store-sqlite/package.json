@@ -1,21 +1,42 @@
 {
   "dependencies": {
-    "@horseness/domain": "workspace:*"
+    "@horseness/domain": "workspace:1.0.0"
   },
   "devDependencies": {
     "tsx": "4.20.5"
   },
   "exports": {
-    ".": { "import": "./src/index.ts", "types": "./src/index.ts" },
-    "./backup": { "import": "./src/backup/index.ts", "types": "./src/backup/index.ts" },
-    "./import": { "import": "./src/import/index.ts", "types": "./src/import/index.ts" },
-    "./migrations": { "import": "./src/migrations/index.ts", "types": "./src/migrations/index.ts" },
-    "./recovery": { "import": "./src/recovery/index.ts", "types": "./src/recovery/index.ts" },
-    "./restore": { "import": "./src/restore/index.ts", "types": "./src/restore/index.ts" },
-    "./retention": { "import": "./src/retention/index.ts", "types": "./src/retention/index.ts" }
+    ".": {
+      "import": "./src/index.ts",
+      "types": "./src/index.ts"
+    },
+    "./backup": {
+      "import": "./src/backup/index.ts",
+      "types": "./src/backup/index.ts"
+    },
+    "./import": {
+      "import": "./src/import/index.ts",
+      "types": "./src/import/index.ts"
+    },
+    "./migrations": {
+      "import": "./src/migrations/index.ts",
+      "types": "./src/migrations/index.ts"
+    },
+    "./recovery": {
+      "import": "./src/recovery/index.ts",
+      "types": "./src/recovery/index.ts"
+    },
+    "./restore": {
+      "import": "./src/restore/index.ts",
+      "types": "./src/restore/index.ts"
+    },
+    "./retention": {
+      "import": "./src/retention/index.ts",
+      "types": "./src/retention/index.ts"
+    }
   },
   "name": "@horseness/store-sqlite",
-  "private": true,
+  "private": false,
   "scripts": {
     "lint": "eslint src --max-warnings=0",
     "test": "node --import tsx --test test/*.test.ts test/migrations/*.test.ts",
@@ -27,5 +48,12 @@
   },
   "sideEffects": false,
   "type": "module",
-  "version": "0.0.0"
+  "version": "1.0.0",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src"
+  ]
 }

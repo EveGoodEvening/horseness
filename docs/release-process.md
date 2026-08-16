@@ -8,7 +8,7 @@ C22 is deliberately fail-closed. The offline root ceremony is performed and inde
 
 ## Candidate assembly
 
-After the ceremony and delegation gates, all fifteen publishable manifests must have one approved non-placeholder version, one approved access policy, and exact internal dependency pins. C22 does not choose those product decisions. `release:coherence` rejects `0.0.0`, private manifests, ranges, and workspace protocol specifiers.
+All fifteen publishable manifests are released as one `1.0.0` train under the MIT License with public npm access. Source manifests use exact `workspace:1.0.0` internal specifiers so pnpm links the workspace during development; `pnpm pack` rewrites those specifiers to exact `1.0.0` dependencies in published manifests. `release:coherence` rejects any other version, private or non-public package, non-MIT package, or non-exact internal workspace pin.
 
 `release:build-twice` packs the exact fifteen-package graph twice with a frozen epoch, emits a deterministic dependency graph, CycloneDX 1.6 SBOM, SLSA provenance statement, and release inventory, then requires the protected KMS signer to sign both manifest and provenance digests. It rejects any byte difference between unsigned build inventories. Fixture tests may use ephemeral test keys; fixture output is never accepted as production evidence.
 
@@ -26,4 +26,4 @@ C22 journal records are canonical, domain-separated, hash-chained, append-only, 
 
 ## Current external blockers
 
-No release can complete until the project supplies approved license text; publication destinations and access policy; a witnessed and reviewed ceremony record/evidence set; an approved release version/range delegation; protected-main OIDC/KMS policy and signer; immutable retention-locked storage and lookup API; and usable Claude/Codex subscription sessions. These inputs are not replaced by fixtures or inferred by tooling.
+The version, license, and npm access decisions are complete. Release execution still requires the separately governed ceremony, delegation, signing, immutable-storage, and live-session inputs described above; this metadata change does not create or claim that evidence.
