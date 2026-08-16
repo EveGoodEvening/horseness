@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { Daemon, resolveDaemonConfig, type DaemonConfigV1, type EndpointStateV1 } from "@horseness/daemon";
 import { installerSha256, neutralCatalogDigestV1, verifyReleaseV1, defaultInstallRootsV1, doctorNeutralInstallV1, installNeutralBundleV1, operateNeutralBundleV1, repairNeutralInstallV1, uninstallNeutralBundleV1, type InstallDaemonClientV1, type InstallHostIdV1, type InstallOperationResultV1, type NeutralInstallBundleV1, type ProjectTrustRootV1, type SignedReleaseManifestV1, type TrustReplayStateV1 } from "@horseness/installer";
+import { BOOTSTRAP_TRUST_MODE, BOOTSTRAP_TRUST_ROOT_SHA256 } from "./trust-pin.js";
 
 interface AuthenticatedReleaseEnvelopeV1 {
   readonly schema: "horseness.bootstrap-release-envelope.v1";
@@ -16,7 +17,7 @@ interface AuthenticatedReleaseEnvelopeV1 {
   readonly catalog: Omit<NeutralInstallBundleV1, "schema" | "releaseManifestDigest" | "authenticatedManifestKeyId" | "authenticatedManifestSequence" | "catalogDigest">;
   readonly catalogDigest: string;
 }
-const BOOTSTRAP_TRUST_ROOT_SHA256 = "23fc369c10a1841fc8036ac7e75ef6f89eb3bcf26f003e77f08ae3a4b2299ecc";
+
 
 function daemonConfig(workspacePath: string): DaemonConfigV1 {
   const absolute = resolve(workspacePath);
@@ -130,6 +131,17 @@ class PublicDaemonClientV1 implements InstallDaemonClientV1 {
   }
 }
 
+function confineArtifactPath(path: string, artifactRoot: string): string {
+  if (typeof path !== "string" || path.length === 0 || path.length > 255) throw new Error("RELEASE_ARTIFACT_PATH_INVALID");
+  if (isAbsolute(path) || path.includes("\\")) throw new Error("RELEASE_ARTIFACT_PATH_INVALID");
+  const segments = path.split("/");
+  if (segments.length === 0 || segments.some((segment) => segment === "" || segment === "." || segment === "..")) throw new Error("RELEASE_ARTIFACT_PATH_INVALID");
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$/u.test(path)) throw new Error("RELEASE_ARTIFACT_PATH_INVALID");
+  const resolved = resolve(artifactRoot, path);
+  if (!resolved.startsWith(`${artifactRoot}${sep}`)) throw new Error("RELEASE_ARTIFACT_PATH_INVALID");
+  return resolved;
+}
+
 function exactArtifactMap(envelope: AuthenticatedReleaseEnvelopeV1): void {
   const manifestPaths = envelope.signedManifest.manifest.artifacts.map((artifact) => artifact.path).sort();
   const suppliedPaths = Object.keys(envelope.artifacts).sort();
@@ -146,6 +158,8 @@ async function authenticateEnvelopeV1(source: string, stateRoot: string): Promis
   exactArtifactMap(envelope);
   const trustRootPath = process.env.HORSENESS_PROJECT_TRUST_ROOT;
   if (trustRootPath === undefined || !isAbsolute(trustRootPath)) throw new Error("BOOTSTRAP_TRUST_ROOT_UNAVAILABLE");
+  const expectedName = BOOTSTRAP_TRUST_MODE === "production" ? "production-trust-root.json" : "fixture-trust-root.json";
+  if (trustRootPath.split(sep).at(-1) !== expectedName) throw new Error("BOOTSTRAP_TRUST_MODE_MISMATCH");
   const trustRootBytes = await readFile(trustRootPath); if (installerSha256(trustRootBytes) !== BOOTSTRAP_TRUST_ROOT_SHA256) throw new Error("BOOTSTRAP_TRUST_ROOT_PIN_MISMATCH"); const trustRoot = JSON.parse(trustRootBytes.toString("utf8")) as ProjectTrustRootV1;
   let replayState: TrustReplayStateV1 | undefined;
   const replayPath = join(stateRoot, "trust-replay.json");
@@ -154,7 +168,7 @@ async function authenticateEnvelopeV1(source: string, stateRoot: string): Promis
   try {
     const artifactRoot = join(temporary, "artifacts");
     await mkdir(artifactRoot, { recursive: true, mode: 0o700 });
-    for (const [path, base64] of Object.entries(envelope.artifacts)) await writeProtected(join(artifactRoot, path), Buffer.from(base64, "base64"));
+    for (const [path, base64] of Object.entries(envelope.artifacts)) await writeProtected(confineArtifactPath(path, artifactRoot), Buffer.from(base64, "base64"));
     const dependencyGraphPath = join(temporary, "dependency-graph.json");
     await writeFile(dependencyGraphPath, Buffer.from(envelope.dependencyGraphBase64, "base64"), { mode: 0o600 });
     const verified = await verifyReleaseV1({ signed: envelope.signedManifest, trustRoot, artifactRoot, dependencyGraphPath, ...(replayState === undefined ? {} : { replayState }) });

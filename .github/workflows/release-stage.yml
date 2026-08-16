@@ -1,0 +1,44 @@
+name: Release stage
+
+on:
+  workflow_call:
+    inputs:
+      bootstrap-trust-root-sha256:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-sign:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: release
+    timeout-minutes: 45
+    env:
+      CI: "1"
+      TZ: UTC
+      LANG: C
+      NODE_OPTIONS: --unhandled-rejections=strict
+      HORSENESS_CANDIDATE_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .node-version, cache: pnpm }
+      - run: corepack enable
+      - run: corepack pnpm install --frozen-lockfile
+      - name: Re-materialize and verify authorized bootstrap trust root digest
+        run: corepack pnpm run release:materialize-bootstrap-trust-root -- --expected-sha256 "${{ inputs.bootstrap-trust-root-sha256 }}"
+      - run: corepack pnpm run release:coherence
+      - run: corepack pnpm run release:build-twice
+      - name: Verify short-lived KMS signatures issued through protected OIDC policy
+        run: corepack pnpm run release:verify-sbom-provenance-signatures
+      - uses: actions/upload-artifact@v4
+        with:
+          name: c22-signed-builds
+          path: .acceptance/build-*
+          if-no-files-found: error
+          retention-days: 1

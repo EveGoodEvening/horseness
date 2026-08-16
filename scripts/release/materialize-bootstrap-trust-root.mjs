@@ -1,0 +1,24 @@
+import { createPublicKey } from "node:crypto";
+import { resolve } from "node:path";
+import { ROOT, RELEASE_IDENTITY, canonical, parseArgs, readJson, sha256, verifyEd25519, writeJson } from "./lib.mjs";
+
+const args = parseArgs();
+for (const key of args.keys()) if (key !== "expected-sha256") throw new Error(`UNEXPECTED_ARGUMENT:--${key}`);
+const record = await readJson(resolve(ROOT, "docs/trust/root-ceremony-v1.json"));
+const delegation = record.delegation;
+const root = record.rootKeys.find((item) => item.keyId === delegation.installerRootKeyId);
+if (root === undefined) throw new Error("INSTALLER_ROOT_KEY_MISSING");
+const spki = createPublicKey(root.publicKeyPem).export({ type: "spki", format: "der" });
+if (root.spkiFingerprint !== `sha256:${sha256(spki)}`) throw new Error("INSTALLER_ROOT_FINGERPRINT_INVALID");
+const core = { keyId: delegation.keyId, publicKeyPem: delegation.publicKeyPem, validFromSequence: delegation.validFromSequence, validThroughSequence: delegation.validThroughSequence };
+if (!verifyEd25519(root.publicKeyPem, Buffer.from(canonical(core)), delegation.installerRootSignature)) throw new Error("INSTALLER_ROOT_SIGNATURE_INVALID");
+const trustRoot = { schema: "horseness.project-trust-root.v1", rootKeyId: root.keyId, rootPublicKeyPem: root.publicKeyPem, delegations: [{ ...core, rootSignature: delegation.installerRootSignature }], revokedKeyIds: [], requiredSigstoreIdentity: RELEASE_IDENTITY };
+const bytes = `${canonical(trustRoot)}\n`;
+const digest = sha256(bytes);
+const expected = args.get("expected-sha256");
+if (expected !== undefined && expected !== digest) throw new Error("MATERIALIZED_TRUST_ROOT_DIGEST_MISMATCH");
+const path = resolve(ROOT, "apps/bootstrap/generated/production-trust-root.json");
+await writeJson(path, trustRoot);
+await writeJson(resolve(ROOT, "apps/bootstrap/generated/production-trust-pin.json"), { mode: "production", sha256: digest });
+await (await import("node:fs/promises")).writeFile(resolve(ROOT, "apps/bootstrap/src/trust-pin.ts"), `// Generated only after verified C22 ceremony and delegation.\nexport const BOOTSTRAP_TRUST_MODE: "fixture" | "production" = "production";\nexport const BOOTSTRAP_TRUST_ROOT_SHA256 = ${JSON.stringify(digest)};\n`, { mode: 0o600 });
+process.stdout.write(`${canonical({ path: "apps/bootstrap/generated/production-trust-root.json", sha256: digest })}\n`);

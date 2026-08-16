@@ -42,7 +42,20 @@
     "install:blackbox:offline": "node scripts/bootstrap/install-blackbox.mjs --offline",
     "doctor:hostile-no-side-effects": "pnpm --filter @horseness/installer exec node --import tsx ../../scripts/bootstrap/doctor-hostile.mjs",
     "uninstall:failure-matrix": "pnpm --filter @horseness/bootstrap exec node --import tsx ../../scripts/bootstrap/uninstall-failure-matrix.mjs",
-    "cli:lifecycle:blackbox": "pnpm --filter @horseness/cli exec node --import tsx ../../scripts/bootstrap/cli-lifecycle-blackbox.mjs"
+    "cli:lifecycle:blackbox": "pnpm --filter @horseness/cli exec node --import tsx ../../scripts/bootstrap/cli-lifecycle-blackbox.mjs",
+    "release:verify-root-ceremony": "node scripts/release/verify-root-ceremony.mjs",
+    "release:verify-delegation": "node scripts/release/verify-delegation.mjs",
+    "release:coherence": "node scripts/release/coherence.mjs",
+    "release:build-twice": "node scripts/release/build-twice.mjs",
+    "release:verify-sbom-provenance-signatures": "node scripts/release/verify-sbom-provenance-signatures.mjs",
+    "live-gates:required": "node scripts/release/live-gates-required.mjs",
+    "release:dry-run": "node scripts/release/dry-run.mjs",
+    "release:verify-no-static-secrets": "node scripts/release/verify-no-static-secrets.mjs",
+    "release:upload-immutable": "node scripts/release/upload-immutable.mjs",
+    "release:verify-artifact-receipt": "node scripts/release/verify-artifact-receipt.mjs",
+    "release:verify-commands": "node scripts/release/verify-commands.mjs",
+    "release:materialize-bootstrap-trust-root": "node scripts/release/materialize-bootstrap-trust-root.mjs",
+    "release:test": "node --test scripts/release/test/*.test.mjs"
   },
   "markdownlint-cli2": {
     "config": {

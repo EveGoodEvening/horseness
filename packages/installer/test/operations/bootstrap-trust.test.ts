@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash, createPrivateKey, generateKeyPairSync, sign, type KeyObject } from "node:crypto";
-import { access, mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 
 interface MutableManifest { sequence: number; sigstoreIdentity: { repository: string }; [key: string]: unknown }
 interface TestEnvelope { signedManifest: { keyId: string; manifestDigest: string; signature: string; manifest: MutableManifest }; catalog: { releaseVersion: string; contributions: unknown[] }; catalogDigest: string; [key: string]: unknown }
@@ -24,4 +24,41 @@ test("self-signed, wrong identity, and revoked releases fail before workspace or
 
 test("authenticated release replay is rejected without changing installed state", async () => {
   const root = await mkdtemp(join(tmpdir(), "horseness-bootstrap-replay-")); const first = await runEnvelope(fixture, root); assert.equal(first.result.status, 0, first.result.stderr); const before = `${await snapshot(first.workspace)}\n${await snapshot(first.home)}`; const replay = resign(fixture, (manifest) => { manifest.sequence = 19; }); const second = await runEnvelope(replay, root, false); assert.equal(second.result.status, 1); assert.equal(`${await snapshot(first.workspace)}\n${await snapshot(first.home)}`, before); try { const endpoint = JSON.parse(await readFile(join(first.workspace, ".horseness/daemon-endpoint.v1.json"), "utf8")) as { processId: number }; process.kill(endpoint.processId, "SIGTERM"); } catch {}
+});
+
+test("malicious path-traversal envelope fails without creating escaped file", async () => {
+  const escapeBasename = "horseness-c22-traversal-probe";
+  const escapeTarget = join(tmpdir(), escapeBasename);
+  await rm(escapeTarget, { force: true });
+  const root = await mkdtemp(join(tmpdir(), "horseness-bootstrap-traversal-"));
+  try {
+    const originalArtifacts = (fixture as TestEnvelope & { artifacts: Record<string, string> }).artifacts;
+    const maliciousPath = `../../${escapeBasename}`;
+    const malicious = resign(fixture, (manifest) => {
+      const artifacts = manifest.artifacts as Array<{ path: string }>;
+      for (const artifact of artifacts) if (artifact.path === "catalog.json") artifact.path = maliciousPath;
+    }) as TestEnvelope & { artifacts: Record<string, string> };
+    malicious.artifacts = {};
+    for (const artifact of malicious.signedManifest.manifest.artifacts as Array<{ path: string }>) {
+      const sourceKey = artifact.path === maliciousPath ? "catalog.json" : artifact.path;
+      malicious.artifacts[artifact.path] = originalArtifacts[sourceKey] ?? "";
+    }
+    const { result } = await runEnvelope(malicious, root);
+    assert.equal(result.status, 1, result.stderr);
+    await assert.rejects(access(escapeTarget), { code: "ENOENT" });
+  } finally {
+    await rm(escapeTarget, { force: true });
+  }
+});
+
+test("local control: traversal path escapes generated temp/artifacts root to tmpdir target via resolve semantics", () => {
+  const escapeBasename = "horseness-c22-traversal-probe";
+  const maliciousPath = `../../${escapeBasename}`;
+  const temporary = join(tmpdir(), "horseness-release-auth-probe");
+  const artifactRoot = join(temporary, "artifacts");
+  const resolved = resolve(artifactRoot, maliciousPath);
+  assert.equal(resolved, join(tmpdir(), escapeBasename));
+  assert.ok(!resolved.startsWith(`${artifactRoot}${sep}`), "traversal path must escape artifactRoot containment");
+  assert.ok(!resolved.startsWith(`${temporary}${sep}`), "traversal path must escape the temporary root");
+  assert.equal(resolve(artifactRoot, maliciousPath), resolve(tmpdir(), escapeBasename));
 });

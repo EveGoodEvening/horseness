@@ -1,0 +1,8 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { C22_COMMANDS, ROOT } from "./lib.mjs";
+const manifest = JSON.parse(await readFile(resolve(ROOT, "package.json"), "utf8"));
+const expected = { "release:verify-root-ceremony": "node scripts/release/verify-root-ceremony.mjs", "release:verify-delegation": "node scripts/release/verify-delegation.mjs", "release:coherence": "node scripts/release/coherence.mjs", "release:build-twice": "node scripts/release/build-twice.mjs", "release:verify-sbom-provenance-signatures": "node scripts/release/verify-sbom-provenance-signatures.mjs", "live-gates:required": "node scripts/release/live-gates-required.mjs", "release:dry-run": "node scripts/release/dry-run.mjs", "release:verify-no-static-secrets": "node scripts/release/verify-no-static-secrets.mjs", "release:upload-immutable": "node scripts/release/upload-immutable.mjs", "release:verify-artifact-receipt": "node scripts/release/verify-artifact-receipt.mjs", "release:verify-commands": "node scripts/release/verify-commands.mjs", "release:materialize-bootstrap-trust-root": "node scripts/release/materialize-bootstrap-trust-root.mjs", "release:test": "node --test scripts/release/test/*.test.mjs" };
+for (const [key, value] of Object.entries(expected)) if (manifest.scripts?.[key] !== value) throw new Error(`RELEASE_COMMAND_MISMATCH:${key}`);
+if (C22_COMMANDS.length !== 11 || new Set(C22_COMMANDS).size !== 11) throw new Error("C22_COMMAND_CONTRACT_INVALID");
+process.stdout.write(`Verified ${Object.keys(expected).length} release forwarding keys and 11 acceptance commands\n`);

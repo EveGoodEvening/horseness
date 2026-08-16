@@ -19,6 +19,7 @@ Hermetic feasibility uses the repository deterministic provider with frozen requ
 ## Release train
 
 All packages, applications, native bundles, bootstrap binaries, offline archives, schemas, migration data, SBOM, provenance, signatures, trust metadata, and rollback instructions share one coherent immutable release version and manifest digest.
+C22 enforces this train across exactly fifteen publishable manifests. Until an approved version and access policy exist, manifests remain at their development values and `release:coherence` fails closed; tooling does not guess a version, remove `private`, or choose registry policy. Production bootstrap trust is materialized only from a verified witnessed ceremony and never from the C20 fixture trust root.
 
 ## Frozen v1 boundary rules
 

@@ -4,10 +4,11 @@ import { createHash, createPrivateKey, createPublicKey, sign } from "node:crypto
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 
-const FIXTURE_PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIGcLq+MnoMJ0+s1xKa1yHhwepzbdwKTfivQYe2Okp3mW\n-----END PRIVATE KEY-----\n`;
-const privateKey = createPrivateKey(FIXTURE_PRIVATE_KEY);
-const publicKey = createPublicKey(privateKey).export({ type: "spki", format: "pem" }).toString();
 const root = resolve(import.meta.dirname, "../..");
+const production = process.env.HORSENESS_BOOTSTRAP_MODE === "production";
+const fixtureKeyPath = resolve(root, "tests/fixtures/install-bundles/c20-fixture-signing-key.pem");
+const privateKey = production ? null : createPrivateKey(await readFile(fixtureKeyPath));
+const publicKey = privateKey === null ? null : createPublicKey(privateKey).export({ type: "spki", format: "pem" }).toString();
 const specifications = [
   ["pi", "0.73.1", "pi", ".horseness/pi", [["adapters/pi/native/pi-package.json", "manifest", 0o600], ["adapters/pi/native/extensions/horseness-pi.mjs", "native-resource", 0o600]]],
   ["omp", "17.2.15", "omp", ".horseness/omp", [["adapters/omp/native/omp-package.json", "manifest", 0o600], ["adapters/omp/native/extensions/horseness-omp.mjs", "native-resource", 0o600]]],
@@ -41,18 +42,35 @@ const identity = { issuer: "https://token.actions.githubusercontent.com", reposi
 const artifactRecords = Object.entries(artifacts).sort(([left], [right]) => left.localeCompare(right)).map(([path, base64]) => { const bytes = Buffer.from(base64, "base64"); return { path, sha256: sha(bytes), bytes: bytes.length, lifecycleScripts: [] }; });
 const manifest = { schema: "horseness.release-manifest.v1", sequence: 20, version: releaseVersion, previousManifestDigest: null, artifacts: artifactRecords, dependencyGraphDigest: sha(dependencyGraph), sigstoreIdentity: identity };
 const manifestDigest = sha(`horseness.release-manifest.v1\0${canonical(manifest)}`);
-const signedManifest = { schema: "horseness.signed-release-manifest.v1", manifest, manifestDigest, keyId: "fixture-release-ed25519-v1", signature: sign(null, Buffer.from(canonical(manifest)), privateKey).toString("base64") };
-const delegationCore = { keyId: signedManifest.keyId, publicKeyPem: publicKey, validFromSequence: 1, validThroughSequence: 1000 };
-const revokedDelegationCore = { ...delegationCore, keyId: "fixture-revoked-ed25519-v1" };
-const trustRoot = { schema: "horseness.project-trust-root.v1", rootKeyId: "fixture-root-ed25519-v1", rootPublicKeyPem: publicKey, delegations: [{ ...delegationCore, rootSignature: sign(null, Buffer.from(canonical(delegationCore)), privateKey).toString("base64") }, { ...revokedDelegationCore, rootSignature: sign(null, Buffer.from(canonical(revokedDelegationCore)), privateKey).toString("base64") }], revokedKeyIds: [revokedDelegationCore.keyId], requiredSigstoreIdentity: identity };
-const neutralCore = { releaseVersion, releaseManifestDigest: manifestDigest, authenticatedManifestKeyId: signedManifest.keyId, authenticatedManifestSequence: manifest.sequence, contributions };
-const catalogDigest = sha(`horseness.neutral-install-catalog.v1\0${canonical(neutralCore)}`);
-const envelope = { schema: "horseness.bootstrap-release-envelope.v1", signedManifest, dependencyGraphBase64: dependencyGraph.toString("base64"), artifacts, catalog, catalogDigest };
+const signedManifest = privateKey === null ? null : { schema: "horseness.signed-release-manifest.v1", manifest, manifestDigest, keyId: "fixture-release-ed25519-v1", signature: sign(null, Buffer.from(canonical(manifest)), privateKey).toString("base64") };
+const delegationCore = signedManifest === null ? null : { keyId: signedManifest.keyId, publicKeyPem: publicKey, validFromSequence: 1, validThroughSequence: 1000 };
+const revokedDelegationCore = delegationCore === null ? null : { ...delegationCore, keyId: "fixture-revoked-ed25519-v1" };
+const trustRoot = delegationCore === null || revokedDelegationCore === null || privateKey === null ? null : { schema: "horseness.project-trust-root.v1", rootKeyId: "fixture-root-ed25519-v1", rootPublicKeyPem: publicKey, delegations: [{ ...delegationCore, rootSignature: sign(null, Buffer.from(canonical(delegationCore)), privateKey).toString("base64") }, { ...revokedDelegationCore, rootSignature: sign(null, Buffer.from(canonical(revokedDelegationCore)), privateKey).toString("base64") }], revokedKeyIds: [revokedDelegationCore.keyId], requiredSigstoreIdentity: identity };
+const neutralCore = signedManifest === null ? null : { releaseVersion, releaseManifestDigest: manifestDigest, authenticatedManifestKeyId: signedManifest.keyId, authenticatedManifestSequence: manifest.sequence, contributions };
+const catalogDigest = neutralCore === null ? null : sha(`horseness.neutral-install-catalog.v1\0${canonical(neutralCore)}`);
+const envelope = signedManifest === null ? null : { schema: "horseness.bootstrap-release-envelope.v1", signedManifest, dependencyGraphBase64: dependencyGraph.toString("base64"), artifacts, catalog, catalogDigest };
 const generated = resolve(root, "apps/bootstrap/generated");
+let productionTrustRoot = null;
+let productionTrustPin = null;
+try {
+  productionTrustRoot = await readFile(resolve(generated, "production-trust-root.json"));
+  productionTrustPin = JSON.parse(await readFile(resolve(generated, "production-trust-pin.json"), "utf8"));
+} catch (error) { if (error.code !== "ENOENT") throw error; }
+if (production && (productionTrustRoot === null || productionTrustPin?.mode !== "production" || productionTrustPin.sha256 !== sha(productionTrustRoot))) throw new Error("PRODUCTION_TRUST_ROOT_NOT_MATERIALIZED");
+const productionBundlePath = process.env.HORSENESS_PRODUCTION_BUNDLE_PATH;
+if (production && (productionBundlePath === undefined || !resolve(productionBundlePath).startsWith(`${root}/`))) throw new Error("PRODUCTION_RELEASE_BUNDLE_REQUIRED");
 await rm(generated, { recursive: true, force: true });
 await mkdir(generated, { recursive: true, mode: 0o700 });
-await writeFile(resolve(generated, "fixture-release.json"), `${JSON.stringify(envelope)}\n`, { mode: 0o600 });
-await writeFile(resolve(generated, "fixture-trust-root.json"), `${JSON.stringify(trustRoot)}\n`, { mode: 0o600 });
+if (!production) {
+  if (envelope === null || trustRoot === null) throw new Error("FIXTURE_BUILD_MATERIAL_MISSING");
+  await writeFile(resolve(generated, "fixture-release.json"), `${JSON.stringify(envelope)}\n`, { mode: 0o600 });
+  await writeFile(resolve(generated, "fixture-trust-root.json"), `${JSON.stringify(trustRoot)}\n`, { mode: 0o600 });
+}
+if (productionTrustRoot !== null) {
+  await writeFile(resolve(generated, "production-trust-root.json"), productionTrustRoot, { mode: 0o600 });
+  await writeFile(resolve(generated, "production-trust-pin.json"), `${JSON.stringify(productionTrustPin)}\n`, { mode: 0o600 });
+}
+if (production) await cp(resolve(productionBundlePath), resolve(generated, "production-release.json"));
 const dist = resolve(root, "apps/bootstrap/dist");
 await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true, mode: 0o700 });
@@ -63,7 +81,9 @@ if (deployed.status !== 0) throw new Error(`bootstrap deploy failed: ${deployed.
 await cp(deployRoot, runtime, { recursive: true });
 await rm(deployRoot, { recursive: true, force: true });
 await cp(generated, resolve(runtime, "generated"), { recursive: true });
-const executable = `#!/usr/bin/env node\nprocess.env.HORSENESS_BOOTSTRAP_BUNDLE ??= new URL("./runtime/generated/fixture-release.json", import.meta.url).pathname;\nprocess.env.HORSENESS_PROJECT_TRUST_ROOT ??= new URL("./runtime/generated/fixture-trust-root.json", import.meta.url).pathname;\nprocess.env.HORSENESS_DAEMON_EXECUTABLE ??= new URL("./runtime/node_modules/@horseness/daemon/bin/horseness-daemon.mjs", import.meta.url).pathname;\nawait import(new URL("./runtime/bin/horseness-bootstrap.mjs", import.meta.url));\n`;
+const selectedTrustRoot = production ? "production-trust-root.json" : "fixture-trust-root.json";
+const selectedBundle = production ? "production-release.json" : "fixture-release.json";
+const executable = `#!/usr/bin/env node\nprocess.env.HORSENESS_BOOTSTRAP_BUNDLE = new URL("./runtime/generated/${selectedBundle}", import.meta.url).pathname;\nprocess.env.HORSENESS_PROJECT_TRUST_ROOT = new URL("./runtime/generated/${selectedTrustRoot}", import.meta.url).pathname;\ndelete process.env.HORSENESS_PROJECT_TRUST_ROOT_SHA256;\nprocess.env.HORSENESS_DAEMON_EXECUTABLE ??= new URL("./runtime/node_modules/@horseness/daemon/bin/horseness-daemon.mjs", import.meta.url).pathname;\nawait import(new URL("./runtime/bin/horseness-bootstrap.mjs", import.meta.url));\n`;
 await writeFile(resolve(dist, "horseness-bootstrap.mjs"), executable, { mode: 0o700 });
 await chmod(resolve(dist, "horseness-bootstrap.mjs"), 0o700);
 process.stdout.write(`Built authenticated release ${manifestDigest} with ${contributions.length} host contributions\n`);

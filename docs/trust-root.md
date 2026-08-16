@@ -7,6 +7,9 @@ Planning freezes the `RootCeremonyRecordV1` schema and verification behavior, bu
 ## Delegated release signer
 
 Ordinary releases use a root-signed, version/range-bounded hardware-KMS delegation. The exact Sigstore identity tuple is issuer `https://token.actions.githubusercontent.com`, repository `EveGoodEvening/horseness`, workflow reference `refs/heads/main:.github/workflows/release.yml`, protected environment `release`. Bootstrap must normalize and evidence local/remote default integration at `refs/heads/main` before W00; the workflow trigger, branch protection, OIDC claims, KMS policy, Sigstore verification, and signed release receipts reject any other ref. C22 exclusively owns, creates, validates, and exercises `.github/workflows/release.yml` before its KMS signing intent; C23 only consumes the signed immutable C22 handoff. KMS policy requires that tuple, short-lived CI OIDC identity, the exact release-manifest digest/version, and two distinct maintainer approvals. Signature and audit artifacts are part of the immutable train; private key material never enters CI.
+The checked-in C22 schema is executable structure, not ceremony evidence. The production record and every referenced evidence file remain absent until the independently witnessed ceremony is complete. A valid delegation carries two signatures over the complete range/KMS/approval core and a separately verified installer-compatible signature over the public `ProjectTrustRootV1` delegation core; materialization writes only public keys, ranges, identity policy, and signatures to `apps/bootstrap/generated/production-trust-root.json`.
+
+Release and immutable-storage effects are lookup-first and journaled under C22's namespace. Each canonical `side-effect-v1` record binds its predecessor and is signed by the delegated KMS key. Fixture trust roots and ephemeral test signers cannot satisfy this chain.
 
 ## Rotation and revocation
 

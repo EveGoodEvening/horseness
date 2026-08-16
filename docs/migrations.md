@@ -37,3 +37,7 @@ Downgrade is permitted only through a declared reversible plan. Crossing a seman
 C20 operation writes reuse the authenticated C19 journal and migration authority. Contribution bytes are file-fsynced into a private staging tree, the tree is activated by same-filesystem rename, and the parent directory and owner marker are made durable before success. Exact retries authenticate marker and byte digests and are idempotent; substitution, unmarked occupancy, or drift refuses.
 
 Upgrade, downgrade, rollback, and retry-install use the same neutral-bundle ownership and staging rules. Downgrades continue to require the C19 reversible-plan and explicit major-version gates. Uninstall recovery follows the durable order kill switch, discovery disable, credential revocation, cleanup. A crash at any boundary resumes from persisted evidence rather than restoring discoverability or re-enabling a revoked contribution.
+
+## C22 release migration handoff
+
+The C22 release manifest and dependency graph bind the exact migration-capable package bytes and coherent train version. The immutable receipt includes their digests and retention reference; C23 and later chunks fetch those bytes rather than ambient build output. A version choice or publication policy is not inferred from the C19 compatibility fixture. Unknown, absent, or inconsistent release version and trust inputs refuse before signing or upload.

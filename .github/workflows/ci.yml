@@ -42,6 +42,9 @@ jobs:
       - run: corepack pnpm run lint
       - run: corepack pnpm run test
       - run: corepack pnpm run boundaries:check
+      - run: corepack pnpm run release:test
+      - run: corepack pnpm run release:verify-commands
+      - run: corepack pnpm run release:verify-no-static-secrets
       - name: Verify immutable C01 receipt and resume
         run: |
           node scripts/progress-cas.mjs verify-live-receipt --receipt docs/checkpoints/C01/final/1.json --claim docs/claims/C01/1.json --remediation-claim docs/claims/R001/1.json --checkpoint-index docs/checkpoints/index.jsonl --trust docs/checkpoints/trust.json --integrated-head HEAD --strict
