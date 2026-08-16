@@ -1,7 +1,7 @@
 {
   "name": "@horseness/bootstrap",
-  "version": "1.0.0",
-  "private": false,
+  "version": "0.0.0",
+  "private": true,
   "type": "module",
   "sideEffects": false,
   "bin": {
@@ -18,15 +18,12 @@
     "build": "node ../../scripts/bootstrap/build.mjs"
   },
   "dependencies": {
-    "@horseness/daemon": "workspace:1.0.0",
-    "@horseness/domain": "workspace:1.0.0",
-    "@horseness/installer": "workspace:1.0.0",
+    "@horseness/daemon": "workspace:*",
+    "@horseness/domain": "workspace:*",
+    "@horseness/installer": "workspace:*",
     "tsx": "4.20.5"
   },
   "license": "MIT",
-  "publishConfig": {
-    "access": "public"
-  },
   "files": [
     "src",
     "bin",

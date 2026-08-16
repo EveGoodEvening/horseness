@@ -1,29 +1,39 @@
 # Release process
 
-## C22 pre-signing order
+## Public package scope
 
-C22 is deliberately fail-closed. The offline root ceremony is performed and independently reviewed before any delegated signing, upload, or publication effect. The authoritative gate is `corepack pnpm run release:verify-root-ceremony -- --schema docs/trust/root-ceremony-v1.schema.json --record docs/trust/root-ceremony-v1.json --evidence docs/trust/evidence --offline --threshold 2-of-2`; its exact paths and policy options are mandatory. The verifier validates the exact `RootCeremonyRecordV1` shape, independently confirms the record is offline with a 2-of-2 root threshold, and checks distinct Ed25519 root and recovery keys, SPKI fingerprints, 2-of-3 recovery custody, witnesses, and content-addressed custody/destruction evidence. The repository contains the schema but does not contain a fabricated ceremony record or evidence.
+The first public release is a fourteen-package npm train at `1.0.0`: eight `packages/*` packages, `@horseness/daemon`, `@horseness/cli`, and the four adapter packages. Every public manifest uses the MIT License, public npm access, and exact `workspace:1.0.0` internal source pins; packed manifests contain exact `1.0.0` dependencies.
 
-`release:verify-delegation` then verifies two distinct root signatures over the version/range-bounded KMS delegation, the installer-compatible root signature, two distinct approvals, and the exact protected-main OIDC tuple. The tuple is issuer `https://token.actions.githubusercontent.com`, repository `EveGoodEvening/horseness`, workflow `refs/heads/main:.github/workflows/release.yml`, protected environment `release`, and branch `refs/heads/main`.
+`@horseness/bootstrap` remains private `0.0.0`. Its checked-in release envelope and trust root are fixture material for repository tests, not a supported public installer. Self-contained bootstrap delivery, offline archives, project-root ceremonies, KMS signing, custom immutable storage, and custom release receipts require a future ADR before publication.
 
 ## Candidate assembly
 
-All fifteen publishable manifests are released as one `1.0.0` train under the MIT License with public npm access. Source manifests use exact `workspace:1.0.0` internal specifiers so pnpm links the workspace during development; `pnpm pack` rewrites those specifiers to exact `1.0.0` dependencies in published manifests. `release:coherence` rejects any other version, private or non-public package, non-MIT package, or non-exact internal workspace pin.
+`release:coherence` validates the fourteen public manifests, the private deferred bootstrap manifest, and matching pnpm lockfile importers. `release:build-twice` packs the complete public train into `.release/build-1` and `.release/build-2`, writes one canonical manifest binding the source commit plus every package tarball size, SHA-256 digest, and npm SHA-512 integrity, and rejects any difference between the two inventories.
 
-`release:build-twice` packs the exact fifteen-package graph twice with a frozen epoch, emits a deterministic dependency graph, CycloneDX 1.6 SBOM, SLSA provenance statement, and release inventory, then requires the protected KMS signer to sign both manifest and provenance digests. It rejects any byte difference between unsigned build inventories. Fixture tests may use ephemeral test keys; fixture output is never accepted as production evidence.
+`release:verify-candidate` verifies both manifests and every tarball, installs all internal packages from the packed tarballs into a clean temporary project, imports every public package through `tsx`, and executes the installed `horseness` binary through its stable no-command validation path. No registry mutation occurs during C22.
 
-The required live matrix runs all four native host smokes. Claude and Codex must produce fresh existing-user-subscription-session receipts bound to the exact candidate HEAD and tree. No provider authentication material is read, copied, hashed, logged, or stored.
+## GitHub workflow phases
 
-## Immutable handoff and recovery
+`.github/workflows/release.yml` is manual and main-only. Its `phase` input selects one operation:
 
-The immutable uploader accepts only `build-1` after reproducibility. It uses an ephemeral storage OIDC token, a declared future retention deadline, and a content-addressed HTTPS object. Every attempt records a signed intent before network mutation, looks up the digest before PUT, uses create-only semantics, then looks up and byte-verifies the object. A retry reconciles the existing object rather than uploading different bytes.
+1. `publish-next` rebuilds and verifies the candidate, uploads `build-1` as a seven-day GitHub Actions artifact, then publishes every package under the `next` dist-tag with npm provenance.
+2. `verify-public` downloads that exact candidate artifact from the supplied workflow run and compares every public npm integrity before clean exact-version install, signature audit, package import, and CLI smoke on Linux, macOS, and Windows.
+3. `promote-latest` requires the candidate run and a successful verification run, compares npm integrity and `next` tags, moves all fourteen packages to `latest`, and creates or verifies the `v1.0.0` GitHub release at the candidate manifest's source commit.
 
-C22 journal records are canonical, domain-separated, hash-chained, append-only, and individually signed by the delegated KMS key. Concurrent append attempts fail closed. The final ignored `.acceptance/C22-artifact-receipt.json` binds the immutable URI, retention, complete artifact inventory, SBOM, provenance, both signatures, storage receipt, delegated key, and journal head. C23 consumes only that verified handoff.
+C23, C24, and C25 execute those phases without source edits. Their trackers record GitHub workflow URLs and observed npm metadata; they do not create custom signed journals or receipts.
 
-## Workflows and secrets
+## npm authentication and provenance
 
-`.github/workflows/release.yml` is manual, main-only, and uses the protected `release` environment. Repository permissions are read-only except `id-token: write` where OIDC is required. The workflows contain no static provider, KMS, registry, or storage credentials. Environment protection must require two human approvals outside repository YAML.
+Brand-new npm packages cannot be configured for trusted publishing before they exist. The initial release therefore uses one short-lived, package-scoped granular npm token stored only in the protected GitHub `release` environment. The workflow never checks that value into the repository or prints it.
 
-## Current external blockers
+After package creation, later `publish-next` runs should use npm trusted publishing for `release.yml`. npm trusted publishing requires npm 11.5.1 or newer and Node 22.14.0 or newer; the workflow pins npm 11.6.2 and always requests npm provenance. Trusted publishing does not authorize dist-tag changes, so each C25 promotion uses maintainer 2FA or a separately provisioned short-lived package-scoped promotion token. No persistent npm release token is retained.
 
-The version, license, and npm access decisions are complete. Release execution still requires the separately governed ceremony, delegation, signing, immutable-storage, and live-session inputs described above; this metadata change does not create or claim that evidence.
+## Retry and partial publication
+
+npm versions are immutable and a fourteen-package publish is not one registry transaction. `publish-next` therefore checks each exact version before mutation. A missing version is published. An existing version is accepted only when its registry integrity exactly matches the candidate tarball; otherwise the run fails. A matching partial publication is reconciled by repairing the `next` tag and continuing.
+
+Promotion uses the same exact-integrity rule and refuses any package whose `next` tag does not name the candidate version. This registry lookup is ordinary npm reconciliation, not a second release receipt system.
+
+## Current external prerequisites
+
+C22 has no external prerequisite. C23 requires npm scope/package write authority and the protected `release` environment. C24 requires GitHub-hosted Linux, macOS, and Windows runners. C25 requires npm dist-tag authority and GitHub release write authority. No package is considered released until C25 completes.

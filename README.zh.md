@@ -91,7 +91,7 @@ Horseness 使用 Node.js 22、严格模式 TypeScript、ESM、pnpm、SQLite WAL�
 
 ## 开发状态
 
-Horseness 正在开发中，尚未达到发布就绪状态。领域模型、证据准入、任务/分支投影、确定性上下文重建、分派/恢复、SDK、守护进程、CLI 以及 Pi/OMP 原生闭环已经实现。其余宿主、安装器、系统验证和发布分块记录在 [docs/progress.md](docs/progress.md) 中。
+核心、守护进程、CLI、安装器库和四个原生适配器均已实现。C22 正在准备包含十四个包的 npm-first `1.0.0` 发布：先以 `next` 发布精确公共包，在 Linux、macOS 和 Windows 上验证，再提升为 `latest`。基于 fixture 的自包含 bootstrap 和离线分发已推迟。当前发布进度记录在 [docs/progress.md](docs/progress.md) 中。
 
 ## 仓库开发
 

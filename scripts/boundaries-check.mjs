@@ -26,24 +26,33 @@ export function importBoundaryError({ file, packageDir, specifier, workspaceName
   return null;
 }
 export function metadataBoundaryErrors(manifests) {
- const errors = [];
- const versions = new Set(manifests.map(({ manifest }) => manifest.version));
- if (versions.size !== 1) return ["workspace manifests must use one coherent version"];
- const version = manifests[0]?.manifest.version;
- const development = version === "0.0.0";
- for (const { manifest } of manifests) {
-  if ((development ? manifest.private !== true : manifest.private === true) || manifest.type !== "module") {
-   errors.push(`${manifest.name}: must be ${development ? "private" : "public"} ESM`);
+  const errors = [];
+  const byName = new Map(manifests.map(({ manifest }) => [manifest.name, manifest]));
+  const publicManifests = manifests.filter(({ manifest }) => manifest.private !== true);
+  const publicVersions = new Set(publicManifests.map(({ manifest }) => manifest.version));
+  if (publicVersions.size > 1) return ["public workspace manifests must use one coherent version"];
+  const releaseVersion = publicManifests[0]?.manifest.version;
+  if (releaseVersion === "0.0.0") errors.push("public workspace version must not be 0.0.0");
+
+  for (const { manifest } of manifests) {
+    const isPrivate = manifest.private === true;
+    if (manifest.type !== "module") errors.push(`${manifest.name}: must be ESM`);
+    if (isPrivate) {
+      if (manifest.version !== "0.0.0" || manifest.publishConfig !== undefined) errors.push(`${manifest.name}: private workspace must use 0.0.0 without publishConfig`);
+    } else if (manifest.version !== releaseVersion) {
+      errors.push(`${manifest.name}: public workspace must use ${releaseVersion}`);
+    }
+
+    const expectedSpecifier = isPrivate ? "workspace:*" : `workspace:${releaseVersion}`;
+    const allDeps = { ...manifest.dependencies, ...manifest.devDependencies, ...manifest.optionalDependencies, ...manifest.peerDependencies };
+    for (const [dependency, specifier] of Object.entries(allDeps)) {
+      const target = byName.get(dependency);
+      if (target === undefined) continue;
+      if (!isPrivate && target.private === true) errors.push(`${manifest.name}: public package cannot depend on private ${dependency}`);
+      if (specifier !== expectedSpecifier) errors.push(`${manifest.name}: ${dependency} must use ${expectedSpecifier}`);
+    }
   }
-  const expectedSpecifier = development ? "workspace:*" : `workspace:${version}`;
-  const allDeps = { ...manifest.dependencies, ...manifest.devDependencies, ...manifest.optionalDependencies, ...manifest.peerDependencies };
-  for (const [dependency, specifier] of Object.entries(allDeps)) {
-   if (manifests.some(({ manifest: candidate }) => candidate.name === dependency) && specifier !== expectedSpecifier) {
-    errors.push(`${manifest.name}: ${dependency} must use ${expectedSpecifier}`);
-   }
-  }
- }
- return errors;
+  return errors;
 }
 
 
@@ -68,13 +77,13 @@ export async function checkBoundaries(cwd = process.cwd()) {
   const index = path.join(dir, "src/index.ts");
   if (!(await stat(index)).isFile()) errors.push(`${manifest.name}: missing src/index.ts`);
   const allDeps = { ...manifest.dependencies, ...manifest.devDependencies, ...manifest.peerDependencies };
-  for (const [dependency, specifier] of Object.entries(allDeps)) {
+  for (const dependency of Object.keys(allDeps)) {
     if (!names.has(dependency)) continue;
 
     if ((layers.get(dependency) ?? Infinity) >= (layers.get(manifest.name) ?? -1)) errors.push(`${manifest.name}: invalid inward dependency on ${dependency}`);
   }
   if (group === "packages" && Object.keys(allDeps).some((name) => name.startsWith("@horseness/adapter-"))) errors.push(`${manifest.name}: core package depends on adapter`);
-  for (const file of await walk(path.join(dir, "src"))) {
+  for (const file of await walk(path.join(dir, "src"), root)) {
     const source = await readFile(file, "utf8");
     for (const match of source.matchAll(/(?:from\s+|import\s*\()(["'])([^"']+)\1/g)) {
       const specifier = match[2];
@@ -93,12 +102,12 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
  console.log(`Boundary check passed for ${result.packageCount} packages`);
 }
 
-async function walk(dir) {
+async function walk(dir, root) {
   const files = [];
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const target = path.join(dir, entry.name);
     if (entry.isSymbolicLink()) throw new Error(`symlink not allowed: ${path.relative(root, target)}`);
-    if (entry.isDirectory()) files.push(...await walk(target));
+    if (entry.isDirectory()) files.push(...await walk(target, root));
     else if (entry.isFile() && /\.[cm]?[jt]s$/.test(entry.name)) files.push(target);
   }
   return files;

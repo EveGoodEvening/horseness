@@ -1,61 +1,70 @@
-name: Release candidate
+name: npm release
 
 on:
   workflow_dispatch:
+    inputs:
+      phase:
+        description: Release phase
+        required: true
+        type: choice
+        options:
+          - publish-next
+          - verify-public
+          - promote-latest
+      version:
+        description: Exact release version
+        required: true
+        default: 1.0.0
+        type: string
+      candidate_run_id:
+        description: publish-next workflow run containing the candidate artifact
+        required: false
+        type: string
+      verification_run_id:
+        description: successful verify-public workflow run required for promotion
+        required: false
+        type: string
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
-  group: release-${{ github.sha }}
+  group: npm-release-${{ inputs.phase }}-${{ inputs.version }}
   cancel-in-progress: false
 
 jobs:
-  authorize:
-    if: github.ref == 'refs/heads/main'
+  build-candidate:
+    if: github.ref == 'refs/heads/main' && inputs.phase == 'publish-next'
     runs-on: ubuntu-latest
-    environment: release
-    timeout-minutes: 10
+    timeout-minutes: 30
+    env:
+      CI: "1"
+      TZ: UTC
+      LANG: C
+      NODE_OPTIONS: --unhandled-rejections=strict
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
-        with: { node-version-file: .node-version, cache: pnpm }
+        with:
+          node-version-file: .node-version
+          registry-url: https://registry.npmjs.org
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile
-      - run: corepack pnpm run release:verify-commands
-      - run: corepack pnpm run release:verify-root-ceremony -- --schema docs/trust/root-ceremony-v1.schema.json --record docs/trust/root-ceremony-v1.json --evidence docs/trust/evidence --offline --threshold 2-of-2
-      - run: corepack pnpm run release:verify-delegation -- --root-record docs/trust/root-ceremony-v1.json --require-version-range --require-kms-policy --require-two-approvals
-      - name: Materialize verified production bootstrap trust root
-        id: bootstrap-trust
-        shell: bash
-        run: |
-          result="$(corepack pnpm run --silent release:materialize-bootstrap-trust-root)"
-          echo "sha256=$(node -e 'const value=JSON.parse(process.argv[1]); if (!/^[0-9a-f]{64}$/.test(value.sha256)) process.exit(1); process.stdout.write(value.sha256)' "$result")" >> "$GITHUB_OUTPUT"
-    outputs:
-      bootstrap-trust-root-sha256: ${{ steps.bootstrap-trust.outputs.sha256 }}
+      - run: corepack pnpm run release:coherence
+      - run: corepack pnpm run release:build-twice
+      - run: corepack pnpm run release:verify-candidate
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-candidate-${{ inputs.version }}
+          path: .release/build-1
+          if-no-files-found: error
+          retention-days: 7
 
-  stage:
-    needs: authorize
-    uses: ./.github/workflows/release-stage.yml
-    with:
-      bootstrap-trust-root-sha256: ${{ needs.authorize.outputs.bootstrap-trust-root-sha256 }}
-    permissions:
-      contents: read
-      id-token: write
-    secrets: inherit
-
-  live:
-    needs: stage
-    uses: ./.github/workflows/live-gates.yml
-    permissions:
-      contents: read
-    secrets: inherit
-
-  finalize:
-    needs: live
-    if: github.ref == 'refs/heads/main'
+  publish-next:
+    needs: build-candidate
+    if: github.ref == 'refs/heads/main' && inputs.phase == 'publish-next'
     runs-on: ubuntu-latest
     environment: release
     timeout-minutes: 20
@@ -67,19 +76,84 @@ jobs:
       TZ: UTC
       LANG: C
       NODE_OPTIONS: --unhandled-rejections=strict
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
-        with: { node-version-file: .node-version, cache: pnpm }
-      - run: corepack enable
-      - run: corepack pnpm install --frozen-lockfile
+        with:
+          node-version-file: .node-version
+          registry-url: https://registry.npmjs.org
+      - run: npm install --global npm@11.6.2
       - uses: actions/download-artifact@v4
-        with: { name: c22-signed-builds, path: .acceptance }
-      - uses: actions/download-artifact@v4
-        with: { name: c22-live-receipts, path: .acceptance }
-      - run: corepack pnpm run release:dry-run
-      - run: corepack pnpm run release:verify-no-static-secrets
-      - name: Upload immutable candidate with lookup-first reconciliation
-        run: corepack pnpm run release:upload-immutable -- --select-build build-1 --receipt-out .acceptance/C22-artifact-receipt.json
-      - run: corepack pnpm run release:verify-artifact-receipt -- --checkpoint-subject C22
+        with:
+          name: npm-candidate-${{ inputs.version }}
+          path: .release/build-1
+      - run: node scripts/release/publish-next.mjs --candidate .release/build-1/release-manifest.json --version "${{ inputs.version }}" --provenance
+
+  verify-public:
+    if: github.ref == 'refs/heads/main' && inputs.phase == 'verify-public' && inputs.candidate_run_id != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    permissions:
+      actions: read
+      contents: read
+    env:
+      CI: "1"
+      TZ: UTC
+      LANG: C
+      NODE_OPTIONS: --unhandled-rejections=strict
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          registry-url: https://registry.npmjs.org
+      - run: npm install --global npm@11.6.2
+      - run: gh run download "${{ inputs.candidate_run_id }}" --name "npm-candidate-${{ inputs.version }}" --dir .release/build-1
+      - run: node scripts/release/verify-public.mjs --candidate .release/build-1/release-manifest.json --version "${{ inputs.version }}"
+
+  promote-latest:
+    if: github.ref == 'refs/heads/main' && inputs.phase == 'promote-latest' && inputs.candidate_run_id != '' && inputs.verification_run_id != ''
+    runs-on: ubuntu-latest
+    environment: release
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+    env:
+      CI: "1"
+      TZ: UTC
+      LANG: C
+      NODE_OPTIONS: --unhandled-rejections=strict
+      GH_TOKEN: ${{ github.token }}
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          registry-url: https://registry.npmjs.org
+      - run: npm install --global npm@11.6.2
+      - run: gh run view "${{ inputs.verification_run_id }}" --exit-status
+      - run: gh run download "${{ inputs.candidate_run_id }}" --name "npm-candidate-${{ inputs.version }}" --dir .release/build-1
+      - run: node scripts/release/promote-latest.mjs --candidate .release/build-1/release-manifest.json --version "${{ inputs.version }}"
+      - name: Create or verify GitHub release
+        shell: bash
+        run: |
+          tag="v${{ inputs.version }}"
+          target="$(node -e 'const fs=require("node:fs");const value=JSON.parse(fs.readFileSync(".release/build-1/release-manifest.json","utf8"));if(!/^[0-9a-f]{40}$/.test(value.sourceCommit))process.exit(1);process.stdout.write(value.sourceCommit)')"
+          if existing="$(gh release view "$tag" --json targetCommitish --jq .targetCommitish 2>/dev/null)"; then
+            test "$existing" = "$target"
+            exit 0
+          fi
+          gh release create "$tag" --target "$target" --title "$tag" --generate-notes

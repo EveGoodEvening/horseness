@@ -91,7 +91,7 @@ Normative references:
 
 ## Development status
 
-Horseness is under development and is not release-ready. The domain, evidence admission, task/fork projections, deterministic context reconstruction, dispatch/recovery, SDK, daemon, CLI, and Pi/OMP native loops are implemented. Remaining host, installer, system-validation, and release chunks are tracked in [docs/progress.md](docs/progress.md).
+The core, daemon, CLI, installer library, and all four native adapters are implemented. C22 is preparing a fourteen-package npm-first `1.0.0` release; exact public packages will be published under `next`, verified on Linux, macOS, and Windows, then promoted to `latest`. The fixture-mode self-contained bootstrap and offline distribution are deferred. Current release progress is tracked in [docs/progress.md](docs/progress.md).
 
 ## Repository development
 

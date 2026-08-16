@@ -18,8 +18,8 @@ Hermetic feasibility uses the repository deterministic provider with frozen requ
 
 ## Release train
 
-All packages, applications, native bundles, bootstrap binaries, offline archives, schemas, migration data, SBOM, provenance, signatures, trust metadata, and rollback instructions share one coherent immutable release version and manifest digest.
-C22 establishes `1.0.0` as the first stable train across exactly fifteen public npm packages under MIT. Repository manifests pin internal dependencies as `workspace:1.0.0`, preserving pnpm workspace linking while pnpm serializes packed manifests with exact `1.0.0` dependencies. There are no supported prerelease package ranges or compatibility aliases. Production bootstrap trust is materialized only from a verified witnessed ceremony and never from the C20 fixture trust root.
+The first public train contains fourteen npm packages: eight core packages, daemon, CLI, and four adapters. npm registry integrity and npm-generated provenance bind each immutable package version; C24 verifies exact public packages before C25 moves `latest`.
+C22 establishes `1.0.0` under MIT for those fourteen packages. Public manifests use exact `workspace:1.0.0` internal source pins, and packed manifests contain exact `1.0.0` dependencies. `@horseness/bootstrap` remains private `0.0.0`; self-contained bootstrap binaries, offline archives, custom signatures, trust metadata, and compatibility aliases are not part of the first public train.
 
 ## Frozen v1 boundary rules
 
@@ -67,13 +67,11 @@ Claude Code support is pinned to the verified `@anthropic-ai/claude-code-linux-x
 
 The `host:smoke:claude` gate leaves the invoking user's native Claude config and authentication store untouched. It isolates only the workspace, exact temporary plugin bytes, MCP retained/runtime state, HOME-neutral outputs, and temporary files. One initial real Claude session discovers the copied plugin through `--plugin-dir` and makes one namespaced native MCP call carrying an exact batch of five distinct capability references. The trusted MCP/runtime executes five complete authority-backed `WorkerReturnV1` paths, but its strictly bounded 8 KiB response exposes only nonsecret per-scenario binding identifiers, decisions, receipt/proposal/output/evidence digests, and the accepted canonical revision/state digest. The smoke checks those returned digests against retained authority and local canonical state, records a digest of the compact batch response in its live receipt, and never synthesizes authority outcomes or canonical state. Minimal real resume and fork-session marker invocations prove durable SessionStart mapping and immutable pre-registered branch transition without additional worker calls. Uninstall persists its kill switch, disables the temporary discovery path, revokes the Horseness grant, rejects the cached capability, and restarts the native binary without the plugin; it never logs out or alters the provider session.
 
-
 ## Codex adapter v1 implementation train
 
 Codex support is pinned to the digest-verified `@openai/codex@0.144.1-linux-x64` archive and executable SHA-256 `a96f944d1a596dbfb7fdd84f482be5c50e34b04bb371126840d873e4ebf26902`. Its deterministic shipped plugin manifest, MCP declaration, context contribution, skill, and MCP server are independently hashed. The temporary native marketplace copy uses SemVer build metadata derived from the shipped contribution package digest to give Codex a cache-unique plugin version while preserving the stable `horseness-codex@horseness-c18` ID; the resulting installed bytes and installed package digest are independently verified and receipted. The pinned `.mcp.json` uses plugin-root-relative `cwd: "."`, a relative server argument, and an exact three-variable Horseness runtime allowlist. No per-thread `config.mcp_servers` override is used; native inventory must expose the Horseness server/tool, and the completed `mcpToolCall.pluginId` must identify `horseness-codex@horseness-c18`.
 
 The live gate uses ADR 0006's invoking-user subscription session without inspecting or mutating provider authentication state. App-server processes receive only verified runtime paths, required native session homes, locale, bounded temp paths, reviewed nonsecret controls, and the active Horseness claim variables; secret-shaped, provider API key, cloud/CI credential, and proxy variables are stripped. Fresh processes carry the initial, resume, and fork claims before plugin MCP startup. Structured plugin mention plus skill input selects the installed contribution, a real model-native batch originates five durable tuple-bound `WorkerReturnV1` deliveries, and crash-injected uninstall removes plugin/marketplace discovery before authority revocation.
-
 
 ## Installer journal and trust implementation train
 
@@ -81,7 +79,7 @@ The live gate uses ADR 0006's invoking-user subscription session without inspect
 
 Migration generations durably record backup, staged-tree, activation, compensation, repair-required, and uninstall-after-upgrade transitions. Backups and staging are confined to an owner-private authority root and use write/fsync/rename/directory-fsync publication. The crash matrix freezes recovery at every publication boundary. Downgrades require a reversible migration and cross-major downgrades additionally require an explicit gate.
 
-Release trust verifies Ed25519 project-root delegations, release signatures, anti-replay sequence/version state, rotation windows and revocation, exact artifact and dependency-graph digests, and exact Sigstore issuer/repository/workflow/protected-environment identity. Lifecycle scripts, wrong identity, wrong key, replay, and tamper fail closed. Consent binds the release and artifact digests, hosts, executable capabilities, scope, OS identity, timestamp, and interactive-explicit or unattended-digest mode before mutation.
+The deferred signed-bundle verifier implements Ed25519 project-root delegation, release signatures, anti-replay sequence/version state, rotation windows and revocation, exact artifact/dependency-graph digests, and Sigstore identity checks for repository fixture/system validation. Lifecycle scripts, wrong identity, wrong key, replay, and tamper fail closed. ADR 0009 does not publish that bootstrap trust path in `1.0.0`; it preserves the runtime/test invariant for a future distribution design.
 
 The frozen non-public `0.0.0-compat.1` train reproducibly packs prior database, journal, daemon, CLI, and installer behavior sufficient to initiate migration. Offline build and verify commands bind its source digest, artifact digest, release-manifest digest, dependency graph, and fixture project-root signing provenance.
 
