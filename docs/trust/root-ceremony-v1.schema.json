@@ -4,11 +4,12 @@
   "title": "Horseness RootCeremonyRecordV1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "ceremonyId", "performedAt", "threshold", "rootKeys", "recovery", "witnesses", "custodyReceipts", "destructionReceipts", "delegation"],
+  "required": ["schema", "ceremonyId", "performedAt", "offline", "threshold", "rootKeys", "recovery", "witnesses", "custodyReceipts", "destructionReceipts", "delegation"],
   "properties": {
     "schema": { "const": "horseness.root-ceremony.v1" },
     "ceremonyId": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,96}$" },
     "performedAt": { "type": "string", "format": "date-time" },
+    "offline": { "const": true },
     "threshold": { "const": "2-of-2" },
     "rootKeys": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "$ref": "#/$defs/key" } },
     "recovery": {
