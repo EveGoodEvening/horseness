@@ -1,4 +1,5 @@
 name: npm release
+run-name: npm release ${{ inputs.phase }} ${{ inputs.version }} candidate=${{ inputs.candidate_run_id }}
 
 on:
   workflow_dispatch:
@@ -76,6 +77,7 @@ jobs:
       TZ: UTC
       LANG: C
       NODE_OPTIONS: --unhandled-rejections=strict
+      RELEASE_VERSION: ${{ inputs.version }}
       NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v4
@@ -88,7 +90,8 @@ jobs:
         with:
           name: npm-candidate-${{ inputs.version }}
           path: .release/build-1
-      - run: node scripts/release/publish-next.mjs --candidate .release/build-1/release-manifest.json --version "${{ inputs.version }}" --provenance
+      - shell: bash
+        run: node scripts/release/publish-next.mjs --candidate .release/build-1/release-manifest.json --version "$RELEASE_VERSION" --provenance
 
   verify-public:
     if: github.ref == 'refs/heads/main' && inputs.phase == 'verify-public' && inputs.candidate_run_id != ''
@@ -110,6 +113,8 @@ jobs:
       LANG: C
       NODE_OPTIONS: --unhandled-rejections=strict
       GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -117,8 +122,16 @@ jobs:
           node-version-file: .node-version
           registry-url: https://registry.npmjs.org
       - run: npm install --global npm@11.6.2
-      - run: gh run download "${{ inputs.candidate_run_id }}" --name "npm-candidate-${{ inputs.version }}" --dir .release/build-1
-      - run: node scripts/release/verify-public.mjs --candidate .release/build-1/release-manifest.json --version "${{ inputs.version }}"
+      - name: Verify candidate workflow run
+        shell: bash
+        run: |
+          actual="$(gh run view "$CANDIDATE_RUN_ID" --json conclusion,displayTitle,event,headBranch,workflowName --jq '[.conclusion,.event,.headBranch,.workflowName,.displayTitle] | join("|")')"
+          expected="success|workflow_dispatch|main|npm release|npm release publish-next $RELEASE_VERSION candidate="
+          test "$actual" = "$expected"
+      - shell: bash
+        run: gh run download "$CANDIDATE_RUN_ID" --name "npm-candidate-$RELEASE_VERSION" --dir .release/build-1
+      - shell: bash
+        run: node scripts/release/verify-public.mjs --candidate .release/build-1/release-manifest.json --version "$RELEASE_VERSION"
 
   promote-latest:
     if: github.ref == 'refs/heads/main' && inputs.phase == 'promote-latest' && inputs.candidate_run_id != '' && inputs.verification_run_id != ''
@@ -135,6 +148,9 @@ jobs:
       NODE_OPTIONS: --unhandled-rejections=strict
       GH_TOKEN: ${{ github.token }}
       NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+      VERIFICATION_RUN_ID: ${{ inputs.verification_run_id }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -144,16 +160,25 @@ jobs:
           node-version-file: .node-version
           registry-url: https://registry.npmjs.org
       - run: npm install --global npm@11.6.2
-      - run: gh run view "${{ inputs.verification_run_id }}" --exit-status
-      - run: gh run download "${{ inputs.candidate_run_id }}" --name "npm-candidate-${{ inputs.version }}" --dir .release/build-1
-      - run: node scripts/release/promote-latest.mjs --candidate .release/build-1/release-manifest.json --version "${{ inputs.version }}"
+      - name: Verify upstream workflow runs
+        shell: bash
+        run: |
+          candidate="$(gh run view "$CANDIDATE_RUN_ID" --json conclusion,displayTitle,event,headBranch,workflowName --jq '[.conclusion,.event,.headBranch,.workflowName,.displayTitle] | join("|")')"
+          test "$candidate" = "success|workflow_dispatch|main|npm release|npm release publish-next $RELEASE_VERSION candidate="
+          verification="$(gh run view "$VERIFICATION_RUN_ID" --json conclusion,displayTitle,event,headBranch,workflowName --jq '[.conclusion,.event,.headBranch,.workflowName,.displayTitle] | join("|")')"
+          test "$verification" = "success|workflow_dispatch|main|npm release|npm release verify-public $RELEASE_VERSION candidate=$CANDIDATE_RUN_ID"
+      - run: gh run download "$CANDIDATE_RUN_ID" --name "npm-candidate-$RELEASE_VERSION" --dir .release/build-1
+      - run: node scripts/release/promote-latest.mjs --candidate .release/build-1/release-manifest.json --version "$RELEASE_VERSION"
       - name: Create or verify GitHub release
         shell: bash
         run: |
-          tag="v${{ inputs.version }}"
+          tag="v$RELEASE_VERSION"
           target="$(node -e 'const fs=require("node:fs");const value=JSON.parse(fs.readFileSync(".release/build-1/release-manifest.json","utf8"));if(!/^[0-9a-f]{40}$/.test(value.sourceCommit))process.exit(1);process.stdout.write(value.sourceCommit)')"
-          if existing="$(gh release view "$tag" --json targetCommitish --jq .targetCommitish 2>/dev/null)"; then
-            test "$existing" = "$target"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+            test "$(git rev-list -n 1 "$tag")" = "$target"
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
             exit 0
           fi
           gh release create "$tag" --target "$target" --title "$tag" --generate-notes

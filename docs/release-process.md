@@ -15,10 +15,11 @@ The first public release is a fourteen-package npm train at `1.0.0`: eight `pack
 ## GitHub workflow phases
 
 `.github/workflows/release.yml` is manual and main-only. Its `phase` input selects one operation:
+Every dispatch names its phase, version, and candidate run. Later phases validate the upstream run's conclusion, event, branch, workflow, and exact run name before consuming it.
 
 1. `publish-next` rebuilds and verifies the candidate, uploads `build-1` as a seven-day GitHub Actions artifact, then publishes every package under the `next` dist-tag with npm provenance.
-2. `verify-public` downloads that exact candidate artifact from the supplied workflow run and compares every public npm integrity before clean exact-version install, signature audit, package import, and CLI smoke on Linux, macOS, and Windows.
-3. `promote-latest` requires the candidate run and a successful verification run, compares npm integrity and `next` tags, moves all fourteen packages to `latest`, and creates or verifies the `v1.0.0` GitHub release at the candidate manifest's source commit.
+2. `verify-public` accepts only a successful main-branch `publish-next` run for the exact version, downloads that run's candidate artifact, and compares every public npm integrity before clean exact-version install, signature audit, package import, and CLI smoke on Linux, macOS, and Windows.
+3. `promote-latest` requires that exact candidate run and a successful `verify-public` run bound to it, compares npm integrity and `next` tags, moves all fourteen packages to `latest`, and creates the `v1.0.0` GitHub release at the candidate manifest's source commit. An existing tag must already resolve to that commit.
 
 C23, C24, and C25 execute those phases without source edits. Their trackers record GitHub workflow URLs and observed npm metadata; they do not create custom signed journals or receipts.
 

@@ -84,18 +84,24 @@ test("release command runner resolves Windows shims", () => {
   assert.equal(platformCommand("npm", "linux"), "npm");
 });
 
-test("workflow exposes only npm-first release phases", async () => {
+test("workflow binds every public side effect to exact upstream runs", async () => {
   const workflow = await readFile(resolve(import.meta.dirname, "../../../.github/workflows/release.yml"), "utf8");
   const parsed = parse(workflow);
+  assert.equal(parsed["run-name"], "npm release ${{ inputs.phase }} ${{ inputs.version }} candidate=${{ inputs.candidate_run_id }}");
   assert.deepEqual(parsed.on.workflow_dispatch.inputs.phase.options, ["publish-next", "verify-public", "promote-latest"]);
   assert.deepEqual(Object.keys(parsed.jobs).sort(), ["build-candidate", "promote-latest", "publish-next", "verify-public"]);
   for (const phase of ["publish-next", "verify-public", "promote-latest"]) assert.match(workflow, new RegExp(phase, "u"));
   for (const runner of ["ubuntu-latest", "macos-latest", "windows-latest"]) assert.match(workflow, new RegExp(runner, "u"));
   assert.match(workflow, /environment: release/u);
   assert.match(workflow, /secrets\.NPM_TOKEN/u);
-  assert.match(workflow, /--version "\$\{\{ inputs\.version \}\}"/u);
+  assert.match(workflow, /RELEASE_VERSION: \$\{\{ inputs\.version \}\}/u);
+  assert.match(workflow, /--version "\$RELEASE_VERSION"/u);
   assert.match(workflow, /--provenance/u);
-  assert.match(workflow, /gh run view .*--exit-status/u);
+  assert.match(workflow, /conclusion,displayTitle,event,headBranch,workflowName/u);
+  assert.match(workflow, /success\|workflow_dispatch\|main\|npm release\|npm release publish-next \$RELEASE_VERSION candidate=/u);
+  assert.match(workflow, /success\|workflow_dispatch\|main\|npm release\|npm release verify-public \$RELEASE_VERSION candidate=\$CANDIDATE_RUN_ID/u);
+  assert.match(workflow, /git rev-list -n 1 "\$tag"/u);
+  assert.match(workflow, /gh release create "\$tag" --target "\$target"/u);
   for (const obsolete of ["verify-root-ceremony", "KMS", "immutable", "artifact-receipt", "live-gates", "c22-signed-builds"]) assert.doesNotMatch(workflow, new RegExp(obsolete, "u"));
 });
 
