@@ -24,6 +24,10 @@ export function parseCliInvocationV1(argv: readonly string[], definition?: CliCo
       outputMode = "json";
       continue;
     }
+    if (token === "--help" || token === "-h") {
+      options.help = true;
+      continue;
+    }
     if (token === "--") {
       positional.push(...argv.slice(index + 1));
       break;
@@ -56,17 +60,30 @@ export function parseCliInvocationV1(argv: readonly string[], definition?: CliCo
     }
 
     const next = argv[index + 1];
-    if (next !== undefined && !next.startsWith("--")) {
+    if (next !== undefined && next !== "-h" && !next.startsWith("--")) {
       options[name] = next;
       index += 1;
     } else {
       options[name] = true;
     }
   }
-  const command = positional.shift();
-  if (command === undefined) {
-    throw new CliParseErrorV1("INVALID_INVOCATION", "command is required");
+  const first = positional.shift();
+  if (first === undefined) {
+    if (options.help === true || argv.length === 0 || (argv.length === 1 && outputMode === "json")) {
+      return { command: "help", args: [], options, outputMode };
+    }
+    throw new CliParseErrorV1("INVALID_INVOCATION", "Choose a command; run horseness --help.");
   }
-
+  let command = first;
+  if (definition !== undefined) {
+    const spelling = [definition.name, ...definition.aliases].find((name) => {
+      const words = name.split(" ");
+      return words[0] === first && words.slice(1).every((word, index) => positional[index] === word);
+    });
+    if (spelling !== undefined) {
+      positional.splice(0, spelling.split(" ").length - 1);
+      command = definition.name;
+    }
+  }
   return { command, args: positional, options, outputMode };
 }

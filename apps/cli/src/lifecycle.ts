@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { constants, accessSync, chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import type { CoordinatorCursorV1 } from "@horseness/sdk";
 
 export class CliLifecycleError extends Error {
   constructor(readonly code: "LIFECYCLE_ALREADY_RUNNING" | "LIFECYCLE_NOT_RUNNING" | "LIFECYCLE_SECRET_FILE_INVALID" | "LIFECYCLE_BOOTSTRAP_FAILED" | "LIFECYCLE_REBIND_FAILED" | "LIFECYCLE_START_FAILED", message: string) { super(message); this.name = "CliLifecycleError"; }
@@ -16,6 +17,14 @@ export interface CliDaemonPathsV1 {
 }
 interface EndpointStateV1 { readonly schemaVersion: "1"; readonly workspaceId: string; readonly endpointPath: string | null; readonly processId: number; }
 interface BootstrapResultV1 { readonly workspaceId: string; readonly principalId: string; readonly grantReference: string; readonly grantDigest: string; }
+export function resolveDaemonExecutableV1(command: string): string {
+  if (command.length === 0 || command.includes("\0")) throw new CliLifecycleError("LIFECYCLE_START_FAILED", "daemon executable is invalid");
+  const candidates = command.includes("/") || isAbsolute(command) ? [resolve(command)] : (process.env.PATH ?? "").split(delimiter).map((directory) => join(directory || ".", command));
+  for (const candidate of candidates) {
+    try { const absolute = realpathSync(candidate); if (lstatSync(absolute).isFile()) { accessSync(absolute, constants.X_OK); return absolute; } } catch { /* try next PATH entry */ }
+  }
+  throw new CliLifecycleError("LIFECYCLE_START_FAILED", `daemon executable ${command} was not found or is not executable; pass --daemon-executable PATH`);
+}
 
 export function readProtectedSecretFileV1(path: string): string {
   const absolute = resolve(path);
@@ -43,24 +52,27 @@ function discover(path: string, expectedWorkspaceId?: string): EndpointStateV1 {
 function daemonConfig(paths: CliDaemonPathsV1): Omit<CliDaemonPathsV1, "daemonExecutable"> & { transport: { kind: "unix-socket"; endpointPath: string } } {
   return { workspacePath: resolve(paths.workspacePath), databasePath: resolve(paths.databasePath), artifactRoot: resolve(paths.artifactRoot), endpointPath: resolve(paths.endpointPath), transport: { kind: "unix-socket", endpointPath: resolve(paths.endpointPath) }, ...(paths.workspaceId === undefined ? {} : { workspaceId: paths.workspaceId }) };
 }
-function configFile(paths: CliDaemonPathsV1, operation: "start" | "bootstrap" | "restore-rebind", authorityTime: () => string, extras: Record<string, string>): string {
-  const directory = resolve(paths.workspacePath, ".horseness"); mkdirSync(directory, { recursive: true, mode: 0o700 }); chmodSync(directory, 0o700);
+function configFile(paths: CliDaemonPathsV1, operation: "start" | "bootstrap" | "init" | "restore-rebind", authorityTime: () => string, extras: Record<string, string>): string {
+  const directory = resolve(paths.workspacePath, ".horseness"); mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const state = lstatSync(directory); if (!state.isDirectory() || state.isSymbolicLink() || realpathSync(directory) !== directory || (state.mode & 0o077) !== 0 || (process.getuid?.() !== undefined && state.uid !== process.getuid())) throw new CliLifecycleError("LIFECYCLE_START_FAILED", "workspace state directory must be owner-only and not a symlink");
   const path = resolve(directory, `daemon-entry.${process.pid}.${operation}.json`);
   const { endpointPath: _endpointPath, ...daemon } = daemonConfig(paths);
   writeFileSync(path, JSON.stringify({ schemaVersion: "1", operation, daemon, authorityTime: authorityTime(), ...extras }), { mode: 0o600, flag: "wx" });
   return path;
 }
-function runDaemonOperation(paths: CliDaemonPathsV1, operation: "bootstrap" | "restore-rebind", authorityTime: () => string, extras: Record<string, string>, code: "LIFECYCLE_BOOTSTRAP_FAILED" | "LIFECYCLE_REBIND_FAILED"): unknown {
+function runDaemonOperation(paths: CliDaemonPathsV1, operation: "bootstrap" | "init" | "restore-rebind", authorityTime: () => string, extras: Record<string, string>, code: "LIFECYCLE_BOOTSTRAP_FAILED" | "LIFECYCLE_REBIND_FAILED"): unknown {
+  const executable = resolveDaemonExecutableV1(paths.daemonExecutable);
   const resultFile = resolve(paths.workspacePath, ".horseness", `daemon-result.${process.pid}.${operation}.json`); const path = configFile(paths, operation, authorityTime, { ...extras, resultFile });
-  const result = spawnSync(resolve(paths.daemonExecutable), ["--config-file", path], { encoding: "utf8", env: process.env }); rmSync(path, { force: true });
-  if (result.status !== 0) { rmSync(resultFile, { force: true }); throw new CliLifecycleError(code, operation === "bootstrap" ? "daemon bootstrap failed" : "workspace rebind failed"); }
+  const result = spawnSync(executable, ["--config-file", path], { encoding: "utf8", env: process.env }); rmSync(path, { force: true });
+  if (result.status !== 0) { rmSync(resultFile, { force: true }); throw new CliLifecycleError(code, operation === "restore-rebind" ? "workspace rebind failed" : "daemon initialization failed; inspect protected workspace state before retrying"); }
   try { return JSON.parse(readProtectedSecretFileV1(resultFile)); } finally { rmSync(resultFile, { force: true }); }
 }
 export async function startDaemonV1(paths: CliDaemonPathsV1, grantReferenceFile: string, authorityTime: () => string): Promise<{ workspaceId: string; endpointPath: string; processId: number }> {
   readProtectedSecretFileV1(grantReferenceFile);
   try { const active = discover(statePath(paths.workspacePath), paths.workspaceId); process.kill(active.processId, 0); throw new CliLifecycleError("LIFECYCLE_ALREADY_RUNNING", "daemon is already running for this workspace"); } catch (error) { if (error instanceof CliLifecycleError) throw error; }
+  const executable = resolveDaemonExecutableV1(paths.daemonExecutable);
   const path = configFile(paths, "start", authorityTime, { grantReferenceFile: resolve(grantReferenceFile) });
-  const child = spawn(resolve(paths.daemonExecutable), ["--config-file", path], { detached: true, stdio: "ignore", env: process.env }); child.unref();
+  const child = spawn(executable, ["--config-file", path], { detached: true, stdio: "ignore", env: process.env }); child.unref();
   if (child.pid === undefined) { rmSync(path, { force: true }); throw new CliLifecycleError("LIFECYCLE_START_FAILED", "daemon process did not start"); }
   for (let attempt = 0; attempt < 100; attempt += 1) { try { const state = discover(statePath(paths.workspacePath), paths.workspaceId); if (state.processId !== child.pid) throw new Error("process binding mismatch"); return { workspaceId: state.workspaceId, endpointPath: state.endpointPath ?? paths.endpointPath, processId: state.processId }; } catch { try { process.kill(child.pid, 0); } catch { rmSync(path, { force: true }); throw new CliLifecycleError("LIFECYCLE_START_FAILED", "daemon process exited before readiness"); } await delay(25); } }
   process.kill(child.pid, "SIGTERM"); throw new CliLifecycleError("LIFECYCLE_START_FAILED", "daemon readiness timed out");
@@ -73,3 +85,6 @@ export async function stopDaemonV1(workspacePath: string, expectedWorkspaceId?: 
 }
 export function bootstrapDaemonV1(paths: CliDaemonPathsV1, capabilityFile: string, authorityTime: () => string): BootstrapResultV1 { return runDaemonOperation(paths, "bootstrap", authorityTime, { bootstrapSecretFile: resolve(capabilityFile) }, "LIFECYCLE_BOOTSTRAP_FAILED") as BootstrapResultV1; }
 export function rebindRestoredWorkspaceV1(paths: CliDaemonPathsV1, authorityTime: () => string): { workspaceId: string } { try { discover(statePath(paths.workspacePath)); throw new CliLifecycleError("LIFECYCLE_ALREADY_RUNNING", "stop daemon before restore rebind"); } catch (error) { if (error instanceof CliLifecycleError) throw error; } return runDaemonOperation(paths, "restore-rebind", authorityTime, {}, "LIFECYCLE_REBIND_FAILED") as { workspaceId: string }; }
+export function initializeDaemonAuthorityV1(paths: CliDaemonPathsV1, grantReferenceFile: string, authorityTime: () => string): { workspaceId: string; principalId: string; workspaceCursor: Extract<CoordinatorCursorV1<"workspace.get.v1">, { kind: "workspace-only" }> } {
+  return runDaemonOperation(paths, "init", authorityTime, { grantReferenceFile: resolve(grantReferenceFile) }, "LIFECYCLE_BOOTSTRAP_FAILED") as { workspaceId: string; principalId: string; workspaceCursor: Extract<CoordinatorCursorV1<"workspace.get.v1">, { kind: "workspace-only" }> };
+}

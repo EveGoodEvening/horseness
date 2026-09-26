@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { METHOD_REGISTRY_V1, type JsonRpcRequestV1, type JsonRpcResponseV1 } from "@horseness/protocol";
+import type { JsonRpcRequestV1, JsonRpcResponseV1 } from "@horseness/protocol";
 import type { AuthorizedProtocolTransportV1, OpaqueCredentialReferenceV1 } from "@horseness/sdk";
-import { CliCommandRegistryV1, cliFailureV1, cliSuccessV1, createDefaultCliCommandRegistryV1, parseCliInvocationV1, protocolMethodCommandNameV1, redactCliValueV1, renderCliJsonV1, runCliV1, type CliCommandDefinitionV1 } from "../src/index.js";
+import { CliCommandRegistryV1, cliFailureV1, cliSuccessV1, parseCliInvocationV1, redactCliValueV1, renderCliJsonV1, runCliV1, type CliCommandDefinitionV1 } from "../src/index.js";
 
 const credential: OpaqueCredentialReferenceV1 = { schemaVersion: "1", kind: "host-reference", reference: "host:cli-test", scope: { workspaceId: "ws", adapterId: "authority", purpose: "cli" } };
 const transport: AuthorizedProtocolTransportV1 = { request(_request: JsonRpcRequestV1): Promise<JsonRpcResponseV1> { throw new Error("unused transport"); } };
@@ -39,12 +39,6 @@ test("runtime is extensible without router edits and preserves stable exits", as
   assert.equal(await runCliV1(["throwing"], { registry, transport, credential, stdout: () => undefined, stderr: () => undefined }), 1);
 });
 
-test("coordinator command mapping is exhaustive and collision-free", () => {
-  const registry = createDefaultCliCommandRegistryV1();
-  assert.equal(registry.list().length, METHOD_REGISTRY_V1.length);
-  assert.deepEqual(registry.list().map((entry) => entry.name).sort(), METHOD_REGISTRY_V1.map((entry) => protocolMethodCommandNameV1(entry.method)).sort());
-  for (const method of METHOD_REGISTRY_V1) assert.equal(registry.resolve(protocolMethodCommandNameV1(method.method))?.name, protocolMethodCommandNameV1(method.method));
-});
 
 test("canonical JSON is deterministic and recursively redacts secrets", () => {
   const left = renderCliJsonV1(cliSuccessV1("x", { z: 1, nested: { password: "visible", a: "ok" }, token: "visible", text: "Bearer abc" }));

@@ -1,16 +1,25 @@
 # CLI 易用性交接说明
 
-## 结论
+## 修复状态
 
-当前 Horseness CLI 更像“直接操作内部 API 的调试工具”，还不像普通用户使用的成品命令行工具。
+日常工作流已实现，不再要求用户手填 cursor、内部协议 JSON、实体 ID 或幂等键：
 
-底层能力已经存在，但 CLI 仍要求用户理解并手工提供内部协议字段。它更接近：
-
-```text
-CLI 命令 ≈ 一次底层 JSON-RPC 调用
+```sh
+horseness init
+horseness run create --title "修复登录问题"
+horseness task add --run current --title "检查认证代码"
+horseness status
 ```
 
-而不是面向日常使用的高层工作流。
+`init` 在当前项目建立私有本地工作区并启动 daemon；后续命令可从子目录自动发现该工作区，也可显式传 `--workspace PATH`。创建 run 会选为 current；`run list`、`run use --run ID` 和 `task list` 用于查看和切换已有工作。帮助支持 `--help`，脚本输出支持 `--json`。
+
+`task add` 创建持久化 draft，不会自动启动 worker，也不推进 canonical revision。请求发送前保存完整 ID、cursor 和幂等键；网络中断后保留同一请求，仅在用户明确重复原命令时重发。过期状态、冲突和权限拒绝不会触发静默自动重试。旧工作区不会被 `init` 擅自接管或重新授权。
+
+已在真实 CLI → daemon → SQLite 路径验证上述四条命令与 daemon 重启后的状态保留。详见 [CLI 使用说明](cli.md)。以下保留原低层接口问题的背景说明；`run-create` 等协议级命令仍供高级自动化和调试使用。
+
+## 原问题
+
+修复前，CLI 更像“直接操作内部 API 的调试工具”：每条命令近似一次 JSON-RPC 调用，用户需要理解并手工填写内部协议字段。仅有底层接口不足以构成日常工作流。
 
 ## `cursor` 是什么
 
@@ -96,9 +105,9 @@ horseness run create --title "我的任务"
 
 它更像使用 `curl` 或 Postman 手工调用内部 API，而不像使用成熟的产品 CLI。
 
-## 理想的高层 CLI
+## 已实现的高层 CLI
 
-面向用户的 CLI 应在内部自动完成：
+面向用户的 CLI 在内部自动完成：
 
 ```text
 发现或选择 workspace
@@ -124,8 +133,8 @@ horseness status
 
 ## 简单类比
 
-当前状态是：
+原状态可以类比为：
 
-> 发动机已经有了，但驾驶室里放的还是发动机诊断接口，还没有做成方向盘、油门和仪表盘。
+> 发动机已经有了，但驾驶室里放的还是发动机诊断接口。
 
-因此问题不是 Horseness 的底层能力不能工作，而是日常用户工作流还没有封装成足够简单的命令。
+现在初始化、创建 run、添加 task 和查看状态已有面向用户的操作入口；高级协议接口保留，但不再是这些日常操作的必经路径。

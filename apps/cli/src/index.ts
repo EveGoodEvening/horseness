@@ -18,4 +18,6 @@ export * from "./commands/doctor.js";
 export * from "./commands/repair.js";
 export * from "./commands/rebind-workspace.js";
 export * from "./commands/smoke.js";
+export * from "./workflows.js";
+export * from "./workspace.js";
 export const CLI_PACKAGE = "@horseness/cli" as const;

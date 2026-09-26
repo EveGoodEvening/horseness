@@ -28,12 +28,13 @@ export interface CliCommandDefinitionV1 {
   readonly aliases: readonly string[];
   readonly summary: string;
   readonly usage: string;
+  readonly category?: "workflow" | "protocol";
   readonly secretOptions: readonly string[];
   readonly optionNames?: readonly string[];
   execute(invocation: CliInvocationV1, context: CliExecutionContextV1): Promise<CliResultV1>;
 }
 
-const COMMAND_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
+const COMMAND_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*(?: [a-z0-9]+(?:-[a-z0-9]+)*)*$/u;
 
 export class CliCommandRegistryV1 {
   readonly #definitions = new Map<string, CliCommandDefinitionV1>();
@@ -41,7 +42,7 @@ export class CliCommandRegistryV1 {
   register(definition: CliCommandDefinitionV1): void {
     const names = [definition.name, ...definition.aliases];
     if (names.some((name) => !COMMAND_NAME.test(name))) {
-      throw new Error("CLI command names must be kebab-case");
+      throw new Error("CLI command names must contain space-separated kebab-case words");
     }
 
     const duplicate = names.find((name, index) => names.indexOf(name) !== index || this.#names.has(name));
@@ -94,6 +95,7 @@ function genericCoordinatorDefinition(definition: (typeof METHOD_REGISTRY_V1)[nu
     name,
     aliases: [],
     summary: `Invoke ${definition.method}`,
+    category: "protocol",
     usage: `${name} --workspace-id ID --cursor JSON --input JSON${definition.idempotency === "required" ? " --idempotency-key KEY" : ""}`,
     secretOptions: [],
     optionNames: COORDINATOR_OPTIONS,

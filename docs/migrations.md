@@ -41,3 +41,9 @@ Upgrade, downgrade, rollback, and retry-install use the same neutral-bundle owne
 ## npm release migration handoff
 
 The C22 candidate manifest binds the exact migration-capable `1.0.0` npm tarballs by package name, version, size, SHA-256, and npm integrity. Consumers upgrading from repository-only development manifests replace `0.0.0` assumptions and workspace-local references with the public `1.0.0` packages; internal dependencies in packed manifests are exact `1.0.0` pins. Persisted SQLite and installer-journal migration rules remain unchanged, including existing backup and downgrade gates. C23 publishes the candidate under `next`; C24 installs those exact public versions before C25 moves `latest`. No custom immutable-storage receipt or signing prerequisite exists.
+
+## CLI workspace and draft-task state
+
+New local CLI workspaces use private `.horseness/cli-workspace.v1.json` metadata plus a separately protected opaque grant-reference file. The metadata version is `1`; unsupported versions, substituted paths, and symlinks fail closed. Initialization does not migrate an existing unbound authority, replace a grant, or reset a database. Preserve all workspace authority files during upgrades and recovery.
+
+`TaskCreatedV1` is an additive event type in the existing run stream; it changes operational task state and the run cursor, not canonical revision/hash. The existing SQLite schema stores it without a new migration. Readers predating this event type are incompatible after the first task creation; do not downgrade such a workspace to an older domain/daemon package. Task writes compare both workspace and run observations within the same transaction and retain the existing exact-request deduplication contract.

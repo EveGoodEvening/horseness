@@ -2,6 +2,7 @@ import type { AuthorizedProtocolTransportV1, OpaqueCredentialReferenceV1 } from 
 import { CliParseErrorV1, parseCliInvocationV1 } from "./parser.js";
 import { createDefaultCliCommandRegistryV1, type CliCommandRegistryV1, type CliExecutionContextV1, type InstallerCliRuntimeV1 } from "./registry.js";
 import { cliFailureV1, renderCliHumanV1, renderCliJsonV1, type CliResultV1 } from "./result.js";
+import { renderCliHelpV1 } from "./help.js";
 
 export interface CliRuntimeDependenciesV1 {
   readonly transport: AuthorizedProtocolTransportV1;
@@ -42,9 +43,26 @@ export async function runCliV1(argv: readonly string[], dependencies: CliRuntime
     writeResult(failure, argv.includes("--json") ? "json" : "human", [], context);
     return 2;
   }
-  const definition = registry.resolve(initial.command);
+  const words = [initial.command, ...initial.args];
+  let definition = registry.resolve(words.join(" "));
+  for (let length = words.length - 1; definition === undefined && length > 0; length -= 1) {
+    definition = registry.resolve(words.slice(0, length).join(" "));
+  }
+  const helpTarget = initial.command === "help" ? initial.args.join(" ") : definition?.name ?? words.join(" ");
+  const group = registry.list().some((entry) => entry.name.startsWith(`${helpTarget} `));
+  if (initial.command === "help" || initial.options.help === true || (definition === undefined && group)) {
+    if (helpTarget !== "" && registry.resolve(helpTarget) === undefined && !group) {
+      writeResult(cliFailureV1(helpTarget, "UNKNOWN_COMMAND", "Unknown command. Run horseness --help.", null, 2), initial.outputMode, [], context);
+      return 2;
+    }
+    // Registry help contains option names such as "credential", never their values.
+    // Secret-pattern redaction applies to operation results, not this static text.
+    const help = renderCliHelpV1(registry, helpTarget || undefined, initial.options.all === true).trimEnd();
+    context.stdout(initial.outputMode === "json" ? `${JSON.stringify({ command: "help", data: help, ok: true, schemaVersion: "1" })}\n` : `${help}\n`);
+    return 0;
+  }
   if (definition === undefined) {
-    const failure = cliFailureV1(initial.command, "UNKNOWN_COMMAND", `unknown command ${initial.command}`, null);
+    const failure = cliFailureV1(initial.command, "UNKNOWN_COMMAND", `Unknown command ${words.join(" ")}. Run horseness --help.`, null, 2);
     writeResult(failure, initial.outputMode, [], context);
     return 2;
   }
@@ -52,6 +70,7 @@ export async function runCliV1(argv: readonly string[], dependencies: CliRuntime
   let invocation;
   try {
     invocation = parseCliInvocationV1(argv, definition);
+    if (invocation.args.length > 0) throw new CliParseErrorV1("INVALID_INVOCATION", `Unexpected arguments. Usage: horseness ${definition.usage}`, definition.name);
   } catch (error) {
     const code = error instanceof CliParseErrorV1 ? error.code : "INVALID_INVOCATION";
     const message = error instanceof Error ? error.message : "invalid invocation";

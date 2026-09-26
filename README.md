@@ -2,6 +2,19 @@
 
 A multi-Agent state machine with version control, evidence gating, and deterministic reconstruction.
 
+## Daily CLI workflow
+
+With Node 22 and matching `horseness` / `horseness-daemon` executables on `PATH`:
+
+```sh
+horseness init
+horseness run create --title "Fix login"
+horseness task add --run current --title "Inspect authentication"
+horseness status
+```
+
+Workspace discovery, current-run selection, cursor reads, IDs, and idempotency keys are handled internally. Tasks start as durable drafts; creation does not launch a worker. Use `--workspace PATH` to select another project, `--json` for scripts, and `horseness --help` for commands. See [CLI usage](docs/cli.md) for checkout execution, existing-workspace limits, and interrupted-operation recovery. The npm release has not yet been published.
+
 ## The Problem
 
 Main Agent + free-form subagent summaries + session compression have inherent flaws:

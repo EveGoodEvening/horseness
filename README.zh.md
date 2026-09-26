@@ -2,6 +2,19 @@
 
 一个带版本控制、证据门禁和确定性重建的多 Agent 状态机。
 
+## 日常 CLI 工作流
+
+使用 Node 22，并将匹配版本的 `horseness` / `horseness-daemon` 放入 `PATH` 后：
+
+```sh
+horseness init
+horseness run create --title "修复登录问题"
+horseness task add --run current --title "检查认证代码"
+horseness status
+```
+
+CLI 自动发现项目、选择当前 run、查询 cursor、生成 ID 和幂等键，不再要求手填协议 JSON。任务以持久化 draft 状态创建，不会自动启动 worker。用 `--workspace PATH` 选择其他项目，`--json` 获取机器可读结果，`horseness --help` 查看帮助。源码运行方式、旧工作区限制和中断恢复见 [CLI 使用说明](docs/cli.md)。npm 版本尚未发布。
+
 ## 问题
 
 主 Agent + 自由形式 subagent 总结 + session 压缩，存在固有缺陷：

@@ -14,7 +14,7 @@ export type EventStream="workspace"|"run";
 export type StoredEvent=HashedEventEnvelopeV1<DomainEventPayloadV1>;
 export interface AppendRequest<T extends DomainEventPayloadV1=DomainEventPayloadV1> { streamKind:EventStream; workspaceId:string; streamId:string; expectedSequence:number; expectedEnvelopeHash:string|null; events:readonly HashedEventEnvelopeV1<T>[] }
 export interface RunGenesisAppendRequest { observationCursor:AbsentRunGenesisCursorV1; event:HashedEventEnvelopeV1<RunCreatedV1> }
-export interface AtomicAppendRequest { commandId:string; workspace?:AppendRequest<WorkspaceEventPayloadV1>; run?:AppendRequest<RunEventPayloadV1>; runGenesis?:RunGenesisAppendRequest }
+export interface AtomicAppendRequest { commandId:string; workspace?:AppendRequest<WorkspaceEventPayloadV1>; run?:AppendRequest<RunEventPayloadV1>; runGenesis?:RunGenesisAppendRequest; workspaceObservationCursor?:{workspaceId:string;workspaceSequence:number;workspaceEnvelopeHash:string;workspaceContextEpoch:number} }
 export interface AppendResult { commandId:string; workspaceHead?:{sequence:number;envelopeHash:string}; runHead?:{sequence:number;envelopeHash:string}; deduplicated:boolean }
 export interface SnapshotRecord { workspaceId:string; streamKind:EventStream; streamId:string; sequence:number; envelopeHash:string; projectionName:string; projectionVersion:string; state:JsonValue }
 export interface ArtifactPublication { data:Uint8Array|string; mediaType?:string|null; references?:readonly {ownerKind:string;ownerId:string;allowExistingEvent?:true}[]; pins?:readonly {pinId:string}[] }
@@ -190,6 +190,10 @@ export class SQLiteAuthority {
     if(request.event.envelope.eventType!=="RunCreatedV1")throw new StoreIntegrityError("run genesis must append exactly one RunCreatedV1");
     return this.writeAppend(append);
   }
+  listRunIds(workspaceId:string):readonly string[]{
+    const rows=this.db.prepare("SELECT stream_id FROM streams WHERE workspace_id=? AND stream_kind='run' ORDER BY stream_id").all(workspaceId) as {stream_id:string}[];
+    return rows.map(row=>row.stream_id);
+  }
   appendAtomic(request:AtomicAppendRequest):AppendResult {
     if(!request.workspace&&!request.run&&!request.runGenesis)throw new StoreIntegrityError("atomic append has no streams");
     if(request.run&&request.run.expectedSequence===0)throw new StoreIntegrityError("run genesis requires the explicit runGenesis operation");
@@ -201,6 +205,7 @@ export class SQLiteAuthority {
     try{
       const prior=this.db.prepare("SELECT request_digest,result_json FROM command_dedup WHERE workspace_id=? AND scope_kind=? AND scope_id=? AND command_id=?").get(workspaceId,scope.kind,scope.id,request.commandId) as {request_digest:string;result_json:string}|undefined;
       if(prior){if(prior.request_digest!==digest)throw new StoreConflictError("command id reused with different request");if(request.runGenesis&&this.db.prepare("SELECT 1 FROM streams WHERE workspace_id=? AND stream_kind='run' AND stream_id=?").get(workspaceId,scope.id)===undefined)throw new StoreConflictError("orphan run command dedup exists without run authority");const result=JSON.parse(prior.result_json) as AppendResult;this.db.exec("COMMIT");return{...result,deduplicated:true};}
+      if(request.workspaceObservationCursor){const c=request.workspaceObservationCursor;if(c.workspaceId!==workspaceId||!request.run||request.runGenesis)throw new StoreIntegrityError("workspace observation binding invalid");const head=this.db.prepare("SELECT head_sequence,head_hash,context_epoch FROM streams WHERE workspace_id=? AND stream_kind='workspace' AND stream_id=?").get(workspaceId,workspaceId) as {head_sequence:number;head_hash:string;context_epoch:number}|undefined;if(!head||head.head_sequence!==c.workspaceSequence||head.head_hash!==c.workspaceEnvelopeHash||head.context_epoch!==c.workspaceContextEpoch)throw new StoreConflictError("workspace observation compare-and-swap conflict");this.authenticatedRows(workspaceId,"workspace",workspaceId);}
       this.crash("transaction.write.before");const result:AppendResult={commandId:request.commandId,deduplicated:false};
       if(request.workspace)result.workspaceHead=this.writeAppend(request.workspace);
       if(request.run)result.runHead=this.writeAppend(request.run);

@@ -2,7 +2,7 @@ import { chmodSync, lstatSync, readFileSync, realpathSync, rmSync, writeFileSync
 import { dirname, resolve } from "node:path";
 import { Daemon, type DaemonConfigV1 } from "./index.js";
 
-type OperationV1 = "start" | "bootstrap" | "restore-rebind";
+type OperationV1 = "start" | "bootstrap" | "init" | "restore-rebind";
 interface EntryConfigV1 {
   readonly schemaVersion: "1";
   readonly operation: OperationV1;
@@ -42,10 +42,22 @@ function writeResult(path: string | undefined, value: unknown): void {
 const configPath = resolve(argument("--config-file"));
 const parsed = JSON.parse(protectedFile(configPath)) as EntryConfigV1;
 rmSync(configPath, { force: true });
-if (parsed.schemaVersion !== "1" || !["start", "bootstrap", "restore-rebind"].includes(parsed.operation)) throw new Error("daemon entry config is invalid");
+if (parsed.schemaVersion !== "1" || !["start", "bootstrap", "init", "restore-rebind"].includes(parsed.operation)) throw new Error("daemon entry config is invalid");
 const config: DaemonConfigV1 = { ...parsed.daemon, authorityTime: () => parsed.authorityTime };
 
-if (parsed.operation === "bootstrap") {
+if (parsed.operation === "init") {
+  if (parsed.grantReferenceFile === undefined || parsed.resultFile === undefined) throw new Error("init paths are required");
+  const daemon = new Daemon(config);
+  try {
+    if (daemon.authority.replay(daemon.config.workspaceId, "workspace", daemon.config.workspaceId).length !== 0) throw new Error("existing workspace authority must not be reinitialized");
+    const capability = daemon.createBootstrapCapability();
+    const result = daemon.consumeBootstrapCapability(capability.secret);
+    const head = daemon.authority.replay(result.workspaceId, "workspace", result.workspaceId).at(-1);
+    if (head === undefined) throw new Error("workspace genesis was not persisted");
+    writeFileSync(resolve(parsed.grantReferenceFile), `${result.grantReference}\n`, { mode: 0o600, flag: "wx" });
+    writeResult(parsed.resultFile, { workspaceId: result.workspaceId, principalId: result.principalId, workspaceCursor: { schemaVersion: "1", kind: "workspace-only", workspaceId: result.workspaceId, workspaceSequence: head.envelope.sequence, workspaceEnvelopeHash: head.envelopeHash, workspaceContextEpoch: Math.max(0, head.envelope.sequence - 1) } });
+  } finally { daemon.close(); }
+} else if (parsed.operation === "bootstrap") {
   if (parsed.bootstrapSecretFile === undefined) throw new Error("bootstrap secret file is required");
   const daemon = new Daemon(config);
   try { writeResult(parsed.resultFile, daemon.consumeBootstrapCapability(protectedFile(parsed.bootstrapSecretFile))); }

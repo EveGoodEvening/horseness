@@ -29,13 +29,16 @@ async function installAndSmoke(packages, runCommand = run) {
     });
     const cli = resolve(root, "node_modules", ".bin", process.platform === "win32" ? "horseness.cmd" : "horseness");
     await access(cli);
-    const cliResult = await runCommand("npm", ["exec", "--", "horseness"], {
-      cwd: root,
-      code: "CANDIDATE_CLI_SMOKE_FAILED",
-      limit: 1024 * 1024,
-      allowedStatuses: [2],
+    const helpResult = await runCommand("npm", ["exec", "--", "horseness", "--json"], {
+      cwd: root, code: "CANDIDATE_CLI_HELP_FAILED", limit: 1024 * 1024,
     });
-    if (cliResult.status !== 2 || !cliResult.stderr.includes("INVALID_INVOCATION")) throw new Error("CANDIDATE_CLI_SMOKE_INVALID");
+    const help = JSON.parse(helpResult.stdout);
+    if (help.schemaVersion !== "1" || help.ok !== true || help.command !== "help") throw new Error("CANDIDATE_CLI_HELP_INVALID");
+    const cliResult = await runCommand("npm", ["exec", "--", "horseness", "unknown-command", "--json"], {
+      cwd: root, code: "CANDIDATE_CLI_SMOKE_FAILED", limit: 1024 * 1024, allowedStatuses: [2],
+    });
+    const failure = JSON.parse(cliResult.stdout);
+    if (cliResult.status !== 2 || failure.ok !== false || failure.error?.code !== "UNKNOWN_COMMAND") throw new Error("CANDIDATE_CLI_SMOKE_INVALID");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

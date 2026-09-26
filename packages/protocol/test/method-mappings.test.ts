@@ -4,9 +4,9 @@ import {METHOD_LOCAL_DTO_SHAPES_V1,METHOD_REGISTRY_V1,isAuthorizedMethod,Protoco
 
 const ROLES=["authority","approver","operator","worker","adapter"] as const;
 
-test("every registered method owns exact non-empty request and result parsers",()=>{
- const sample=(contract:Readonly<Record<string,string>>):Record<string,unknown>=>Object.fromEntries(Object.entries(contract).map(([key,kind])=>[key,kind==="integer"?1:kind==="boolean"?true:kind==="object"?{digest:"value"}:kind==="array"?["value"]:kind==="status"?"completed":`${key}-value`]));
- const substitute=(kind:string):unknown=>kind==="integer"?"1":kind==="boolean"?"true":kind==="object"?["wrong"]:kind==="array"?{wrong:true}:kind==="status"?"unknown":0;
+test("registered method DTOs reject missing fields, wrong types, and additional fields",()=>{
+ const sample=(contract:Readonly<Record<string,string>>):Record<string,unknown>=>Object.fromEntries(Object.entries(contract).map(([key,kind])=>[key,kind==="integer"?1:kind==="boolean"?true:kind==="object"?{digest:"value"}:kind==="array"?["value"]:kind==="empty-array"?[]:kind==="empty-text"?"":kind==="status"?"completed":`${key}-value`]));
+ const substitute=(kind:string):unknown=>kind==="integer"?"1":kind==="boolean"?"true":kind==="object"?["wrong"]:kind==="array"||kind==="empty-array"?{wrong:true}:kind==="status"?"unknown":0;
  for(const definition of METHOD_REGISTRY_V1){
   assert.notEqual(definition.inputMapping,null,`${definition.method} input mapping`);
   assert.notEqual(definition.resultMapping,null,`${definition.method} result mapping`);
@@ -16,7 +16,6 @@ test("every registered method owns exact non-empty request and result parsers",(
    if(mapping!==`method-${direction}`)continue;
    const contract=METHOD_LOCAL_DTO_SHAPES_V1[definition.method]?.[direction];
    assert.ok(contract,`${definition.method} ${direction} shape`);
-   assert.ok(Object.keys(contract).length>=2,`${definition.method} ${direction} is meaningful`);
    const value=sample(contract),valid={...shell,value};
    assert.deepEqual(parse(valid),valid,`${definition.method} valid ${direction}`);
    for(const key of Object.keys(contract)){

@@ -64,5 +64,31 @@ export function renderCliHumanV1(result: CliResultV1, secretKeys: readonly strin
   }
   if (safe.data === null) return `${safe.command}: ok\n`;
   if (typeof safe.data === "string") return `${safe.data}\n`;
+  const data = safe.data as Readonly<Record<string, JsonValue>>;
+  const quoted = (value: JsonValue | undefined): string => JSON.stringify(value ?? "");
+  if (safe.command === "init") return `${data.created ? "Initialized" : "Connected to"} workspace ${quoted(data.workspacePath)}.\nNext: horseness run create --title TEXT\n`;
+  if (safe.command === "run create") return `Created run ${String(data.runId)}: ${quoted(data.title)} (current)\nNext: horseness task add --title TEXT\n`;
+  if (safe.command === "run use") return `Current run: ${String(data.runId)} — ${quoted(data.title)}\n`;
+  if (safe.command === "task add") return `Added task ${String(data.taskId)}: ${quoted(data.title)} [draft]\nRun: ${String(data.runId)}\n`;
+  if (safe.command === "run list") {
+    const runs = data.runs as readonly Readonly<Record<string, JsonValue>>[];
+    return runs.length === 0 ? "No runs yet. Create one with horseness run create --title TEXT.\n" : `${runs.map((run) => `${run.current ? "*" : " "} ${String(run.runId)}  ${quoted(run.title)}`).join("\n")}\n`;
+  }
+  if (safe.command === "task list" || safe.command === "status") {
+    const tasks = data.tasks as readonly Readonly<Record<string, JsonValue>>[];
+    const lines: string[] = [];
+    if (safe.command === "status") {
+      lines.push(`Workspace: ${quoted(data.workspacePath)}`, `Runs: ${String(data.runCount)}`);
+      if (data.pendingOperation !== null) lines.push(`Unconfirmed operation: ${String(data.pendingOperation)}. Repeat that exact command to recover its result.`);
+      if (data.run === null) lines.push("No current run. Create one with horseness run create --title TEXT.");
+      else {
+        const run = data.run as Readonly<Record<string, JsonValue>>;
+        lines.push(`Run: ${String(run.runId)} — ${quoted(run.title)}`, `Canonical revision: ${String(run.revision)}`);
+      }
+    } else lines.push(`Run: ${String(data.runId)}`);
+    lines.push(`Tasks: ${tasks.length}`, ...tasks.map((task) => `  ${String(task.taskId)}  [${String(task.lifecycle)}] ${quoted(task.title)}`));
+    if (tasks.length === 0 && (safe.command === "task list" || data.run !== null)) lines.push("Add a task with horseness task add --title TEXT.");
+    return `${lines.join("\n")}\n`;
+  }
   return `${JSON.stringify(canonicalize(safe.data), null, 2)}\n`;
 }

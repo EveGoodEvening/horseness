@@ -2,6 +2,49 @@
 
 The `horseness` executable is the supported command-line boundary for the local coordinator. It requires Node.js 22 and communicates with the daemon through its permission-restricted local endpoint; it does not read the authority database directly.
 
+## Daily workflow
+
+With matching CLI and daemon executables available on `PATH`:
+
+```sh
+horseness init
+horseness run create --title "Fix login"
+horseness task add --run current --title "Inspect authentication"
+horseness status
+```
+
+`init` explicitly initializes the current project directory, performs the existing local first-authority ceremony, and starts the daemon. It does not install host adapters or bypass installer consent. Repeating it reconnects to the same authority or starts its stopped daemon; it never resets existing state or issues a replacement grant. An existing incomplete or foreign `.horseness` directory is refused rather than overwritten.
+
+Subsequent workflow commands discover the nearest initialized ancestor, so they also work from project subdirectories. Pass `--workspace PATH` to select a different existing project directory. There is no global most-recent-workspace fallback. `init` from inside another workspace refuses accidental nesting unless an explicit `--workspace` is supplied.
+
+Run creation selects the new run as `current`. Use `horseness run list` and `horseness run use --run ID` to revisit an existing run. `task add` and `task list` default to `--run current`; an explicit run ID does not change that selection. A new task is a durable **draft**, with a frozen receipt-only completion predicate. Adding it does not launch a worker or change the canonical document revision.
+
+No daily command requires cursor JSON, protocol versions, principal IDs, entity IDs, or idempotency keys. The CLI obtains authoritative observations and builds exact versioned requests internally. Workspace selection and run observations live in owner-only `.horseness/cli-workspace.v1.json`; the opaque grant reference is stored separately. This file is client context, never canonical authority.
+
+### Concurrency and interrupted operations
+
+- Stale observations and denied operations fail explicitly with stable codes and an actionable message. The CLI never silently refreshes and retries a mutation.
+- Before sending a mutation, the CLI durably saves its complete request, generated IDs, cursor, and key. A connection interruption leaves this pending operation intact. Inspect `horseness status`, then explicitly repeat the same command and title to recover its exact result without creating another entity. A different mutation or run switch is blocked until that pending operation is resolved.
+- Concurrent CLI operations on one workspace fail with `WORKSPACE_BUSY`. If a CLI process was forcibly killed, confirm no workspace command is active before removing only `.horseness/cli-workspace.v1.lock`; retain the context and repeat the original command. Stale locks are not automatically removed because concurrent reclaimers could otherwise delete a live lock.
+- Never delete `.horseness` to fix access problems. It contains durable authority state. Existing pre-workflow workspaces continue to use explicit low-level commands; `init` does not silently adopt their authority or broaden their grants.
+
+`horseness`, `horseness --help`, `horseness run --help`, and `horseness task add --help` provide help without requiring a daemon. `horseness help --all` lists the low-level protocol commands as well.
+
+### Run from a checkout
+
+Use Node 22 and install the frozen dependencies, then invoke the shipped source executables from any project directory:
+
+```sh
+corepack pnpm install --frozen-lockfile
+HORSENESS="$PWD/apps/cli/bin/horseness.mjs"
+export HORSENESS_DAEMON_EXECUTABLE="$PWD/apps/daemon/bin/horseness-daemon.mjs"
+"$HORSENESS" init --workspace /absolute/path/to/project
+"$HORSENESS" run create --workspace /absolute/path/to/project --title "Fix login"
+"$HORSENESS" status --workspace /absolute/path/to/project
+```
+
+The selected project must already exist. `--daemon-executable PATH` also selects the daemon during initialization. Source and packaged launchers resolve their TypeScript loader relative to their package, not the caller's directory.
+
 ## Output and exit status
 
 Pass `--json` to any command for one canonical JSON object followed by a newline. Human and JSON output are rendered from the same result. Credential, bootstrap, recovery, and other secret-shaped material is recursively redacted from both successful and failed output.

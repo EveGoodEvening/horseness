@@ -1,5 +1,5 @@
 import { assertJsonValue, deepClone, digestId, domainDigest, DomainError, type JsonValue } from "./canonical.js";
-import { verifyEventChain, type EventEnvelopeV1, type HashedEventEnvelopeV1 } from "./events.js";
+import { parseDomainEventPayloadV1, verifyEventChain, type EventEnvelopeV1, type HashedEventEnvelopeV1 } from "./events.js";
 
 export interface ReceiptEvidenceV1 { digest: string; mediaType: string; size: number }
 export interface AttemptReceiptCoreV1 { schemaVersion: "1"; workspaceId: string; runId: string; taskId: string; attemptId: string; generation: number; attemptContextBindingDigest: string; contextManifestCoreDigest: string; forkPinDigest: string; providerId: string; providerOperationId: string; providerIdempotencyKeyDigest: string; producerPrincipalId: string; producerGrantDigest: string; adapterId: string; adapterVersion: string; hostId: string; hostVersion: string; outcome: "succeeded" | "failed" | "cancelled"; startedAt: string; finishedAt: string; outputDigest: string | null; evidence: readonly ReceiptEvidenceV1[]; provenance: JsonValue; nonce: string }
@@ -140,9 +140,10 @@ export function deterministicWorkspaceReplay(events: readonly HashedEventEnvelop
   return state;
 }
 
-export interface RunOperationalState { workspaceId: string; runId: string; eventCount: number; proposals: Readonly<Record<string, { status: "submitted" | "accepted" | "rejected" | "conflicted" | "quarantined" | "approval_required"; proposalDigest: string; provenanceDigest?: string; artifactDigest?: string }>>; receipts: Readonly<Record<string, { receiptDigest: string; outcome: "succeeded" | "failed" | "cancelled" }>>; taskStates: Readonly<Record<string, "succeeded" | "failed" | "cancelled">>; contextEpoch: number; lastEventSequence: number }
+export interface RunOperationalState { workspaceId: string; runId: string; eventCount: number; proposals: Readonly<Record<string, { status: "submitted" | "accepted" | "rejected" | "conflicted" | "quarantined" | "approval_required"; proposalDigest: string; provenanceDigest?: string; artifactDigest?: string }>>; receipts: Readonly<Record<string, { receiptDigest: string; outcome: "succeeded" | "failed" | "cancelled" }>>; tasks: Readonly<Record<string, { title: string; completionPolicy: { schemaVersion: "1"; kind: "predicate"; predicate: { kind: "receipt-only" } } }>>; taskStates: Readonly<Record<string, "succeeded" | "failed" | "cancelled">>; contextEpoch: number; lastEventSequence: number }
 export type RunOperationalEvent =
   | { eventType: "RunCreatedV1"; sequence: number; workspaceId: string; runId: string }
+  | { eventType: "TaskCreatedV1"; sequence: number; workspaceId: string; runId: string; taskId: string; title: string; completionPolicy: { schemaVersion: "1"; kind: "predicate"; predicate: { kind: "receipt-only" } } }
   | { eventType: "ProposalSubmittedV1"; sequence: number; workspaceId: string; runId: string; proposalId: string; proposalDigest: string }
   | { eventType: "AdmissionDecisionRecordedV1"; sequence: number; workspaceId: string; runId: string; proposalId: string; proposalDigest: string; state: "accepted" | "rejected" | "conflicted" | "quarantined" | "approval_required"; provenanceDigest: string; artifactDigest: string }
   | { eventType: "DeltaAcceptedV1"; sequence: number; workspaceId: string; runId: string; proposalId: string; proposalDigest: string }
@@ -152,13 +153,17 @@ export type RunOperationalEvent =
 export function reduceOperationalState(state: RunOperationalState | null, event: RunOperationalEvent): RunOperationalState {
   if (event.eventType === "RunCreatedV1") {
     if (state !== null || event.sequence !== 1) throw new DomainError("INVALID_GENESIS");
-    return { workspaceId: event.workspaceId, runId: event.runId, eventCount: 1, proposals: {}, receipts: {}, taskStates: {}, contextEpoch: 0, lastEventSequence: 1 };
+    return { workspaceId: event.workspaceId, runId: event.runId, eventCount: 1, proposals: {}, receipts: {}, tasks: {}, taskStates: {}, contextEpoch: 0, lastEventSequence: 1 };
   }
   if (state === null) throw new DomainError("INVALID_GENESIS");
   if (event.workspaceId !== state.workspaceId || event.runId !== state.runId) throw new DomainError("AGGREGATE_IDENTITY_MISMATCH");
   if (event.sequence !== state.lastEventSequence + 1) throw new DomainError("EVENT_SEQUENCE_INVALID");
-  const next: RunOperationalState = { ...state, eventCount: state.eventCount + 1, proposals: { ...state.proposals }, receipts: { ...state.receipts }, taskStates: { ...state.taskStates }, contextEpoch: state.contextEpoch + 1, lastEventSequence: event.sequence };
+  const next: RunOperationalState = { ...state, eventCount: state.eventCount + 1, proposals: { ...state.proposals }, receipts: { ...state.receipts }, tasks: { ...state.tasks }, taskStates: { ...state.taskStates }, contextEpoch: state.contextEpoch + 1, lastEventSequence: event.sequence };
   switch (event.eventType) {
+    case "TaskCreatedV1": {
+      if (Object.hasOwn(next.tasks, event.taskId)) throw new DomainError("TASK_IDENTITY_CONFLICT");
+      return { ...next, tasks: { ...next.tasks, [event.taskId]: { title: event.title, completionPolicy: event.completionPolicy } } };
+    }
     case "ProposalSubmittedV1": {
       const existing = next.proposals[event.proposalId];
       if (existing !== undefined && existing.proposalDigest !== event.proposalDigest) throw new DomainError("PROPOSAL_IDENTITY_CONFLICT");
@@ -220,6 +225,11 @@ export function deterministicReplay(events: readonly HashedEventEnvelopeV1<unkno
         canonical = reduceCanonicalDocument(canonical, { eventType: "RunCreatedV1", ...common, initialDocument });
         operational = reduceOperationalState(operational, { eventType: "RunCreatedV1", ...common });
         break;
+      }
+      case "TaskCreatedV1": {
+        const task = parseDomainEventPayloadV1(payload);
+        if (task.eventType !== "TaskCreatedV1" || task.workspaceId !== envelope.workspaceId || task.runId !== envelope.streamId) throw new DomainError("MALFORMED_EVENT");
+        operational = reduceOperationalState(operational, { eventType: "TaskCreatedV1", ...common, taskId: task.taskId, title: task.title, completionPolicy: task.completionPolicy }); break;
       }
       case "ProposalSubmittedV1": operational = reduceOperationalState(operational, { eventType: "ProposalSubmittedV1", ...common, proposalId: text(payload.proposalId), proposalDigest: text(payload.proposalDigest) }); break;
       case "AdmissionDecisionRecordedV1": {
