@@ -29,8 +29,10 @@ Resolve conflicts in that order. An architectural change requires a dedicated pl
 ## Planning-only baseline
 
 The planning-only baseline and C00–C21 product chunks are complete. C00/C01 historical evidence remains read-only. C22 is the sole active chunk under the npm-first ADR 0009 correction; C23–C25 remain serial operational release phases.
+
 - Integration and release identity use exactly `refs/heads/main`.
 - Focused production receipt verification for C00/C01 uses canonical live paths, complete index chains, integrated Git ancestry, canonical UTC-second timestamps, symlink rejection, and authenticated trust lookup. Synthetic algorithms run only through the isolated fixture-bundle verifier.
+
 ## Durable lessons
 
 - The repository began empty; conventions and ownership must be explicit.
@@ -46,3 +48,8 @@ The planning-only baseline and C00–C21 product chunks are complete. C00/C01 hi
 - `NO_PROXY: "*"` defeats dead-proxy network isolation: wildcard bypass is universally interpreted as "bypass proxy for all hosts," allowing direct connections. Never pair `NO_PROXY: "*"` with a dead proxy for defense-in-depth. Use `HTTPS_PROXY`/`HTTP_PROXY` pointing to a dead port (e.g., `http://127.0.0.1:9`) without `NO_PROXY` to block outbound traffic.
 - `bun install --offline` with a dead proxy fails because bun routes local cache resolution through the proxy. Apply proxy blocking to host-execution subprocess calls only, not to the dependency-install step. The `--offline` flag itself prevents network access for installs.
 - When proving native feasibility, execute code from the digest-verified acquired artifact, not from repo `node_modules`. Copy `acquired.cachePath/package` to an isolated work dir and install dependencies there. Resolving `packageRoot` from `realpath(node_modules/...)` decouples execution from digest verification.
+- CLI/daemon executable loaders must resolve `tsx` relative to their package. A shebang using `node --import tsx` resolves from the caller's working directory and fails outside the package; use module-relative `tsx/esm/api` registration before importing the entry point.
+- Coordinator registry entries are not evidence of implemented daemon handlers. Daily CLI workflows require real authority-backed handlers, empty collection/pagination DTO support, and executable smoke from a fresh external project directory.
+- Exact mutation recovery must retain the original generated IDs, key, payload, and observation cursor. Refreshing only the cursor while reusing a key changes the request digest and is not an idempotent retry.
+- Static registry help includes words such as `credential` and `bootstrap`; applying secret-value heuristics to the whole help string hides the help itself. Render registry-only help separately while retaining redaction for runtime results and failures.
+- Quote recursive Node test globs in package scripts. An unquoted `test/**/*.test.ts` is expanded by the shell when subdirectories exist and can silently omit top-level tests; the CLI gate now passes the glob to Node and executes both sets.
