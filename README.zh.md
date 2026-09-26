@@ -30,7 +30,7 @@ CLI 自动发现项目、选择当前 run、查询 cursor、生成 ID 和幂等�
 
 闭环：
 
-```
+```text
 subagent exploration
 → evidence-gated state delta
 → canonical working state
@@ -54,7 +54,7 @@ subagent exploration
 
 ## 类比
 
-```
+```text
 Git-like forks
 + database transactions
 + content-addressed evidence

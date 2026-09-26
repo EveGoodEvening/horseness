@@ -30,7 +30,7 @@ Move the main Agent's correct cognition out of session text and into a **verifia
 
 The closed loop:
 
-```
+```text
 subagent exploration
 → evidence-gated state delta
 → canonical working state
@@ -54,7 +54,7 @@ subagent exploration
 
 ## Analogy
 
-```
+```text
 Git-like forks
 + database transactions
 + content-addressed evidence
