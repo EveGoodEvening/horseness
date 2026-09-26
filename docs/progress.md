@@ -4,10 +4,10 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 
 ## Global status
 
-- **Planning state:** C00–C22 are complete. C22 final candidate `a36619d8` implements ADR 0009's fourteen-package npm-first release path and passed all nine ordered acceptance commands. C23 is the next eligible operational chunk; C24–C25 remain transitively dependency-blocked.
-- **Active claims:** none.
-- **Next eligible:** C23 — execute the protected `publish-next` workflow phase without source edits.
-- **Active blockers:** C23 requires npm authority for initial `@horseness` package creation and a protected GitHub `release` environment. C24 later requires GitHub-hosted Linux/macOS/Windows runners; C25 requires npm tag and GitHub release authority.
+- **Planning state:** C00–C22 historical completion evidence is retained. The 2026-09-26 CLI usability correction reopens C22 for a pre-publication review fix; C23–C25 wait for the updated candidate.
+- **Active claims:** C22 CLI usability review fix, scoped by the final correction in `docs/plan.md`.
+- **Next eligible:** C23 after C22 usability verification; operational phases make no source edits.
+- **Active blockers:** Updated CLI candidate verification precedes publication. C23 also requires npm authority for initial `@horseness` package creation and a protected GitHub `release` environment. C24 later requires GitHub-hosted Linux/macOS/Windows runners; C25 requires npm tag and GitHub release authority.
 - **Last integrated receipt:** immutable C01 `docs/checkpoints/C01/final/1.json`, envelope digest `17ddd75b49e35d3bf6f432c8c6acca30b4a66512229453aca4fc63e7f427ea7d`, indexed at A01 commit `223023330cb000b759d8a8b2419514638c1aa179`; receipt/index bytes must not be overwritten.
 - **Release readiness:** the local npm-first candidate is complete and reproducible at `a36619d8`; no package has been published.
 - **Base chunk count:** 26 (`C00`–`C25`)
@@ -100,3 +100,5 @@ ADR 0009 and the user's explicit 2026-08-16 direction replace the former C22–C
 The public version remains `1.0.0`, MIT, and public npm access for the fourteen-package train. `@horseness/bootstrap` is explicitly deferred and returns to private `0.0.0`; repository fixture bootstrap tests remain valid but are not public release evidence. C22 has no external acceptance prerequisite. C23 requires npm publication authority, C24 requires the three GitHub-hosted operating-system runners, and C25 requires npm tag plus GitHub release authority.
 
 The prior C22 implementation commits `3a17c899`, `71993228`, and `b8e26497` remain historical. Corrected implementation `bcf7c185` and review fix/final candidate `a36619d8` satisfy the npm-first contract. Candidate `a36619d8` passed all nine ordered C22 commands under Node 22 on 2026-08-16; its manifest binds full source commit `a36619d8b92d1c3c4c80696dce17919ace5155b8`. C22 is complete, no npm package was published, and C23 is dependency-ready.
+
+CLI usability review fix (2026-09-26): the handoff identifies manually constructed cursors, IDs, and JSON as a product defect. Source inspection additionally found no routed global help and no durable task-create/run-list daemon handlers. The final plan correction authorizes only the paths needed for the four daily workflows and their real protocol/storage implementation. C22 is in progress; historical `a36619d8` evidence remains unchanged and does not verify these new changes.
