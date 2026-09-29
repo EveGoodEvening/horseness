@@ -1,5 +1,7 @@
 # Horseness
 
+<img src="docs/horseness-carriage.svg" alt="一位车夫驾驭四匹马拉的马车" width="560">
+
 一个带版本控制、证据门禁和确定性重建的多 Agent 状态机。
 
 ## 日常 CLI 工作流

@@ -1,5 +1,7 @@
 # Horseness
 
+<img src="docs/horseness-carriage.svg" alt="A driver guiding a carriage pulled by four horses" width="560">
+
 A multi-Agent state machine with version control, evidence gating, and deterministic reconstruction.
 
 ## Daily CLI workflow
