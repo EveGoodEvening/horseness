@@ -10,6 +10,11 @@
     }
   },
   "name": "@horseness/domain",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EveGoodEvening/horseness.git",
+    "directory": "packages/domain"
+  },
   "private": false,
   "scripts": {
     "lint": "eslint src test --max-warnings=0",

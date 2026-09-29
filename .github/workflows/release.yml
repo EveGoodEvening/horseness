@@ -25,6 +25,11 @@ on:
         description: successful verify-public workflow run required for promotion
         required: false
         type: string
+      bootstrap:
+        description: Initial package creation only; requires short-lived NPM_BOOTSTRAP_TOKEN
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -78,20 +83,27 @@ jobs:
       LANG: C
       NODE_OPTIONS: --unhandled-rejections=strict
       RELEASE_VERSION: ${{ inputs.version }}
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version-file: .node-version
-          registry-url: https://registry.npmjs.org
+          registry-url: ${{ inputs.bootstrap && 'https://registry.npmjs.org' || '' }}
       - run: npm install --global npm@11.6.2
       - uses: actions/download-artifact@v4
         with:
           name: npm-candidate-${{ inputs.version }}
           path: .release/build-1
-      - shell: bash
+      - name: Publish with npm trusted publishing
+        if: ${{ !inputs.bootstrap }}
+        shell: bash
         run: node scripts/release/publish-next.mjs --candidate .release/build-1/release-manifest.json --version "$RELEASE_VERSION" --provenance
+      - name: Bootstrap initial npm packages
+        if: ${{ inputs.bootstrap }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
+        shell: bash
+        run: node scripts/release/publish-next.mjs --candidate .release/build-1/release-manifest.json --version "$RELEASE_VERSION" --provenance --bootstrap
 
   verify-public:
     if: github.ref == 'refs/heads/main' && inputs.phase == 'verify-public' && inputs.candidate_run_id != ''
@@ -147,7 +159,6 @@ jobs:
       LANG: C
       NODE_OPTIONS: --unhandled-rejections=strict
       GH_TOKEN: ${{ github.token }}
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       RELEASE_VERSION: ${{ inputs.version }}
       CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
       VERIFICATION_RUN_ID: ${{ inputs.verification_run_id }}
@@ -168,7 +179,10 @@ jobs:
           verification="$(gh run view "$VERIFICATION_RUN_ID" --json conclusion,displayTitle,event,headBranch,workflowName --jq '[.conclusion,.event,.headBranch,.workflowName,.displayTitle] | join("|")')"
           test "$verification" = "success|workflow_dispatch|main|npm release|npm release verify-public $RELEASE_VERSION candidate=$CANDIDATE_RUN_ID"
       - run: gh run download "$CANDIDATE_RUN_ID" --name "npm-candidate-$RELEASE_VERSION" --dir .release/build-1
-      - run: node scripts/release/promote-latest.mjs --candidate .release/build-1/release-manifest.json --version "$RELEASE_VERSION"
+      - name: Promote verified npm packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_PROMOTION_TOKEN }}
+        run: node scripts/release/promote-latest.mjs --candidate .release/build-1/release-manifest.json --version "$RELEASE_VERSION"
       - name: Create or verify GitHub release
         shell: bash
         run: |

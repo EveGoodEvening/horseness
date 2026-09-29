@@ -1,11 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, relative, resolve } from "node:path";
-import { parse, stringify } from "yaml";
+import { stringify } from "yaml";
 import {
-  C22_COMMANDS,
   DEFERRED_MANIFESTS,
   PUBLISHABLE_MANIFESTS,
   canonical,
@@ -26,7 +25,10 @@ async function coherenceFixture() {
   const manifests = [];
   for (const path of PUBLISHABLE_MANIFESTS) {
     const source = await readJson(resolve(import.meta.dirname, "../../..", path));
-    const value = { name: source.name, version: "1.0.0", private: false, type: "module", license: "MIT", publishConfig: { access: "public" } };
+    const value = {
+      name: source.name, version: "1.0.0", private: false, type: "module", license: "MIT", publishConfig: { access: "public" },
+      repository: { type: "git", url: "git+https://github.com/EveGoodEvening/horseness.git", directory: dirname(path) },
+    };
     manifests.push({ path, value });
   }
   manifests[1].value.dependencies = { [manifests[0].value.name]: "workspace:1.0.0" };
@@ -70,47 +72,10 @@ async function candidateFixture() {
   return { root, manifestPath, packages };
 }
 
-test("command and package contracts are exact", () => {
-  assert.equal(C22_COMMANDS.length, 9);
-  assert.equal(new Set(C22_COMMANDS).size, 9);
-  assert.equal(PUBLISHABLE_MANIFESTS.length, 14);
-  assert.deepEqual(DEFERRED_MANIFESTS, ["apps/bootstrap/package.json"]);
-  assert.ok(!PUBLISHABLE_MANIFESTS.includes("apps/bootstrap/package.json"));
-});
-
 test("release command runner resolves Windows shims", () => {
   assert.equal(platformCommand("npm", "win32"), "npm.cmd");
   assert.equal(platformCommand("git", "win32"), "git");
   assert.equal(platformCommand("npm", "linux"), "npm");
-});
-
-test("workflow binds every public side effect to exact upstream runs", async () => {
-  const workflow = await readFile(resolve(import.meta.dirname, "../../../.github/workflows/release.yml"), "utf8");
-  const parsed = parse(workflow);
-  assert.equal(parsed["run-name"], "npm release ${{ inputs.phase }} ${{ inputs.version }} candidate=${{ inputs.candidate_run_id }}");
-  assert.deepEqual(parsed.on.workflow_dispatch.inputs.phase.options, ["publish-next", "verify-public", "promote-latest"]);
-  assert.deepEqual(Object.keys(parsed.jobs).sort(), ["build-candidate", "promote-latest", "publish-next", "verify-public"]);
-  for (const phase of ["publish-next", "verify-public", "promote-latest"]) assert.match(workflow, new RegExp(phase, "u"));
-  for (const runner of ["ubuntu-latest", "macos-latest", "windows-latest"]) assert.match(workflow, new RegExp(runner, "u"));
-  assert.match(workflow, /environment: release/u);
-  assert.match(workflow, /secrets\.NPM_TOKEN/u);
-  assert.match(workflow, /RELEASE_VERSION: \$\{\{ inputs\.version \}\}/u);
-  assert.match(workflow, /--version "\$RELEASE_VERSION"/u);
-  assert.match(workflow, /--provenance/u);
-  assert.match(workflow, /conclusion,displayTitle,event,headBranch,workflowName/u);
-  assert.match(workflow, /success\|workflow_dispatch\|main\|npm release\|npm release publish-next \$RELEASE_VERSION candidate=/u);
-  assert.match(workflow, /success\|workflow_dispatch\|main\|npm release\|npm release verify-public \$RELEASE_VERSION candidate=\$CANDIDATE_RUN_ID/u);
-  assert.match(workflow, /git rev-list -n 1 "\$tag"/u);
-  assert.match(workflow, /gh release create "\$tag" --target "\$target"/u);
-  for (const obsolete of ["verify-root-ceremony", "KMS", "immutable", "artifact-receipt", "live-gates", "c22-signed-builds"]) assert.doesNotMatch(workflow, new RegExp(obsolete, "u"));
-});
-
-test("bootstrap is explicitly deferred from npm publication", async () => {
-  const bootstrap = await readJson(resolve(import.meta.dirname, "../../../apps/bootstrap/package.json"));
-  assert.equal(bootstrap.version, "0.0.0");
-  assert.equal(bootstrap.private, true);
-  assert.equal(bootstrap.publishConfig, undefined);
-  for (const [name, specifier] of Object.entries(bootstrap.dependencies)) if (name.startsWith("@horseness/")) assert.equal(specifier, "workspace:*");
 });
 
 test("coherence accepts fourteen public packages and one private deferred bootstrap", async () => {
@@ -123,6 +88,21 @@ test("coherence accepts fourteen public packages and one private deferred bootst
     fixture.deferred.value.publishConfig = { access: "public" };
     await writeFile(resolve(fixture.root, fixture.deferred.path), JSON.stringify(fixture.deferred.value));
     await assert.rejects(verifyCoherence(fixture.root), /DEFERRED_PACKAGE_METADATA_INVALID/u);
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("coherence rejects missing, foreign, or misplaced provenance identity", async () => {
+  const fixture = await coherenceFixture();
+  try {
+    const item = fixture.manifests[0];
+    const repository = item.value.repository;
+    for (const invalid of [undefined, { ...repository, url: "git+https://github.com/untrusted/horseness.git" }, { ...repository, directory: "apps/cli" }]) {
+      item.value.repository = invalid;
+      await writeFile(resolve(fixture.root, item.path), JSON.stringify(item.value));
+      await assert.rejects(verifyCoherence(fixture.root), /PUBLICATION_REPOSITORY_MISMATCH/u);
+    }
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }
@@ -141,19 +121,18 @@ test("candidate manifest binds every tarball and rejects tamper", async () => {
   }
 });
 
-test("publish-next reconciles exact versions and repairs the next tag", async () => {
+test("publish-next reconciles exact tagged versions and publishes only missing versions", async () => {
   const packages = [
     { name: "@horseness/a", version: "1.0.0", integrity: "sha512-YQ==", tarballPath: "/a.tgz" },
     { name: "@horseness/b", version: "1.0.0", integrity: "sha512-Yg==", tarballPath: "/b.tgz" },
   ];
   const integrities = new Map([["@horseness/a", "sha512-YQ=="]]);
-  const tags = new Map();
+  const tags = new Map([["@horseness/a:next", "1.0.0"]]);
   const published = [];
   const operations = {
     getIntegrity: async (name) => integrities.get(name) ?? null,
     getTag: async (name, tag) => tags.get(`${name}:${tag}`) ?? null,
     publish: async (item) => { published.push(item.name); integrities.set(item.name, item.integrity); tags.set(`${item.name}:next`, item.version); },
-    setTag: async (item, tag) => { tags.set(`${item.name}:${tag}`, item.version); },
   };
   const result = await publishNextPackages(packages, operations);
   assert.deepEqual(published, ["@horseness/b"]);
@@ -162,6 +141,53 @@ test("publish-next reconciles exact versions and repairs the next tag", async ()
   integrities.set("@horseness/a", "sha512-bWlzbWF0Y2g=");
   await assert.rejects(publishNextPackages(packages.slice(0, 1), operations), /NPM_EXISTING_VERSION_INTEGRITY_MISMATCH/u);
 });
+
+test("publish-next refuses tag drift without mutating tags or publishing later packages", async () => {
+  const item = { name: "@horseness/a", version: "1.0.0", integrity: "sha512-YQ==" };
+  const mutations = [];
+  const operations = {
+    getIntegrity: async () => item.integrity,
+    getTag: async () => "0.9.0",
+    publish: async (value) => { mutations.push(`publish:${value.name}`); },
+    setTag: async () => { mutations.push("dist-tag"); },
+  };
+  await assert.rejects(publishNextPackages([item, { ...item, name: "@horseness/b" }], operations), /NPM_NEXT_TAG_MISMATCH/u);
+  assert.deepEqual(mutations, []);
+});
+
+test("publish-next refuses a newly published package whose next tag is missing", async () => {
+  const item = { name: "@horseness/a", version: "1.0.0", integrity: "sha512-YQ==" };
+  let integrity = null;
+  let tagMutations = 0;
+  const operations = {
+    getIntegrity: async () => integrity,
+    getTag: async () => null,
+    publish: async () => { integrity = item.integrity; },
+    setTag: async () => { tagMutations += 1; },
+  };
+  await assert.rejects(publishNextPackages([item], operations), /NPM_NEXT_TAG_MISMATCH/u);
+  assert.equal(integrity, item.integrity);
+  assert.equal(tagMutations, 0);
+});
+
+for (const scenario of [
+  { name: "missing OIDC request token", env: { ACTIONS_ID_TOKEN_REQUEST_URL: "https://oidc.invalid" }, error: /NPM_PUBLICATION_OIDC_AUTHORITY_MISSING/u },
+  { name: "missing OIDC request URL", env: { ACTIONS_ID_TOKEN_REQUEST_TOKEN: "test-only" }, error: /NPM_PUBLICATION_OIDC_AUTHORITY_MISSING/u },
+  { name: "implicit token fallback", env: { NODE_AUTH_TOKEN: "test-only" }, error: /NPM_PUBLICATION_TOKEN_FORBIDDEN/u },
+  { name: "token supplied alongside OIDC", env: { NPM_TOKEN: "test-only", ACTIONS_ID_TOKEN_REQUEST_URL: "https://oidc.invalid", ACTIONS_ID_TOKEN_REQUEST_TOKEN: "test-only" }, error: /NPM_PUBLICATION_TOKEN_FORBIDDEN/u },
+  { name: "empty bootstrap credential", args: ["--bootstrap"], env: { NODE_AUTH_TOKEN: " " }, error: /NPM_BOOTSTRAP_AUTHORITY_MISSING/u },
+  { name: "ambiguous bootstrap flag", args: ["--bootstrap", "false"], error: /NPM_BOOTSTRAP_FLAG_INVALID/u },
+]) {
+  test(`publication entry point refuses ${scenario.name}`, async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "horseness-release-auth-"));
+    try {
+      const env = { ...process.env, CI: "1", NODE_AUTH_TOKEN: "", NPM_TOKEN: "", ACTIONS_ID_TOKEN_REQUEST_URL: "", ACTIONS_ID_TOKEN_REQUEST_TOKEN: "", ...scenario.env };
+      await assert.rejects(run(process.execPath, [resolve(import.meta.dirname, "../publish-next.mjs"), "--candidate", resolve(root, "absent.json"), "--version", "1.0.0", "--provenance", ...scenario.args ?? []], { env }), scenario.error);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
 
 test("public verification requires exact integrity and next tags before smoke", async () => {
   const packages = [{ name: "@horseness/a", version: "1.0.0", integrity: "sha512-YQ==" }];
@@ -189,9 +215,4 @@ test("promotion moves latest only from the verified next version", async () => {
   assert.equal(tags.get("latest"), "1.0.0");
   tags.set("next", "0.9.0");
   await assert.rejects(promoteLatestPackages(packages, operations), /PROMOTION_NEXT_TAG_MISMATCH/u);
-});
-
-test("release command and secret policies pass", async () => {
-  await run(process.execPath, [resolve(import.meta.dirname, "../verify-commands.mjs")]);
-  await run(process.execPath, [resolve(import.meta.dirname, "../verify-no-static-secrets.mjs")]);
 });

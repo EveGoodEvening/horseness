@@ -4,7 +4,7 @@ import { C22_COMMANDS, ROOT } from "./lib.mjs";
 
 const manifest = JSON.parse(await readFile(resolve(ROOT, "package.json"), "utf8"));
 const expected = {
-  "release:docs-lint": "markdownlint-cli2 README.md README.zh.md CHANGELOG.md docs/architecture.md docs/plan.md docs/progress.md docs/progress/C22.md docs/adr/0009-npm-first-release.md docs/release-process.md docs/trust-root.md docs/install.md docs/compatibility.md docs/migrations.md",
+  "release:docs-lint": "markdownlint-cli2 README.md README.zh.md CHANGELOG.md docs/architecture.md docs/plan.md docs/progress.md docs/progress/C22.md docs/adr/0009-npm-first-release.md docs/adr/0010-npm-trusted-publishing.md docs/release-process.md docs/trust-root.md docs/install.md docs/compatibility.md docs/migrations.md",
   "release:coherence": "node scripts/release/coherence.mjs",
   "release:build-twice": "node scripts/release/build-twice.mjs",
   "release:verify-candidate": "node scripts/release/verify-candidate.mjs",

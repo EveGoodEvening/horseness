@@ -44,7 +44,7 @@ if (import.meta.url === new URL(`file://${resolve(process.argv[1] ?? "")}`).href
   const args = parseArgs();
   for (const key of args.keys()) if (!["candidate", "version"].includes(key)) throw new Error(`UNEXPECTED_ARGUMENT:--${key}`);
   if (process.env.CI !== "1") throw new Error("NPM_PROMOTION_REQUIRES_CI");
-  if (process.env.NODE_AUTH_TOKEN === undefined) throw new Error("NPM_PROMOTION_AUTHORITY_MISSING");
+  if (!process.env.NODE_AUTH_TOKEN?.trim()) throw new Error("NPM_PROMOTION_AUTHORITY_MISSING");
   const candidate = String(args.get("candidate") ?? resolve(RELEASE_ROOT, "build-1", "release-manifest.json"));
   const version = args.get("version");
   if (typeof version !== "string") throw new Error("NPM_RELEASE_VERSION_REQUIRED");

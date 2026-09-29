@@ -1,5 +1,10 @@
 {
   "name": "@horseness/adapter-omp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EveGoodEvening/horseness.git",
+    "directory": "adapters/omp"
+  },
   "version": "1.0.0",
   "private": false,
   "type": "module",

@@ -1,5 +1,6 @@
 import { lstat, readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
+import { parse } from "yaml";
 import { ROOT, walkFiles } from "./lib.mjs";
 
 const roots = [
@@ -33,7 +34,9 @@ const workflow = await readFile(resolve(ROOT, ".github/workflows/release.yml"), 
 for (const obsolete of ["verify-root-ceremony", "verify-delegation", "KMS", "immutable", "artifact-receipt", "live-gates", "c22-signed-builds"]) {
   if (workflow.includes(obsolete)) throw new Error(`OBSOLETE_RELEASE_TRUST_REFERENCE:${obsolete}`);
 }
-if (!workflow.includes("secrets.NPM_TOKEN") || !workflow.includes("--provenance") || !workflow.includes("environment: release")) throw new Error("NPM_RELEASE_AUTHORITY_CONTROLS_MISSING");
+const publication = parse(workflow).jobs?.["publish-next"];
+if (publication?.permissions?.["id-token"] !== "write" || publication.environment !== "release" || publication.env?.NODE_AUTH_TOKEN !== undefined || publication.env?.NPM_TOKEN !== undefined) throw new Error("NPM_RELEASE_OIDC_CONTROLS_MISSING");
+if (workflow.includes("secrets.NPM_TOKEN")) throw new Error("NPM_GENERAL_PURPOSE_RELEASE_TOKEN_FORBIDDEN");
 
 const bootstrap = JSON.parse(await readFile(resolve(ROOT, "apps/bootstrap/package.json"), "utf8"));
 if (bootstrap.private !== true || bootstrap.version !== "0.0.0" || bootstrap.publishConfig !== undefined) throw new Error("DEFERRED_BOOTSTRAP_MUST_BE_PRIVATE");

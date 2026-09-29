@@ -1,5 +1,10 @@
 {
   "name": "@horseness/daemon",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EveGoodEvening/horseness.git",
+    "directory": "apps/daemon"
+  },
   "version": "1.0.0",
   "private": false,
   "type": "module",

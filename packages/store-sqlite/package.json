@@ -36,6 +36,11 @@
     }
   },
   "name": "@horseness/store-sqlite",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EveGoodEvening/horseness.git",
+    "directory": "packages/store-sqlite"
+  },
   "private": false,
   "scripts": {
     "lint": "eslint src --max-warnings=0",

@@ -31,6 +31,7 @@ export async function verifyCoherence(root = ROOT) {
   for (const { path, value } of manifests) {
     if (value.private === true || value.publishConfig?.access !== "public") throw new Error(`PUBLICATION_ACCESS_DECISION_REQUIRED:${path}`);
     if (value.license !== "MIT") throw new Error(`PUBLICATION_LICENSE_REQUIRED:${path}`);
+    if (value.repository?.type !== "git" || value.repository.url !== "git+https://github.com/EveGoodEvening/horseness.git" || value.repository.directory !== slash(dirname(path))) throw new Error(`PUBLICATION_REPOSITORY_MISMATCH:${path}`);
     for (const { group, name, specifier } of internalDependencies(value)) {
       if (!name.startsWith("@horseness/")) continue;
       if (deferredNames.has(name)) throw new Error(`PUBLIC_PACKAGE_DEPENDS_ON_DEFERRED:${path}:${group}:${name}`);

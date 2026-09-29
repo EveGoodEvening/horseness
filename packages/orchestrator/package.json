@@ -1,5 +1,10 @@
 {
   "name": "@horseness/orchestrator",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EveGoodEvening/horseness.git",
+    "directory": "packages/orchestrator"
+  },
   "version": "1.0.0",
   "private": false,
   "type": "module",

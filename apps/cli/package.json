@@ -1,5 +1,10 @@
 {
   "name": "@horseness/cli",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EveGoodEvening/horseness.git",
+    "directory": "apps/cli"
+  },
   "version": "1.0.0",
   "private": false,
   "type": "module",

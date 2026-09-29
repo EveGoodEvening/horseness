@@ -43,7 +43,7 @@
     "doctor:hostile-no-side-effects": "pnpm --filter @horseness/installer exec node --import tsx ../../scripts/bootstrap/doctor-hostile.mjs",
     "uninstall:failure-matrix": "pnpm --filter @horseness/bootstrap exec node --import tsx ../../scripts/bootstrap/uninstall-failure-matrix.mjs",
     "cli:lifecycle:blackbox": "pnpm --filter @horseness/cli exec node --import tsx ../../scripts/bootstrap/cli-lifecycle-blackbox.mjs",
-    "release:docs-lint": "markdownlint-cli2 README.md README.zh.md CHANGELOG.md docs/architecture.md docs/plan.md docs/progress.md docs/progress/C22.md docs/adr/0009-npm-first-release.md docs/release-process.md docs/trust-root.md docs/install.md docs/compatibility.md docs/migrations.md",
+    "release:docs-lint": "markdownlint-cli2 README.md README.zh.md CHANGELOG.md docs/architecture.md docs/plan.md docs/progress.md docs/progress/C22.md docs/adr/0009-npm-first-release.md docs/adr/0010-npm-trusted-publishing.md docs/release-process.md docs/trust-root.md docs/install.md docs/compatibility.md docs/migrations.md",
     "release:coherence": "node scripts/release/coherence.mjs",
     "release:build-twice": "node scripts/release/build-twice.mjs",
     "release:verify-candidate": "node scripts/release/verify-candidate.mjs",
