@@ -1,6 +1,6 @@
 # Horseness
 
-<img src="docs/horseness-carriage.svg" alt="A charioteer guiding six horses together" width="560">
+<img src="docs/horseness-carriage.svg" alt="A Han-dynasty-style stone relief of a charioteer guiding six horses" width="560">
 
 A multi-Agent state machine with version control, evidence gating, and deterministic reconstruction.
 
