@@ -4,9 +4,9 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 
 ## Global status
 
-- **Planning state:** C00–C21 remain complete. C22 is reopened for the user-approved explicit task execution, breakdown, and optional automatic composition correction under ADR 0011; planning review precedes source work. Historical C22 evidence remains unchanged.
-- **Active claims:** none while the execution planning correction is reviewed; the forthcoming C22 claim will be tracker-only.
-- **Next eligible:** C22 execution correction, then C23 after a newly verified candidate, reviewed GitHub main integration, and external npm/GitHub configuration.
+- **Planning state:** C00–C21 remain complete. C22 explicit task execution, breakdown, and optional automatic composition are in progress under reviewed ADR 0011 and planning correction `bcf286a`. Historical C22 evidence remains unchanged.
+- **Active claims:** C22 execution correction only, from reviewed base `bcf286ac743d9ccecef58eedb6dd654e9eacb3b7`; implementation and fresh acceptance are pending.
+- **Next eligible:** finish C22 execution correction, then C23 after a newly verified candidate, reviewed GitHub main integration, and external npm/GitHub configuration.
 - **Active blockers:** C23 is blocked by the reopened product correction and still requires the protected GitHub `release` environment and npm package-level trusted publishers or explicit initial package creation authority. C24/C25 retain their external runner and promotion-authority prerequisites. No remote workflow or public npm mutation was performed.
 - **Last integrated receipt:** immutable C01 `docs/checkpoints/C01/final/1.json`, envelope digest `17ddd75b49e35d3bf6f432c8c6acca30b4a66512229453aca4fc63e7f427ea7d`, indexed at A01 commit `223023330cb000b759d8a8b2419514638c1aa179`; receipt/index bytes must not be overwritten.
 - **Release readiness:** historical candidate `c63b786` passed the recorded C22 gates; it does not establish readiness for the new execution correction. A new candidate and fresh local evidence are required before C23. No public publication, real OIDC exchange/provenance, or new macOS/Windows execution is claimed.
