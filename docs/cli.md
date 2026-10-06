@@ -66,7 +66,7 @@ Pi and OMP require exact `provider/model` identifiers. Claude and Codex require 
 
 Planner mode does not expose writing tools. Codex additionally requires a complete empty native MCP inventory before any model turn; configured, unsupported, or partially enumerated MCP servers refuse execution rather than bypassing the preview-only boundary. Workspace selection is not a new OS sandbox: normal coding tools retain the native host's OS-user privileges and permission behavior.
 
-Attempts use a one-MiB context budget, a one-MiB native output/evidence capture bound, and a five-minute default native deadline. Bounds are not monetary/token-cost guarantees. Successful output and failed/cancelled diagnostic evidence are published before their receipt is referenced. A retained terminal can be reconciled after restart without launching a new native operation; absent terminal evidence remains `unknown_outcome`. There is no automatic duplicate launch, native resume, or host/model fallback.
+Attempts use a one-MiB context budget and a one-MiB native output/evidence capture bound. Default native deadlines are five minutes for Pi/OMP and two minutes for Claude/Codex. Bounds are not monetary/token-cost guarantees. Successful output and failed/cancelled diagnostic evidence are published before their receipt is referenced. A retained terminal can be reconciled after restart without launching a new native operation; absent terminal evidence remains `unknown_outcome`. There is no automatic duplicate launch, native resume, or host/model fallback.
 
 ### Concurrency and interrupted operations
 
