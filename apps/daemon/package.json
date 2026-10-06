@@ -22,9 +22,14 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src --max-warnings=0",
     "test:multiprocess": "node --import tsx --test test/multiprocess.test.ts",
-    "test": "node --import tsx --test test/**/*.test.ts"
+    "test": "node --import tsx --test 'test/**/*.test.ts'"
   },
   "dependencies": {
+    "@horseness/adapter-kit": "workspace:1.0.0",
+    "@horseness/adapter-claude": "workspace:1.0.0",
+    "@horseness/adapter-codex": "workspace:1.0.0",
+    "@horseness/adapter-omp": "workspace:1.0.0",
+    "@horseness/adapter-pi": "workspace:1.0.0",
     "@horseness/domain": "workspace:1.0.0",
     "@horseness/orchestrator": "workspace:1.0.0",
     "@horseness/protocol": "workspace:1.0.0",

@@ -20,12 +20,13 @@ export interface CliWorkspaceV1 {
   readonly workspaceCursor: Extract<CoordinatorCursorV1<"workspace.get.v1">, { kind: "workspace-only" }>;
   readonly currentRunId: string | null;
   readonly runs: Readonly<Record<string, Extract<CoordinatorCursorV1<"run.get.v1">, { kind: "composite" }>>>;
-  readonly pending: null | { readonly command: "run create" | "task add"; readonly title: string; readonly runId: string; readonly taskId?: string; readonly call: CoordinatorCallV1 };
+  readonly pending: null | { readonly command: string; readonly title: string; readonly runId: string; readonly taskId?: string; readonly fingerprint?: string; readonly call: CoordinatorCallV1 };
 }
 export interface CliWorkspaceSessionV1 {
   readonly state: CliWorkspaceV1;
   readonly client: CoordinatorClientV1;
   save(next: CliWorkspaceV1): void;
+  replaceGrant(reference: string): void;
 }
 export class CliWorkspaceErrorV1 extends Error {
   constructor(readonly code: "WORKSPACE_NOT_INITIALIZED" | "WORKSPACE_STATE_INVALID" | "WORKSPACE_BUSY" | "WORKSPACE_INIT_FAILED" | "WORKSPACE_OPTION_INVALID", message: string) { super(message); this.name = "CliWorkspaceErrorV1"; }
@@ -73,7 +74,10 @@ function validate(state: CliWorkspaceV1, root: string): void {
   if (typeof state !== "object" || state === null || state.schemaVersion !== "1" || state.workspacePath !== root || !nonempty(state.workspaceId) || !nonempty(state.principalId) || !nonempty(state.daemonExecutable) || state.endpointPath !== join(root, DIRECTORY, "daemon.sock") || state.databasePath !== join(root, DIRECTORY, "authority.sqlite") || state.artifactRoot !== join(root, DIRECTORY, "artifacts") || state.grantReferenceFile !== join(root, DIRECTORY, GRANT) || !cursor(state.workspaceCursor, state.workspaceId)) return fail("WORKSPACE_STATE_INVALID", "workspace metadata binding is invalid; do not reinitialize this workspace");
   if (typeof state.runs !== "object" || state.runs === null || Array.isArray(state.runs) || !Object.entries(state.runs).every(([id, value]) => nonempty(id) && cursor(value, state.workspaceId, id)) || (state.currentRunId !== null && (!nonempty(state.currentRunId) || !Object.hasOwn(state.runs, state.currentRunId)))) return fail("WORKSPACE_STATE_INVALID", "saved run context is invalid");
   const pending = state.pending;
-  if (pending !== null && (typeof pending !== "object" || !["run create", "task add"].includes(pending.command) || !nonempty(pending.title) || !nonempty(pending.runId) || (pending.command === "task add" && !nonempty(pending.taskId)) || !pending.call || pending.call.workspaceId !== state.workspaceId || pending.call.runId !== pending.runId || pending.call.method !== (pending.command === "run create" ? "run.create.v1" : "task.create.v1") || !nonempty(pending.call.idempotencyKey) || (pending.command === "run create" ? !(pending.call.observationCursor.kind === "absent-run-genesis" && pending.call.observationCursor.runId === pending.runId && pending.call.observationCursor.expectedRunHead === "absent" && cursor({ ...pending.call.observationCursor, kind: "workspace-only" }, state.workspaceId)) : !cursor(pending.call.observationCursor, state.workspaceId, pending.runId)))) return fail("WORKSPACE_STATE_INVALID", "pending request binding is invalid");
+  const methods: Readonly<Record<string, string>> = { "run create": "run.create.v1", "task add": "task.create.v1", "task dispatch": "task.dispatch.v1", "task breakdown": "task.breakdown.v1", "task adopt": "task.adoptPlan.v1", "task execute": "task.execute.v1", "task cancel": "task.cancel.v1", "workspace enable-execution": "grant.issue.v1" };
+  if (pending !== null && (typeof pending !== "object" || !Object.hasOwn(methods, pending.command) || !nonempty(pending.title) || !pending.call || pending.call.workspaceId !== state.workspaceId || pending.call.method !== methods[pending.command] || !nonempty(pending.call.idempotencyKey) || (pending.fingerprint !== undefined && !nonempty(pending.fingerprint)))) return fail("WORKSPACE_STATE_INVALID", "pending request binding is invalid");
+  if (pending !== null && (pending.command === "workspace enable-execution" ? !cursor(pending.call.observationCursor, state.workspaceId) : !nonempty(pending.runId) || pending.call.runId !== pending.runId || (pending.command === "run create" ? !(pending.call.observationCursor.kind === "absent-run-genesis" && pending.call.observationCursor.runId === pending.runId && pending.call.observationCursor.expectedRunHead === "absent" && cursor({ ...pending.call.observationCursor, kind: "workspace-only" }, state.workspaceId)) : !cursor(pending.call.observationCursor, state.workspaceId, pending.runId)))) return fail("WORKSPACE_STATE_INVALID", "pending request scope is invalid");
+  if (pending !== null && pending.command.startsWith("task ") && (!nonempty(pending.taskId) || pending.call.taskId !== pending.taskId || (pending.command !== "task add" && !nonempty(pending.fingerprint)))) return fail("WORKSPACE_STATE_INVALID", "pending task identity is invalid");
 }
 function readState(root: string): CliWorkspaceV1 {
   const path = join(stateDirectory(root), STATE);
@@ -131,7 +135,15 @@ export async function withCliWorkspaceV1<T>(invocation: CliInvocationV1, callbac
   const root = discover(invocation, false);
   return lockWorkspace(root, async () => {
     let state = readState(root);
-    const session: CliWorkspaceSessionV1 = { get state() { return state; }, client: client(state), save(next) { saveState(next, root); state = next; } };
+    const session: CliWorkspaceSessionV1 = { get state() { return state; }, client: client(state), save(next) { saveState(next, root); state = next; }, replaceGrant(reference) {
+      if (!/^grant:[A-Za-z0-9-]+$/u.test(reference)) return fail("WORKSPACE_STATE_INVALID", "issued workspace grant reference is invalid");
+      assertFile(state.grantReferenceFile);
+      const temporary = join(stateDirectory(root), `.cli-grant.${randomUUID()}.tmp`);
+      const descriptor = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+      try { writeFileSync(descriptor, reference); fsyncSync(descriptor); } finally { closeSync(descriptor); }
+      try { renameSync(temporary, state.grantReferenceFile); const directory = openSync(stateDirectory(root), constants.O_RDONLY | constants.O_DIRECTORY); try { fsyncSync(directory); } finally { closeSync(directory); } }
+      finally { if (entryExists(temporary)) rmSync(temporary); }
+    } };
     return callback(session);
   });
 }

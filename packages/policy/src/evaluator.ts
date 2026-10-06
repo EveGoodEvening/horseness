@@ -49,6 +49,16 @@ export interface AdmissionEvaluationV1 {
   pinnedPolicyDigest: string; currentPolicyDigest: string; evaluationObservationCursor: CompositeCursorV1; authorityTime: string;
 }
 
+type RuleEvaluationInputV1 = Pick<AdmissionEvaluationInputV1, "action" | "paths" | "version" | "evidence">;
+export interface ExecutionPolicyInputV1 extends RuleEvaluationInputV1 {
+  schemaVersion: "1";
+  intentDigest: string;
+  pinnedPolicy: PolicySlotV1;
+  currentPolicy: PolicySlotV1;
+  evaluationClock: EvaluationClockV1;
+}
+export interface ExecutionPolicyEvaluationV1 extends AdmissionEvaluationV1 { intentDigest: string }
+
 const RESULT_RANK: Record<Exclude<AdmissionResult, "conflicted">, number> = { accepted: 0, approval_required: 1, quarantined: 2, rejected: 3 };
 function fail(code: string): never { throw new DomainError(code); }
 function exact(value: unknown, keys: readonly string[], code: string): Record<string, unknown> {
@@ -81,7 +91,7 @@ function normalizeDecision(value: PolicyDecisionV1): PolicyDecisionV1 {
   return { result: value.result, constraints: [...new Set(value.constraints)].sort(compareUtf8), explanations: sortExplanations(value.explanations as AdmissionExplanationV1[]) };
 }
 function subjectKey(rule: PolicyRuleV1): string { return `${rule.subject.action ?? "*"}|${rule.subject.pathPrefix ?? "*"}|${rule.subject.version ?? "*"}`; }
-function applies(rule: PolicyRuleV1, input: AdmissionEvaluationInputV1): boolean {
+function applies(rule: PolicyRuleV1, input: RuleEvaluationInputV1): boolean {
   if (rule.subject.action !== null && rule.subject.action !== input.action) return false;
   if (rule.subject.version !== null && rule.subject.version !== input.version) return false;
   if (rule.subject.pathPrefix === null) return true;
@@ -91,7 +101,7 @@ function applies(rule: PolicyRuleV1, input: AdmissionEvaluationInputV1): boolean
 function decision(result: Exclude<AdmissionResult, "conflicted">, constraints: string[], explanations: AdmissionExplanationV1[]): PolicyDecisionV1 {
   return normalizeDecision({ result, constraints, explanations });
 }
-function evaluateDocument(document: PolicySlotV1, input: AdmissionEvaluationInputV1): PolicyDecisionV1 {
+function evaluateDocument(document: PolicySlotV1, input: RuleEvaluationInputV1): PolicyDecisionV1 {
   const parsed = parsePolicySlotV1(document); const digest = policySlotDigest(parsed);
   if ("kind" in parsed) return decision("accepted", [], [{ policyDigest: NO_POLICY_DIGEST, ruleId: "NO_POLICY", subject: "*", result: "accepted", code: "NO_POLICY" }]);
   const outcomes: Exclude<AdmissionResult, "conflicted">[] = []; const constraints: string[] = []; const explanations: AdmissionExplanationV1[] = [];
@@ -135,17 +145,40 @@ function approvalDecision(input: AdmissionEvaluationInputV1, combined: PolicyDec
   const explanations = combined.explanations.map((item) => item.result === "approval_required" ? { ...item, result: "accepted" as const, code: "APPROVAL_SATISFIED" } : item) as AdmissionExplanationV1[];
   return decision(explanations.some((item) => item.result === "rejected") ? "rejected" : explanations.some((item) => item.result === "quarantined") ? "quarantined" : "accepted", combined.constraints, explanations);
 }
-export function parseAdmissionEvaluationInputV1(value: unknown): AdmissionEvaluationInputV1 {
-  const input = exact(value, ["schemaVersion","proposalDigest","proposalAuthorPrincipalId","baseRevision","baseStateHash","action","paths","version","pinnedPolicy","currentPolicy","evidence","snapshots","evaluationClock","approval","preconditionConflict"], "POLICY_INPUT_INVALID");
-  if (input.schemaVersion !== "1") fail("POLICY_VERSION_UNSUPPORTED"); [input.proposalDigest,input.proposalAuthorPrincipalId,input.baseStateHash,input.action,input.version].forEach((item) => text(item,"POLICY_INPUT_INVALID")); natural(input.baseRevision,"POLICY_INPUT_INVALID");
+function validatePolicySubject(input: Record<string, unknown>): void {
+  text(input.action, "POLICY_INPUT_INVALID"); text(input.version, "POLICY_INPUT_INVALID");
   if (!Array.isArray(input.paths) || input.paths.length === 0) fail("POLICY_INPUT_INVALID");
   const paths = input.paths as unknown[];
   if (paths.some((path) => { if (typeof path !== "string") return true; try { validatePointer(path); return false; } catch { return true; } }) || new Set(paths).size !== paths.length || paths.some((path,index)=>index>0&&compareUtf8(paths[index-1] as string,path as string)>=0)) fail("POLICY_INPUT_INVALID");
   parsePolicySlotV1(input.pinnedPolicy); parsePolicySlotV1(input.currentPolicy);
   if (!Array.isArray(input.evidence)) fail("POLICY_INPUT_INVALID"); const evidenceIds = new Set<string>(); let previousEvidenceId: string | undefined;
   for (const evidence of input.evidence) { const item=exact(evidence,["evidenceId","digest","path","version"],"POLICY_INPUT_INVALID"); [item.evidenceId,item.digest,item.version].forEach((part)=>text(part,"POLICY_INPUT_INVALID")); try { validatePointer(item.path as string); } catch { fail("POLICY_INPUT_INVALID"); } const id=item.evidenceId as string; if(evidenceIds.has(id)||(previousEvidenceId!==undefined&&compareUtf8(previousEvidenceId,id)>=0)) fail("POLICY_INPUT_INVALID"); evidenceIds.add(id); previousEvidenceId=id; }
+}
+function validateEvaluationClock(value: unknown): void {
+  const clock=exact(value,["schemaVersion","authorityTime","observationCursor"],"POLICY_CLOCK_INVALID");
+  if(clock.schemaVersion!=="1") fail("POLICY_VERSION_UNSUPPORTED");
+  canonicalSecond(clock.authorityTime,"POLICY_CLOCK_INVALID"); composite(clock.observationCursor);
+}
+
+/** Apply the same pinned/current rules without inventing a canonical proposal. */
+export function evaluateExecutionPolicy(value: ExecutionPolicyInputV1): ExecutionPolicyEvaluationV1 {
+  const input = exact(value, ["schemaVersion", "intentDigest", "action", "paths", "version", "pinnedPolicy", "currentPolicy", "evidence", "evaluationClock"], "POLICY_INPUT_INVALID");
+  if (input.schemaVersion !== "1") fail("POLICY_VERSION_UNSUPPORTED");
+  text(input.intentDigest, "POLICY_INPUT_INVALID");
+  validatePolicySubject(input); validateEvaluationClock(input.evaluationClock);
+  const combined = normalizeDecision(combinePolicyDecisions(evaluateDocument(value.pinnedPolicy, value), evaluateDocument(value.currentPolicy, value)));
+  return { schemaVersion: "1", intentDigest: value.intentDigest, result: combined.result,
+    constraints: combined.constraints, explanations: combined.explanations as AdmissionExplanationV1[],
+    pinnedPolicyDigest: policySlotDigest(value.pinnedPolicy), currentPolicyDigest: policySlotDigest(value.currentPolicy),
+    evaluationObservationCursor: composite(value.evaluationClock.observationCursor), authorityTime: value.evaluationClock.authorityTime };
+}
+
+export function parseAdmissionEvaluationInputV1(value: unknown): AdmissionEvaluationInputV1 {
+  const input = exact(value, ["schemaVersion","proposalDigest","proposalAuthorPrincipalId","baseRevision","baseStateHash","action","paths","version","pinnedPolicy","currentPolicy","evidence","snapshots","evaluationClock","approval","preconditionConflict"], "POLICY_INPUT_INVALID");
+  if (input.schemaVersion !== "1") fail("POLICY_VERSION_UNSUPPORTED"); [input.proposalDigest,input.proposalAuthorPrincipalId,input.baseStateHash].forEach((item) => text(item,"POLICY_INPUT_INVALID")); natural(input.baseRevision,"POLICY_INPUT_INVALID");
+  validatePolicySubject(input);
   const snapshots=exact(input.snapshots,["issueObservationCursor","evaluationObservationCursor","expectedGrantDigest","observedGrantDigest","expectedQuotaDigest","observedQuotaDigest","quotaAvailable","authenticatedApproverPrincipalId"],"POLICY_INPUT_INVALID"); composite(snapshots.issueObservationCursor); composite(snapshots.evaluationObservationCursor); [snapshots.expectedGrantDigest,snapshots.observedGrantDigest,snapshots.expectedQuotaDigest,snapshots.observedQuotaDigest,snapshots.authenticatedApproverPrincipalId].forEach((item)=>text(item,"POLICY_INPUT_INVALID")); if(typeof snapshots.quotaAvailable!=="boolean") fail("POLICY_INPUT_INVALID");
-  const clock=exact(input.evaluationClock,["schemaVersion","authorityTime","observationCursor"],"POLICY_CLOCK_INVALID"); if(clock.schemaVersion!=="1") fail("POLICY_VERSION_UNSUPPORTED"); canonicalSecond(clock.authorityTime,"POLICY_CLOCK_INVALID"); composite(clock.observationCursor);
+  validateEvaluationClock(input.evaluationClock);
   if (input.approval !== null) { const approval=exact(input.approval,["schemaVersion","approvalId","proposalDigest","baseRevision","baseStateHash","pinnedPolicyDigest","currentPolicyDigest","approverPrincipalId","approverGrantDigest","allowedAction","issueObservationCursor","evaluationObservationCursor","issuedAt","expiresAt"],"POLICY_APPROVAL_INVALID"); if(approval.schemaVersion!=="1") fail("POLICY_VERSION_UNSUPPORTED"); [approval.approvalId,approval.proposalDigest,approval.baseStateHash,approval.pinnedPolicyDigest,approval.currentPolicyDigest,approval.approverPrincipalId,approval.approverGrantDigest,approval.allowedAction].forEach((item)=>text(item,"POLICY_APPROVAL_INVALID")); natural(approval.baseRevision,"POLICY_APPROVAL_INVALID"); composite(approval.issueObservationCursor); composite(approval.evaluationObservationCursor); canonicalSecond(approval.issuedAt,"POLICY_APPROVAL_INVALID"); canonicalSecond(approval.expiresAt,"POLICY_APPROVAL_INVALID"); if(Date.parse(approval.issuedAt as string)>=Date.parse(approval.expiresAt as string)) fail("POLICY_APPROVAL_INVALID"); }
   if (input.preconditionConflict !== null) text(input.preconditionConflict,"POLICY_INPUT_INVALID"); return value as AdmissionEvaluationInputV1;
 }

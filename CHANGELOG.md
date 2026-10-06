@@ -4,6 +4,9 @@ This project follows semantic versioning. Release notes describe the public pack
 
 ## 1.0.0 — Unreleased
 
+- Added explicit native `task dispatch/show`, planner `task breakdown/adopt`, dependency-aware `task execute`, opt-in automatic planning, cancellation, and explicit existing-workspace execution authorization. `task add` remains draft-only.
+- Added immutable native execution profiles, durable launch intent and planner-result identity, authenticated output/evidence receipts, pre-handoff cancellation, and fail-closed unknown-outcome recovery without duplicate launches.
+- Bound execution to current grant lineage, adapter scope, policy and authority observations; restricted receipt artifact references to the producing attempt and gated Codex turns on an empty complete MCP inventory.
 - Added project-local `init`, `run create/list/use`, `task add/list`, and `status` workflows with readable help, generated IDs, authoritative cursor reads, and persisted exact mutation requests for explicit recovery.
 - Added durable draft-task events and run/task listing without advancing canonical revision; stale writes and authorization failures remain fail-closed.
 - Fixed CLI and daemon launchers to resolve their TypeScript loader from the installed package rather than the caller's working directory.

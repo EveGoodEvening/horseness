@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { createBindingGuard, deliverWorkerReturn, parseCredentialReferenceV1, parseDoctorProbeResultV1, parseInstallContributionV1, SecureWorkerAdapterV1, type CredentialReferenceV1, type InstallContributionV1, type WorkerReturnClientV1, type WorkerReturnDeliveryAuthorityV1, type WorkerReturnDeliveryStepV1 } from "@horseness/adapter-kit";
 import { sealAttemptReceipt, type AttemptReceiptEnvelopeV1, type JsonValue, type ProposalEnvelopeV1 } from "@horseness/domain";
 import type { AdapterCapabilitiesV1, AdapterCancelRequestV1, AdapterLaunchRequestV1, AdapterOperationResultV1, AdapterReconcileRequestV1, AdapterResumeRequestV1, BoundAdapterOperationV1, DoctorProbeResultV1, NativePackageMetadataV1, WorkerAdapterV1, WorkerReturnV1 } from "@horseness/protocol";
+export { createCodexTaskAdapterV1, resolveCodexTaskProfileV1 } from "./task-runtime.js";
 
 export const ADAPTER_CODEX_PACKAGE = "@horseness/adapter-codex" as const;
 export const CODEX_ADAPTER_ID = "horseness-codex-v1" as const;
@@ -81,6 +82,7 @@ export interface CodexNativeAttemptV1 {
 }
 
 export interface CodexNativeRuntimeV1 {
+  detectCapabilities?(): Promise<AdapterCapabilitiesV1>;
   launch(request: Readonly<AdapterLaunchRequestV1>): Promise<CodexNativeAttemptV1>;
   cancel(request: Readonly<AdapterCancelRequestV1>): Promise<CodexNativeAttemptV1 | null>;
   reconcile(request: Readonly<AdapterReconcileRequestV1>): Promise<CodexNativeAttemptV1 | null>;
@@ -600,6 +602,7 @@ class CodexWorkerAdapterV1 implements WorkerAdapterV1 {
   }
 
   async detectCapabilities(): Promise<AdapterCapabilitiesV1> {
+    if (this.#runtime.detectCapabilities) return this.#runtime.detectCapabilities();
     return { schemaVersion: "1", adapterId: CODEX_ADAPTER_ID, providerId: CODEX_PROVIDER_ID, launch: true, cancel: true, reconcile: "supported", reattach: "supported", nativeResume: "supported", contextInjection: "native", receiptCollection: true, maxContextBytes: 1_048_576, outputMediaTypes: ["text/plain", "application/json"], evidenceMediaTypes: ["application/json"] };
   }
 

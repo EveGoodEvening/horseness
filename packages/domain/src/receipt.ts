@@ -1,5 +1,6 @@
 import { assertJsonValue, deepClone, digestId, domainDigest, DomainError, type JsonValue } from "./canonical.js";
 import { parseDomainEventPayloadV1, verifyEventChain, type EventEnvelopeV1, type HashedEventEnvelopeV1 } from "./events.js";
+import { emptyTaskExecutionProjectionV1, reduceTaskExecutionV1, parseTaskExecutionEventV1, TASK_EXECUTION_EVENT_TYPES_V1, type TaskExecutionProjectionV1, type TaskExecutionEventV1 } from "./execution.js";
 
 export interface ReceiptEvidenceV1 { digest: string; mediaType: string; size: number }
 export interface AttemptReceiptCoreV1 { schemaVersion: "1"; workspaceId: string; runId: string; taskId: string; attemptId: string; generation: number; attemptContextBindingDigest: string; contextManifestCoreDigest: string; forkPinDigest: string; providerId: string; providerOperationId: string; providerIdempotencyKeyDigest: string; producerPrincipalId: string; producerGrantDigest: string; adapterId: string; adapterVersion: string; hostId: string; hostVersion: string; outcome: "succeeded" | "failed" | "cancelled"; startedAt: string; finishedAt: string; outputDigest: string | null; evidence: readonly ReceiptEvidenceV1[]; provenance: JsonValue; nonce: string }
@@ -141,7 +142,9 @@ export function deterministicWorkspaceReplay(events: readonly HashedEventEnvelop
 }
 
 export interface RunOperationalState { workspaceId: string; runId: string; eventCount: number; proposals: Readonly<Record<string, { status: "submitted" | "accepted" | "rejected" | "conflicted" | "quarantined" | "approval_required"; proposalDigest: string; provenanceDigest?: string; artifactDigest?: string }>>; receipts: Readonly<Record<string, { receiptDigest: string; outcome: "succeeded" | "failed" | "cancelled" }>>; tasks: Readonly<Record<string, { title: string; completionPolicy: { schemaVersion: "1"; kind: "predicate"; predicate: { kind: "receipt-only" } } }>>; taskStates: Readonly<Record<string, "succeeded" | "failed" | "cancelled">>; contextEpoch: number; lastEventSequence: number }
+export interface RunOperationalState { execution: TaskExecutionProjectionV1 }
 export type RunOperationalEvent =
+  | (TaskExecutionEventV1 & { sequence: number })
   | { eventType: "RunCreatedV1"; sequence: number; workspaceId: string; runId: string }
   | { eventType: "TaskCreatedV1"; sequence: number; workspaceId: string; runId: string; taskId: string; title: string; completionPolicy: { schemaVersion: "1"; kind: "predicate"; predicate: { kind: "receipt-only" } } }
   | { eventType: "ProposalSubmittedV1"; sequence: number; workspaceId: string; runId: string; proposalId: string; proposalDigest: string }
@@ -153,16 +156,26 @@ export type RunOperationalEvent =
 export function reduceOperationalState(state: RunOperationalState | null, event: RunOperationalEvent): RunOperationalState {
   if (event.eventType === "RunCreatedV1") {
     if (state !== null || event.sequence !== 1) throw new DomainError("INVALID_GENESIS");
-    return { workspaceId: event.workspaceId, runId: event.runId, eventCount: 1, proposals: {}, receipts: {}, tasks: {}, taskStates: {}, contextEpoch: 0, lastEventSequence: 1 };
+    return { workspaceId: event.workspaceId, runId: event.runId, eventCount: 1, proposals: {}, receipts: {}, tasks: {}, taskStates: {}, execution: emptyTaskExecutionProjectionV1(), contextEpoch: 0, lastEventSequence: 1 };
   }
   if (state === null) throw new DomainError("INVALID_GENESIS");
   if (event.workspaceId !== state.workspaceId || event.runId !== state.runId) throw new DomainError("AGGREGATE_IDENTITY_MISMATCH");
   if (event.sequence !== state.lastEventSequence + 1) throw new DomainError("EVENT_SEQUENCE_INVALID");
   const next: RunOperationalState = { ...state, eventCount: state.eventCount + 1, proposals: { ...state.proposals }, receipts: { ...state.receipts }, tasks: { ...state.tasks }, taskStates: { ...state.taskStates }, contextEpoch: state.contextEpoch + 1, lastEventSequence: event.sequence };
+  if ((TASK_EXECUTION_EVENT_TYPES_V1 as readonly string[]).includes(event.eventType)) {
+    const { sequence, ...payload } = event;
+    const execution = reduceTaskExecutionV1(state.execution, parseTaskExecutionEventV1(payload), sequence);
+    const tasks = Object.fromEntries(Object.values(execution.contracts).map(t => [t.taskId, { title: t.title, completionPolicy: t.completionPolicy }]));
+    const taskStates = Object.fromEntries(Object.entries(execution.lifecycles).filter(([, lifecycle]) => lifecycle === "succeeded" || lifecycle === "failed" || lifecycle === "cancelled")) as RunOperationalState["taskStates"];
+    return { ...next, execution, tasks, taskStates: { ...next.taskStates, ...taskStates } };
+  }
   switch (event.eventType) {
     case "TaskCreatedV1": {
       if (Object.hasOwn(next.tasks, event.taskId)) throw new DomainError("TASK_IDENTITY_CONFLICT");
-      return { ...next, tasks: { ...next.tasks, [event.taskId]: { title: event.title, completionPolicy: event.completionPolicy } } };
+      const contract = { schemaVersion: "2" as const, taskId: event.taskId, title: event.title, instructions: event.title, acceptanceCriteria: [], kind: "work" as const, sourceTaskId: null, completionPolicy: event.completionPolicy };
+      // Historical V1 titles retain their original validation, rather than new-write V2 restrictions.
+      const execution = { ...state.execution, contracts: { ...state.execution.contracts, [event.taskId]: contract }, lifecycles: { ...state.execution.lifecycles, [event.taskId]: "draft" as const } };
+      return { ...next, execution, tasks: { ...next.tasks, [event.taskId]: { title: event.title, completionPolicy: event.completionPolicy } } };
     }
     case "ProposalSubmittedV1": {
       const existing = next.proposals[event.proposalId];
@@ -194,7 +207,9 @@ export function reduceOperationalState(state: RunOperationalState | null, event:
       const existing = next.taskStates[event.taskId];
       if (existing !== undefined && existing !== event.resolution) throw new DomainError("TASK_IDENTITY_CONFLICT");
       if (existing !== undefined) throw new DomainError("DUPLICATE_TASK_TRANSITION");
-      return { ...next, taskStates: { ...next.taskStates, [event.taskId]: event.resolution } };
+      const execution = { ...next.execution, lifecycles: { ...next.execution.lifecycles } };
+      if (execution.contracts[event.taskId]) execution.lifecycles[event.taskId] = event.resolution;
+      return { ...next, execution, taskStates: { ...next.taskStates, [event.taskId]: event.resolution } };
     }
     case "ForkCreatedV1": case "ContextManifestPublishedV1": return next;
     default: throw new DomainError("UNSUPPORTED_EVENT_TYPE");
@@ -218,6 +233,12 @@ export function deterministicReplay(events: readonly HashedEventEnvelopeV1<unkno
     const envelope: EventEnvelopeV1<unknown> = item.envelope;
     const payload = record(envelope.payload);
     const common = { sequence: envelope.sequence, workspaceId: envelope.workspaceId, runId: envelope.streamId };
+    if ((TASK_EXECUTION_EVENT_TYPES_V1 as readonly string[]).includes(envelope.eventType)) {
+      const event = parseTaskExecutionEventV1(payload);
+      if (event.eventType !== envelope.eventType || event.workspaceId !== envelope.workspaceId || event.runId !== envelope.streamId) throw new DomainError("MALFORMED_EVENT");
+      operational = reduceOperationalState(operational, { ...event, sequence: envelope.sequence });
+      continue;
+    }
     switch (envelope.eventType) {
       case "RunCreatedV1": {
         if (text(payload.workspaceId) !== envelope.workspaceId || text(payload.runId) !== envelope.streamId || payload.canonicalizerVersion !== "jcs-v1" || payload.hashVersion !== "sha256-v1") throw new DomainError("MALFORMED_EVENT");

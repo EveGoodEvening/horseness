@@ -19,12 +19,59 @@ Subsequent workflow commands discover the nearest initialized ancestor, so they 
 
 Run creation selects the new run as `current`. Use `horseness run list` and `horseness run use --run ID` to revisit an existing run. `task add` and `task list` default to `--run current`; an explicit run ID does not change that selection. A new task is a durable **draft**, with a frozen receipt-only completion predicate. Adding it does not launch a worker or change the canonical document revision.
 
-No daily command requires cursor JSON, protocol versions, principal IDs, entity IDs, or idempotency keys. The CLI obtains authoritative observations and builds exact versioned requests internally. Workspace selection and run observations live in owner-only `.horseness/cli-workspace.v1.json`; the opaque grant reference is stored separately. This file is client context, never canonical authority.
+### Explicit execution, planning and cancellation
+
+All task commands below accept `--run current|ID`, `--workspace PATH` and `--json`. Use `task list` to find the task ID; creating a task remains draft-only.
+
+```sh
+horseness task dispatch --task TASK_ID --adapter pi --model PROVIDER/MODEL
+horseness task show --task TASK_ID
+horseness task breakdown --task TASK_ID --planner claude --model CONCRETE_MODEL
+horseness task show --task TASK_ID
+horseness task adopt --task TASK_ID --plan PLAN_DIGEST
+horseness task execute --task TASK_ID --adapter pi --model PROVIDER/MODEL
+horseness task cancel --task TASK_ID
+```
+
+`dispatch` explicitly starts one native attempt. Supported hosts are `pi`, `omp`, `claude` and `codex`; no host or model is silently substituted. Omit `--model` only when the daemon can resolve a concrete configured default through supported non-secret metadata; otherwise `MODEL_REQUIRED` requests a concrete model. Missing runtime, access, policy or quota fails explicitly. The CLI only calls the daemon protocol; it never starts native workers itself.
+
+`dispatch`, `breakdown` and `execute` return a **durable acknowledgement**, not a completed task or successful worker result. There is no CLI polling loop. `task show` observes dependencies, schedulability, attempt generation/state and authenticated receipt/output digests, published output, plan preview and workflow state/reason. Only authority-backed task resolution means completion; prose and a start acknowledgement do not. Unknown outcomes must be inspected, never implicitly relaunched.
+
+`breakdown` runs a separate planner; it does not activate or complete the objective, adopt children or launch their work. Inspect the preview's instructions, human acceptance criteria and dependency keys, then explicitly `adopt` its exact digest. Adoption checks the unchanged draft source contract and creates its dependency graph atomically. The objective remains the final integration task, depending on terminal child tasks. Invalid planner output is rejected, not converted into fake tasks. Human-language acceptance criteria are guidance, not claimed automatic semantic verification.
+
+`execute` durably authorizes **serial dependency-ordered execution** of the exact target closure. Optional automatic planning/adoption is explicit:
+
+```sh
+horseness task execute --task TASK_ID --adapter pi --model PROVIDER/MODEL \
+  --auto-plan --planner claude --planner-model CONCRETE_PLANNER_MODEL
+```
+
+`--auto-plan` is a valueless flag, defaults off and is invalid on other commands. `--planner` defaults to the execution adapter. With the same adapter, omitted `--planner-model` reuses the chosen execution model; a different planner host never inherits another host's model selection and needs its own concrete model if no safe default is available. Planner flags require `--auto-plan`. Automatic authorization does not bypass grants, policy, quota, dependencies or cancellation; execution stops on failed dependencies, denial or unknown outcome. `cancel` durably stops the target/workflow's future launches, including after restart; it is not a claim that already handed-off external work was undone.
+
+Existing initialized workspace grants are not upgraded by `init`. An owner whose current authority grant permits `grant.issue.v1` can explicitly request a same-principal replacement:
+
+```sh
+horseness workspace enable-execution
+```
+
+This inspects the current grant through `grant.list.v1`, preserves its identity, scope and expiry, and adds the task observation/execution methods through `grant.issue.v1`. Nonauthority callers are denied. The opaque issued reference is atomically replaced and fsynced in its owner-only file, never printed. This command grants access; it launches no model or task.
+
+Daily workflows generate creation/operation IDs and obtain cursors internally; users select reported task/run IDs and reviewed plan digests, not protocol JSON or caller-generated idempotency keys. Workspace selection and run observations live in owner-only `.horseness/cli-workspace.v1.json`; the opaque grant reference is stored separately. This file is client context, never canonical authority.
+
+### Native runtime prerequisites
+
+The concrete bridges verify the pinned distribution before execution: Pi `0.73.1`, OMP `17.2.15`, Claude Code `2.1.228`, and Codex `0.144.1-linux-x64`. A newer installed binary is not silently accepted. The owner daemon may select a verified executable with `HORSENESS_PI_EXECUTABLE`, `HORSENESS_OMP_EXECUTABLE`, `HORSENESS_CLAUDE_EXECUTABLE`, or `HORSENESS_CODEX_EXECUTABLE`; these are daemon configuration, never planner-provided options. Pi/OMP use the pinned distribution's `dist/cli.js` entrypoint. Starting a daemon does not install or upgrade native hosts.
+
+Pi and OMP require exact `provider/model` identifiers. Claude and Codex require concrete native model IDs. Native identity, model, permission mode, time/output bounds, and context are frozen before handoff and checked against native observations. Authenticate through the host's own normal session/configuration; Horseness does not inspect or copy native authentication stores. Native subprocesses receive an allowlisted environment, not ambient provider-secret or executable-preload variables.
+
+Planner mode does not expose writing tools. Codex additionally requires a complete empty native MCP inventory before any model turn; configured, unsupported, or partially enumerated MCP servers refuse execution rather than bypassing the preview-only boundary. Workspace selection is not a new OS sandbox: normal coding tools retain the native host's OS-user privileges and permission behavior.
+
+Attempts use a one-MiB context budget, a one-MiB native output/evidence capture bound, and a five-minute default native deadline. Bounds are not monetary/token-cost guarantees. Successful output and failed/cancelled diagnostic evidence are published before their receipt is referenced. A retained terminal can be reconciled after restart without launching a new native operation; absent terminal evidence remains `unknown_outcome`. There is no automatic duplicate launch, native resume, or host/model fallback.
 
 ### Concurrency and interrupted operations
 
 - Stale observations and denied operations fail explicitly with stable codes and an actionable message. The CLI never silently refreshes and retries a mutation.
-- Before sending a mutation, the CLI durably saves its complete request, generated IDs, cursor, and key. A connection interruption leaves this pending operation intact. Inspect `horseness status`, then explicitly repeat the same command and title to recover its exact result without creating another entity. A different mutation or run switch is blocked until that pending operation is resolved.
+- Before sending a mutation, the CLI durably saves its complete request, generated IDs, cursor, key and normalized execution option fingerprint. A connection interruption leaves it intact. Inspect `horseness status` or `task show`, then explicitly repeat the exact command/options to recover its result without duplicating authorization or external work. Changed task, run, adapter, model, plan or automatic/planner flags cannot replay the original request. Queries remain available while pending; another mutation or run switch is blocked. A verified definitive rejection clears pending state, but an unverified response retains it.
 - Concurrent CLI operations on one workspace fail with `WORKSPACE_BUSY`. If a CLI process was forcibly killed, confirm no workspace command is active before removing only `.horseness/cli-workspace.v1.lock`; retain the context and repeat the original command. Stale locks are not automatically removed because concurrent reclaimers could otherwise delete a live lock.
 - Never delete `.horseness` to fix access problems. It contains durable authority state. Existing pre-workflow workspaces continue to use explicit low-level commands; `init` does not silently adopt their authority or broaden their grants.
 
@@ -51,7 +98,7 @@ Pass `--json` to any command for one canonical JSON object followed by a newline
 
 Exit status is stable:
 
-- `0`: complete success
+- `0`: successful command (execution mutations acknowledge durable acceptance, not task completion)
 - `1`: operational failure
 - `2`: invalid invocation, option, or command
 - `3`: partial per-host success

@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { createBindingGuard, deliverWorkerReturn, parseCredentialReferenceV1, parseDoctorProbeResultV1, parseInstallContributionV1, SecureWorkerAdapterV1, type CredentialReferenceV1, type InstallContributionV1, type WorkerReturnClientV1, type WorkerReturnDeliveryAuthorityV1, type WorkerReturnDeliveryStepV1 } from "@horseness/adapter-kit";
 import { sealAttemptReceipt, type AttemptReceiptEnvelopeV1, type JsonValue, type ProposalEnvelopeV1 } from "@horseness/domain";
 import type { AdapterCapabilitiesV1, AdapterCancelRequestV1, AdapterLaunchRequestV1, AdapterOperationResultV1, AdapterReconcileRequestV1, AdapterResumeRequestV1, BoundAdapterOperationV1, DoctorProbeResultV1, NativePackageMetadataV1, WorkerAdapterV1, WorkerReturnV1 } from "@horseness/protocol";
+export { createClaudeTaskAdapterV1, resolveClaudeTaskProfileV1 } from "./task-runtime.js";
 
 export const ADAPTER_CLAUDE_PACKAGE = "@horseness/adapter-claude" as const;
 export const CLAUDE_ADAPTER_ID = "horseness-claude-v1" as const;
@@ -81,6 +82,7 @@ export interface ClaudeNativeAttemptV1 {
 }
 
 export interface ClaudeNativeRuntimeV1 {
+  detectCapabilities?(): Promise<AdapterCapabilitiesV1>;
   launch(request: Readonly<AdapterLaunchRequestV1>): Promise<ClaudeNativeAttemptV1>;
   cancel(request: Readonly<AdapterCancelRequestV1>): Promise<ClaudeNativeAttemptV1 | null>;
   reconcile(request: Readonly<AdapterReconcileRequestV1>): Promise<ClaudeNativeAttemptV1 | null>;
@@ -534,6 +536,7 @@ class ClaudeWorkerAdapterV1 implements WorkerAdapterV1 {
   }
 
   async detectCapabilities(): Promise<AdapterCapabilitiesV1> {
+    if (this.#runtime.detectCapabilities) return this.#runtime.detectCapabilities();
     return { schemaVersion: "1", adapterId: CLAUDE_ADAPTER_ID, providerId: CLAUDE_PROVIDER_ID, launch: true, cancel: true, reconcile: "supported", reattach: "supported", nativeResume: "supported", contextInjection: "native", receiptCollection: true, maxContextBytes: 1_048_576, outputMediaTypes: ["text/plain", "application/json"], evidenceMediaTypes: ["application/json"] };
   }
 

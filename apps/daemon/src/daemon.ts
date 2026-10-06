@@ -53,7 +53,7 @@ export class Daemon {
     this.grants = new GrantStore(this.authorityValue,this.config.workspaceId,this.config.authorityTime);
     this.bootstrap = new BootstrapCeremony(this.authorityValue, this.config.bootstrapCapabilityPath, this.config.workspaceId, this.config.authorityTime, this.identity);
     this.bootstrap.recoverInterruptedConsumption();
-    this.server = new DaemonServer(this.authorityValue, this.grants);
+    this.server = new DaemonServer(this.authorityValue, this.grants, {workspaceId:this.config.workspaceId,workspacePath:this.config.workspacePath,stateRoot:this.config.stateDirectory,authorityTime:this.config.authorityTime});
   }
 
   get authority():SQLiteAuthority{return this.authorityValue;}
@@ -68,7 +68,7 @@ export class Daemon {
     this.authorityValue=SQLiteAuthority.openAuthenticatedWorkspace(this.config.databasePath,this.config.artifactRoot,{workspaceId:this.config.workspaceId,sessionId:`daemon:${process.pid}:${randomUUID()}`,credential:this.credential}).authority;
     this.grants=new GrantStore(this.authorityValue,this.config.workspaceId,this.config.authorityTime);
     this.bootstrap=new BootstrapCeremony(this.authorityValue,this.config.bootstrapCapabilityPath,this.config.workspaceId,this.config.authorityTime,this.identity);
-    this.server=new DaemonServer(this.authorityValue,this.grants);
+    this.server=new DaemonServer(this.authorityValue,this.grants,{workspaceId:this.config.workspaceId,workspacePath:this.config.workspacePath,stateRoot:this.config.stateDirectory,authorityTime:this.config.authorityTime});
     return result;
   }
 
@@ -76,7 +76,7 @@ export class Daemon {
     if(this.running)throw new Error("stop daemon before workspace rebind");
     this.authorityValue.close();
     this.authorityValue=SQLiteAuthority.openAuthenticatedWorkspace(this.config.databasePath,this.config.artifactRoot,{workspaceId:this.config.workspaceId,sessionId:`daemon:${process.pid}:${randomUUID()}`,credential:this.credential}).authority;
-    this.grants=new GrantStore(this.authorityValue,this.config.workspaceId,this.config.authorityTime);this.bootstrap=new BootstrapCeremony(this.authorityValue,this.config.bootstrapCapabilityPath,this.config.workspaceId,this.config.authorityTime,this.identity);this.server=new DaemonServer(this.authorityValue,this.grants);
+    this.grants=new GrantStore(this.authorityValue,this.config.workspaceId,this.config.authorityTime);this.bootstrap=new BootstrapCeremony(this.authorityValue,this.config.bootstrapCapabilityPath,this.config.workspaceId,this.config.authorityTime,this.identity);this.server=new DaemonServer(this.authorityValue,this.grants,{workspaceId:this.config.workspaceId,workspacePath:this.config.workspacePath,stateRoot:this.config.stateDirectory,authorityTime:this.config.authorityTime});
   }
 
   async start(grantReference: string): Promise<void> {
@@ -91,6 +91,7 @@ export class Daemon {
       const temporary=`${this.config.endpointStatePath}.${process.pid}.tmp`;const descriptor=openSync(temporary,"wx",0o600);
       try{writeFileSync(descriptor,`${canonicalJson(state as unknown as JsonValue)}\n`);fsyncSync(descriptor);}finally{closeSync(descriptor);}
       renameSync(temporary,this.config.endpointStatePath);chmodSync(this.config.endpointStatePath,0o600);const directory=openSync(this.config.stateDirectory,"r");try{fsyncSync(directory);}finally{closeSync(directory);}
+      this.server.startExecution();
     } catch(error) { const transport=this.transportServer;this.transportServer=null;if(transport!==null)await transport.close();rmSync(this.config.endpointStatePath,{force:true});throw error; }
   }
 
@@ -98,6 +99,7 @@ export class Daemon {
     const transport = this.transportServer;
     this.transportServer = null;
     if (transport !== null) await transport.close();
+    await this.server.stopExecution();
     rmSync(this.config.endpointStatePath, { force: true });
   }
 

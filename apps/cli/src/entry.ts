@@ -5,12 +5,10 @@ import { registerInstallerCommandsV1 } from "./router.js";
 import { runCliV1 } from "./runtime.js";
 import { AuthorizedLocalTransportV1 } from "./transport.js";
 import type { JsonValue } from "./result.js";
-import { registerWorkflowCommandsV1 } from "./workflows.js";
 
 const registry = createDefaultCliCommandRegistryV1();
 registerLifecycleCliCommandsV1(registry);
 registerInstallerCommandsV1(registry);
-registerWorkflowCommandsV1(registry);
 
 const endpointPath = process.env.HORSENESS_ENDPOINT_PATH ?? ".horseness/daemon.sock";
 const workspaceId = process.env.HORSENESS_WORKSPACE_ID ?? "workspace:unbound";

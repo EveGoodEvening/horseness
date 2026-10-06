@@ -14,8 +14,9 @@ export type EventStream="workspace"|"run";
 export type StoredEvent=HashedEventEnvelopeV1<DomainEventPayloadV1>;
 export interface AppendRequest<T extends DomainEventPayloadV1=DomainEventPayloadV1> { streamKind:EventStream; workspaceId:string; streamId:string; expectedSequence:number; expectedEnvelopeHash:string|null; events:readonly HashedEventEnvelopeV1<T>[] }
 export interface RunGenesisAppendRequest { observationCursor:AbsentRunGenesisCursorV1; event:HashedEventEnvelopeV1<RunCreatedV1> }
-export interface AtomicAppendRequest { commandId:string; workspace?:AppendRequest<WorkspaceEventPayloadV1>; run?:AppendRequest<RunEventPayloadV1>; runGenesis?:RunGenesisAppendRequest; workspaceObservationCursor?:{workspaceId:string;workspaceSequence:number;workspaceEnvelopeHash:string;workspaceContextEpoch:number} }
-export interface AppendResult { commandId:string; workspaceHead?:{sequence:number;envelopeHash:string}; runHead?:{sequence:number;envelopeHash:string}; deduplicated:boolean }
+export interface AuthorityStateExpectationV1 { readonly stateKind:string; readonly revision:number; readonly stateDigest:string }
+export interface AtomicAppendRequest { commandId:string; workspace?:AppendRequest<WorkspaceEventPayloadV1>; run?:AppendRequest<RunEventPayloadV1>; runGenesis?:RunGenesisAppendRequest; workspaceObservationCursor?:{workspaceId:string;workspaceSequence:number;workspaceEnvelopeHash:string;workspaceContextEpoch:number}; authorityStateExpectations?:readonly AuthorityStateExpectationV1[]; clientRequestDigest?:string }
+export interface AppendResult { commandId:string; workspaceHead?:{sequence:number;envelopeHash:string}; runHead?:{sequence:number;envelopeHash:string}; deduplicated:boolean; clientRequestDigest?:string }
 export interface SnapshotRecord { workspaceId:string; streamKind:EventStream; streamId:string; sequence:number; envelopeHash:string; projectionName:string; projectionVersion:string; state:JsonValue }
 export interface ArtifactPublication { data:Uint8Array|string; mediaType?:string|null; references?:readonly {ownerKind:string;ownerId:string;allowExistingEvent?:true}[]; pins?:readonly {pinId:string}[] }
 export interface AtomicProjectionUpdate { workspaceId:string; name:string; version:string; streamKind:EventStream; streamId:string; lastSequence:number; lastEnvelopeHash:string|null }
@@ -119,6 +120,10 @@ export class SQLiteAuthority {
       return {authority,reader:issueTrustedAuthorityReader(authority,session)};
     }catch(error){authority.close();throw error;}
   }
+  trustedReader():TrustedAuthorityReader {
+    if(this.trustedSession===null)throw new StoreIntegrityError("authenticated workspace session required");
+    return issueTrustedAuthorityReader(this,this.trustedSession);
+  }
   close():void{if(this.trustedSession!==null){const sessionKey=`${this.trustedAuthorityId??this.authorityIdentity}\u0000${this.trustedSession.workspaceId}`;const current=activeWorkspaceSessions.get(sessionKey);if(current?.authority.deref()===this)activeWorkspaceSessions.delete(sessionKey);this.trustedSession=null;this.trustedAuthorityId=null;}this.db.close();}
   migrationVersions():number[]{return (this.db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as {version:number}[]).map(r=>r.version);}
   persistDispatchAuthorityAtomic(request:PersistDispatchAuthorityRequestV1):Readonly<{deduplicated:boolean;fenceCounter:number}>{
@@ -177,7 +182,46 @@ export class SQLiteAuthority {
   }
   private requestWorkspace(request:AtomicAppendRequest):string{const workspaceId=request.workspace?.workspaceId??request.run?.workspaceId??request.runGenesis?.observationCursor.workspaceId;if(workspaceId===undefined||request.workspace!==undefined&&request.workspace.workspaceId!==workspaceId||request.run!==undefined&&request.run.workspaceId!==workspaceId||request.runGenesis!==undefined&&request.runGenesis.observationCursor.workspaceId!==workspaceId)throw new StoreIntegrityError("atomic append workspace mismatch");return workspaceId;}
   private commandScope(request:AtomicAppendRequest):{kind:"workspace"|"run";id:string}{const runId=request.run?.streamId??request.runGenesis?.observationCursor.runId;return runId===undefined?{kind:"workspace",id:this.requestWorkspace(request)}:{kind:"run",id:runId};}
-  recordAuthorityConsumption(input:{workspaceId:string;runId?:string;principalId:string;authorityKey:string;commandId:string}):boolean{const values=[input.workspaceId,input.principalId,input.authorityKey,input.commandId];if(values.some(value=>value.length===0)||input.runId!==undefined&&input.runId.length===0)throw new StoreIntegrityError("invalid authority consumption identity");const scopeKind=input.runId===undefined?"workspace":"run";const scopeId=input.runId??input.workspaceId;this.db.exec("BEGIN IMMEDIATE");try{const prior=this.db.prepare("SELECT command_id FROM authority_consumption WHERE workspace_id=? AND scope_kind=? AND scope_id=? AND principal_id=? AND authority_key=?").get(input.workspaceId,scopeKind,scopeId,input.principalId,input.authorityKey) as {command_id:string}|undefined;if(prior!==undefined){if(prior.command_id!==input.commandId)throw new StoreConflictError("authority key was already consumed by another command");this.db.exec("COMMIT");return false;}this.db.prepare("INSERT INTO authority_consumption(workspace_id,scope_kind,scope_id,principal_id,authority_key,command_id,consumed_at) VALUES(?,?,?,?,?,?,?)").run(input.workspaceId,scopeKind,scopeId,input.principalId,input.authorityKey,input.commandId,now());this.db.exec("COMMIT");return true;}catch(error){if(this.db.isTransaction)this.db.exec("ROLLBACK");throw error;}}
+  private verifyCompositeObservation(value:CompositeCursorV1,workspaceId:string,runId:string|undefined):void {
+    const cursor=parseObservationCursorV1(value);
+    if(cursor.kind!=="composite"||cursor.workspaceId!==workspaceId||cursor.runId!==runId)throw new StoreIntegrityError("authority consumption observation identity invalid");
+    const heads=this.db.prepare("SELECT w.head_sequence AS ws,w.head_hash AS wh,w.context_epoch AS we,r.head_sequence AS rs,r.head_hash AS rh,r.context_epoch AS re FROM streams w JOIN streams r ON r.workspace_id=w.workspace_id WHERE w.workspace_id=? AND w.stream_kind='workspace' AND w.stream_id=w.workspace_id AND r.stream_kind='run' AND r.stream_id=?").get(workspaceId,runId!) as {ws:number;wh:string;we:number;rs:number;rh:string;re:number}|undefined;
+    if(!heads||heads.ws!==cursor.workspaceSequence||heads.wh!==cursor.workspaceEnvelopeHash||heads.we!==cursor.workspaceContextEpoch||heads.rs!==cursor.runSequence||heads.rh!==cursor.runEnvelopeHash||heads.re!==cursor.runContextEpoch)throw new StoreConflictError("authority consumption observation compare-and-swap conflict");
+    this.authenticatedRows(workspaceId,"workspace",workspaceId);this.authenticatedRows(workspaceId,"run",runId!);
+  }
+  recordAuthorityConsumption(input:{workspaceId:string;runId?:string;principalId:string;authorityKey:string;commandId:string;observationCursor?:CompositeCursorV1;authorityStateExpectations?:readonly AuthorityStateExpectationV1[]}):boolean {
+    const values=[input.workspaceId,input.principalId,input.authorityKey,input.commandId];
+    if(values.some(value=>value.length===0)||input.runId!==undefined&&input.runId.length===0)throw new StoreIntegrityError("invalid authority consumption identity");
+    const scopeKind=input.runId===undefined?"workspace":"run",scopeId=input.runId??input.workspaceId;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const prior=this.db.prepare("SELECT command_id FROM authority_consumption WHERE workspace_id=? AND scope_kind=? AND scope_id=? AND principal_id=? AND authority_key=?").get(input.workspaceId,scopeKind,scopeId,input.principalId,input.authorityKey) as {command_id:string}|undefined;
+      if(prior!==undefined){if(prior.command_id!==input.commandId)throw new StoreConflictError("authority key was already consumed by another command");this.db.exec("COMMIT");return false;}
+      if(input.observationCursor)this.verifyCompositeObservation(input.observationCursor,input.workspaceId,input.runId);
+      if(input.authorityStateExpectations)this.verifyCurrentObservation({commandId:input.commandId,authorityStateExpectations:input.authorityStateExpectations},input.workspaceId);
+      this.db.prepare("INSERT INTO authority_consumption(workspace_id,scope_kind,scope_id,principal_id,authority_key,command_id,consumed_at) VALUES(?,?,?,?,?,?,?)").run(input.workspaceId,scopeKind,scopeId,input.principalId,input.authorityKey,input.commandId,now());
+      this.db.exec("COMMIT");return true;
+    } catch(error){if(this.db.isTransaction)this.db.exec("ROLLBACK");throw error;}
+  }
+  committedAppendResult(workspaceId:string,runId:string,commandId:string):AppendResult|null {
+    if(this.trustedSession?.workspaceId!==workspaceId)throw new StoreIntegrityError("authenticated workspace session required");
+    const row=this.db.prepare("SELECT result_json FROM command_dedup WHERE workspace_id=? AND scope_kind='run' AND scope_id=? AND command_id=?").get(workspaceId,runId,commandId) as {result_json:string}|undefined;
+    return row?JSON.parse(row.result_json) as AppendResult:null;
+  }
+  executionCommandResult(input:{workspaceId:string;runId:string;commandId:string;requestDigest:string;observationCursor?:CompositeCursorV1;authorityStateExpectations?:readonly AuthorityStateExpectationV1[]},result?:JsonValue):JsonValue|null {
+    if(this.trustedSession?.workspaceId!==input.workspaceId)throw new StoreIntegrityError("authenticated workspace session required");
+    if(result!==undefined)this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const prior=this.db.prepare("SELECT request_digest,result_json FROM command_dedup WHERE workspace_id=? AND scope_kind='run' AND scope_id=? AND command_id=?").get(input.workspaceId,input.runId,input.commandId) as {request_digest:string;result_json:string}|undefined;
+      if(prior){if(prior.request_digest!==input.requestDigest)throw new StoreConflictError("command id reused with different request");if(result!==undefined)this.db.exec("COMMIT");return JSON.parse(prior.result_json) as JsonValue;}
+      if(result===undefined)return null;
+      if(input.observationCursor)this.verifyCompositeObservation(input.observationCursor,input.workspaceId,input.runId);
+      if(input.authorityStateExpectations)this.verifyCurrentObservation({commandId:input.commandId,authorityStateExpectations:input.authorityStateExpectations},input.workspaceId);
+      this.authenticatedRows(input.workspaceId,"run",input.runId);
+      this.db.prepare("INSERT INTO command_dedup(workspace_id,scope_kind,scope_id,command_id,request_digest,result_json,created_at) VALUES(?,'run',?,?,?,?,?)").run(input.workspaceId,input.runId,input.commandId,input.requestDigest,canonicalJson(result),now());
+      this.db.exec("COMMIT");return result;
+    } catch(error){if(result!==undefined&&this.db.isTransaction)this.db.exec("ROLLBACK");throw error;}
+  }
   private writeRunGenesis(request:RunGenesisAppendRequest):{sequence:number;envelopeHash:string}{
     let cursor:AbsentRunGenesisCursorV1;try{const parsed=parseObservationCursorV1(request.observationCursor);if(parsed.kind!=="absent-run-genesis")throw new StoreIntegrityError("run genesis requires an absent-run cursor");cursor=parsed;}catch(error){if(error instanceof StoreIntegrityError)throw error;throw new StoreIntegrityError(`invalid absent-run genesis cursor: ${error instanceof Error?error.message:String(error)}`);}
     const workspace=this.db.prepare("SELECT head_sequence,head_hash,context_epoch FROM streams WHERE workspace_id=? AND stream_kind='workspace' AND stream_id=?").get(cursor.workspaceId,cursor.workspaceId) as {head_sequence:number;head_hash:string|null;context_epoch:number}|undefined;
@@ -194,6 +238,22 @@ export class SQLiteAuthority {
     const rows=this.db.prepare("SELECT stream_id FROM streams WHERE workspace_id=? AND stream_kind='run' ORDER BY stream_id").all(workspaceId) as {stream_id:string}[];
     return rows.map(row=>row.stream_id);
   }
+  private verifyCurrentObservation(request:AtomicAppendRequest,workspaceId:string):void {
+    const cursor=request.workspaceObservationCursor;
+    if(cursor){
+      if(cursor.workspaceId!==workspaceId||!request.run||request.runGenesis)throw new StoreIntegrityError("workspace observation binding invalid");
+      const head=this.db.prepare("SELECT head_sequence,head_hash,context_epoch FROM streams WHERE workspace_id=? AND stream_kind='workspace' AND stream_id=?").get(workspaceId,workspaceId) as {head_sequence:number;head_hash:string;context_epoch:number}|undefined;
+      if(!head||head.head_sequence!==cursor.workspaceSequence||head.head_hash!==cursor.workspaceEnvelopeHash||head.context_epoch!==cursor.workspaceContextEpoch)throw new StoreConflictError("workspace observation compare-and-swap conflict");
+      this.authenticatedRows(workspaceId,"workspace",workspaceId);
+    }
+    const kinds=new Set<string>();
+    for(const expectation of request.authorityStateExpectations??[]){
+      if(!expectation.stateKind||!expectation.stateDigest||!Number.isSafeInteger(expectation.revision)||expectation.revision<1||kinds.has(expectation.stateKind))throw new StoreIntegrityError("authority state observation invalid");
+      kinds.add(expectation.stateKind);
+      const current=this.authenticatedAuthorityState(workspaceId,expectation.stateKind);
+      if(current.revision!==expectation.revision||current.stateDigest!==expectation.stateDigest)throw new StoreConflictError("authority state observation compare-and-swap conflict");
+    }
+  }
   appendAtomic(request:AtomicAppendRequest):AppendResult {
     if(!request.workspace&&!request.run&&!request.runGenesis)throw new StoreIntegrityError("atomic append has no streams");
     if(request.run&&request.run.expectedSequence===0)throw new StoreIntegrityError("run genesis requires the explicit runGenesis operation");
@@ -205,8 +265,8 @@ export class SQLiteAuthority {
     try{
       const prior=this.db.prepare("SELECT request_digest,result_json FROM command_dedup WHERE workspace_id=? AND scope_kind=? AND scope_id=? AND command_id=?").get(workspaceId,scope.kind,scope.id,request.commandId) as {request_digest:string;result_json:string}|undefined;
       if(prior){if(prior.request_digest!==digest)throw new StoreConflictError("command id reused with different request");if(request.runGenesis&&this.db.prepare("SELECT 1 FROM streams WHERE workspace_id=? AND stream_kind='run' AND stream_id=?").get(workspaceId,scope.id)===undefined)throw new StoreConflictError("orphan run command dedup exists without run authority");const result=JSON.parse(prior.result_json) as AppendResult;this.db.exec("COMMIT");return{...result,deduplicated:true};}
-      if(request.workspaceObservationCursor){const c=request.workspaceObservationCursor;if(c.workspaceId!==workspaceId||!request.run||request.runGenesis)throw new StoreIntegrityError("workspace observation binding invalid");const head=this.db.prepare("SELECT head_sequence,head_hash,context_epoch FROM streams WHERE workspace_id=? AND stream_kind='workspace' AND stream_id=?").get(workspaceId,workspaceId) as {head_sequence:number;head_hash:string;context_epoch:number}|undefined;if(!head||head.head_sequence!==c.workspaceSequence||head.head_hash!==c.workspaceEnvelopeHash||head.context_epoch!==c.workspaceContextEpoch)throw new StoreConflictError("workspace observation compare-and-swap conflict");this.authenticatedRows(workspaceId,"workspace",workspaceId);}
-      this.crash("transaction.write.before");const result:AppendResult={commandId:request.commandId,deduplicated:false};
+      this.verifyCurrentObservation(request,workspaceId);
+      this.crash("transaction.write.before");const result:AppendResult={commandId:request.commandId,deduplicated:false,...(request.clientRequestDigest===undefined?{}:{clientRequestDigest:request.clientRequestDigest})};
       if(request.workspace)result.workspaceHead=this.writeAppend(request.workspace);
       if(request.run)result.runHead=this.writeAppend(request.run);
       if(request.runGenesis)result.runHead=this.writeRunGenesis(request.runGenesis);
@@ -302,13 +362,14 @@ export class SQLiteAuthority {
     const scope=this.commandScope(request);
     for(const projection of request.projections??[])if(projection.workspaceId!==workspaceId)throw new StoreIntegrityError("projection workspace mismatch");
     for(const snapshot of request.snapshots??[])if(snapshot.workspaceId!==workspaceId)throw new StoreIntegrityError("snapshot workspace mismatch");
-    const digestInput={commandId:request.commandId,workspace:request.workspace??null,run:request.run??null,artifacts:records.map(({publication,record})=>({record,references:publication.references??[],pins:publication.pins??[]})),requiredArtifactDigests,projections:request.projections??[],snapshots:request.snapshots??[]};
+    const digestInput={commandId:request.commandId,workspace:request.workspace??null,run:request.run??null,artifacts:records.map(({publication,record})=>({record,references:publication.references??[],pins:publication.pins??[]})),requiredArtifactDigests,projections:request.projections??[],snapshots:request.snapshots??[],...(request.workspaceObservationCursor===undefined?{}:{workspaceObservationCursor:request.workspaceObservationCursor}),...(request.authorityStateExpectations===undefined?{}:{authorityStateExpectations:request.authorityStateExpectations}),...(request.clientRequestDigest===undefined?{}:{clientRequestDigest:request.clientRequestDigest})};
     const requestDigest=domainDigest("horseness.store-artifact-append.v1",JSON.parse(canonicalJson(digestInput as unknown as JsonValue)) as JsonValue);
     const insertedEventIds=new Set([...(request.workspace?.events??[]),...(request.run?.events??[])].map(event=>event.envelope.eventId));
     this.crash("transaction.begin.before");this.db.exec("BEGIN IMMEDIATE");this.crash("transaction.begin.after");
     try {
       const prior=this.db.prepare("SELECT request_digest,result_json FROM command_dedup WHERE workspace_id=? AND scope_kind=? AND scope_id=? AND command_id=?").get(workspaceId,scope.kind,scope.id,request.commandId) as {request_digest:string;result_json:string}|undefined;
       if(prior){if(prior.request_digest!==requestDigest)throw new StoreConflictError("command id reused with different request");this.db.exec("COMMIT");return{...(JSON.parse(prior.result_json) as AppendResult),deduplicated:true};}
+      this.verifyCurrentObservation(request,workspaceId);
       const verifiedExistingEventIds=new Set<string>();
       for(const {publication} of records)for(const reference of publication.references??[]){
         if(reference.ownerKind!=="event")throw new StoreIntegrityError(`unsupported artifact reference owner kind: ${reference.ownerKind}`);
@@ -324,7 +385,7 @@ export class SQLiteAuthority {
         if(!bound)throw new StoreIntegrityError(`required artifact has no workspace event reference: ${required}`);
       }
       this.crash("transaction.write.before");
-      const result:AppendResult={commandId:request.commandId,deduplicated:false};
+      const result:AppendResult={commandId:request.commandId,deduplicated:false,...(request.clientRequestDigest===undefined?{}:{clientRequestDigest:request.clientRequestDigest})};
       for(const {record} of records){this.artifacts.verifyRecord(record);this.artifacts.register(record);}
       if(request.workspace)result.workspaceHead=this.writeAppend(request.workspace);
       if(request.run)result.runHead=this.writeAppend(request.run);

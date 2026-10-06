@@ -47,3 +47,11 @@ The C22 candidate manifest binds the exact migration-capable `1.0.0` npm tarball
 New local CLI workspaces use private `.horseness/cli-workspace.v1.json` metadata plus a separately protected opaque grant-reference file. The metadata version is `1`; unsupported versions, substituted paths, and symlinks fail closed. Initialization does not migrate an existing unbound authority, replace a grant, or reset a database. Preserve all workspace authority files during upgrades and recovery.
 
 `TaskCreatedV1` is an additive event type in the existing run stream; it changes operational task state and the run cursor, not canonical revision/hash. The existing SQLite schema stores it without a new migration. Readers predating this event type are incompatible after the first task creation; do not downgrade such a workspace to an older domain/daemon package. Task writes compare both workspace and run observations within the same transaction and retain the existing exact-request deduplication contract.
+
+## Explicit execution and plan state
+
+Upgrade the matching package train before creating execution/plan events or V2 task contracts. Existing V1 task events are read as equivalent draft contracts with their original title as instructions; event bytes and hashes remain unchanged. Older readers cannot interpret the new events, so downgrade after execution starts requires the existing backup/export and compatibility safeguards. No new SQLite schema migration or authority reset is required.
+
+The existing command-dedup and authority-consumption tables retain exact request identities/results. Run appends may also bind the observed grant-authority state revision/digest, closing races where grant revocation changes authority without moving an event-stream head. Existing workspace grants do not acquire execution methods silently: the owner explicitly uses `workspace enable-execution` or the existing grant-administration surface. Every RPC and dispatch step rechecks current grant lineage and expiry.
+
+Native attempt spool directories are private workspace state under `.horseness/task-attempts/`. Keep them with the authority database and artifact directory. Removing an uncompleted spool is not evidence that a host did no work; it creates an unknown outcome, not permission to launch again. Never delete `.horseness` to repair a denied or uncertain operation.

@@ -94,7 +94,7 @@ test("run and task workflow survives restart without changing canonical state", 
   const workspace=workspaceCursor(daemon),workspaceId=workspace.workspaceId,runId="daily-run",taskId="daily-task";
   const call=(method:ProtocolMethodV1,cursor:unknown,value:unknown,ids:{runId?:string;taskId?:string}={},key?:string):JsonRpcRequestV1=>({jsonrpc:"2.0",id:method,method,params:{protocolVersion:"1",observationCursor:cursor as never,...(key?{idempotencyKey:key}:{}),body:{schemaVersion:"1",workspaceId,...ids,input:{schemaVersion:"1",requestType:method,value}} as never}});
   const absent={...workspace,kind:"absent-run-genesis",runId,expectedRunHead:"absent"};
-  const contract={schemaVersion:"1",taskId,title:"Write notes",completionPolicy:{schemaVersion:"1",kind:"predicate",predicate:{kind:"receipt-only"}}};
+  const contract={schemaVersion:"2",taskId,title:"Write notes",instructions:"Write notes",acceptanceCriteria:[],kind:"work",sourceTaskId:null,completionPolicy:{schemaVersion:"1",kind:"predicate",predicate:{kind:"receipt-only"}}};
   const createRun=call("run.create.v1",absent,{schemaVersion:"1",commandType:"CreateRunV1",commandId:"create-run",observationCursor:absent,principalId:context.principalId,initialDocument:{title:"Daily"}},{runId},"create-run");
   let restarted:Daemon|undefined;
   try {
@@ -109,7 +109,7 @@ test("run and task workflow survives restart without changing canonical state", 
     const task=sdkCompatibleValue(await daemon.server.dispatch(context,taskRequest),"task.create.v1") as {observationCursor:unknown};
     assert.deepEqual(sdkCompatibleValue(await daemon.server.dispatch(context,taskRequest),"task.create.v1"),task);
     const list=sdkCompatibleValue(await daemon.server.dispatch(context,call("task.list.v1",task.observationCursor,{operationId:"list-tasks",states:[],limit:100,continuationToken:""},{runId})),"task.list.v1") as {tasks:unknown[]};
-    assert.deepEqual(list.tasks,[{taskId,title:"Write notes",lifecycle:"draft",completionPolicy:contract.completionPolicy}]);
+    assert.deepEqual((list.tasks as {taskId:string;title:string;lifecycle:string}[]).map(item=>[item.taskId,item.title,item.lifecycle]),[[taskId,"Write notes","draft"]]);
     const after=sdkCompatibleValue(await daemon.server.dispatch(context,call("run.get.v1",task.observationCursor,{schemaVersion:"1",queryType:"GetRunV1",observationCursor:task.observationCursor},{runId})),"run.get.v1") as typeof before;
     assert.deepEqual(after.state.canonical,before.state.canonical);
     const runs=sdkCompatibleValue(await daemon.server.dispatch(context,call("run.list.v1",workspace,{operationId:"list-runs",limit:100,continuationToken:""})),"run.list.v1") as {runs:{title:string;observationCursor:unknown}[]};
@@ -126,7 +126,7 @@ test("workflow rejects stale observations and changed request keys without appen
   try {
     const absent={...workspace,kind:"absent-run-genesis",runId,expectedRunHead:"absent"};
     const run=sdkCompatibleValue(await daemon.server.dispatch(context,call("run.create.v1",absent,{schemaVersion:"1",commandType:"CreateRunV1",commandId:"run-command",observationCursor:absent,principalId:context.principalId,initialDocument:{}},undefined,"run-command")),"run.create.v1") as {resultCursor:unknown};
-    const cursor=run.resultCursor,contract=(taskId:string,title:string)=>({schemaVersion:"1",taskId,title,completionPolicy:{schemaVersion:"1",kind:"predicate",predicate:{kind:"receipt-only"}}});
+    const cursor=run.resultCursor,contract=(taskId:string,title:string)=>({schemaVersion:"2",taskId,title,instructions:title,acceptanceCriteria:[],kind:"work",sourceTaskId:null,completionPolicy:{schemaVersion:"1",kind:"predicate",predicate:{kind:"receipt-only"}}});
     const first=await daemon.server.dispatch(context,call("task.create.v1",cursor,{operationId:"task-command",taskContract:contract("one","One"),dependencyTaskIds:[]},"one","task-command"));assert.ok("result" in first);
     const stale=await daemon.server.dispatch(context,call("task.create.v1",cursor,{operationId:"stale-command",taskContract:contract("two","Two"),dependencyTaskIds:[]},"two","stale-command"));assert.ok("error" in stale);assert.equal(stale.error.data.reasonCode,"STALE_OBSERVATION");
     const changed=await daemon.server.dispatch(context,call("task.create.v1",cursor,{operationId:"task-command",taskContract:contract("one","Changed"),dependencyTaskIds:[]},"one","task-command"));assert.ok("error" in changed);assert.equal(changed.error.data.reasonCode,"INVALID_PARAMS");

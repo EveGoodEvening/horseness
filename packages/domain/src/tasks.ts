@@ -20,6 +20,7 @@ export function completionPolicySatisfied(policy: TaskCompletionPolicyV1, durabl
 export type TaskLifecycleInputV1 = { type: "activate" } | { type: "resolve"; resolution: TaskResolution };
 export function reduceTaskLifecycle(state: TaskLifecycle, input: TaskLifecycleInputV1): TaskLifecycle {
   if (state === "draft" && input.type === "activate") return "active";
+  if (state === "draft" && input.type === "resolve" && input.resolution === "cancelled") return "cancelled";
   if (state === "active" && input.type === "resolve") return input.resolution;
   throw new DomainError("ILLEGAL_TASK_TRANSITION");
 }

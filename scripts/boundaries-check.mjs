@@ -7,9 +7,9 @@ const groups = ["packages", "apps", "adapters"];
 const layers = new Map([
   ["@horseness/domain", 0], ["@horseness/protocol", 1], ["@horseness/policy", 1],
   ["@horseness/store-sqlite", 1], ["@horseness/orchestrator", 2], ["@horseness/sdk", 2],
-  ["@horseness/adapter-kit", 3], ["@horseness/installer", 1], ["@horseness/daemon", 4],
+  ["@horseness/adapter-kit", 3], ["@horseness/installer", 1], ["@horseness/daemon", 5],
   ["@horseness/cli", 4], ["@horseness/adapter-pi", 4], ["@horseness/adapter-omp", 4],
-  ["@horseness/adapter-claude", 4], ["@horseness/adapter-codex", 4], ["@horseness/bootstrap", 5]
+  ["@horseness/adapter-claude", 4], ["@horseness/adapter-codex", 4], ["@horseness/bootstrap", 6]
 ]);
 export function importBoundaryError({ file, packageDir, specifier, workspaceNames }) {
   if (specifier.startsWith(".")) {

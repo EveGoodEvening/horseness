@@ -183,6 +183,21 @@ importers:
 
   apps/daemon:
     dependencies:
+      '@horseness/adapter-claude':
+        specifier: workspace:1.0.0
+        version: link:../../adapters/claude
+      '@horseness/adapter-codex':
+        specifier: workspace:1.0.0
+        version: link:../../adapters/codex
+      '@horseness/adapter-kit':
+        specifier: workspace:1.0.0
+        version: link:../../packages/adapter-kit
+      '@horseness/adapter-omp':
+        specifier: workspace:1.0.0
+        version: link:../../adapters/omp
+      '@horseness/adapter-pi':
+        specifier: workspace:1.0.0
+        version: link:../../adapters/pi
       '@horseness/domain':
         specifier: workspace:1.0.0
         version: link:../../packages/domain

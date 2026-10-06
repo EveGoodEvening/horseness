@@ -17,6 +17,8 @@ horseness status
 
 Workspace discovery, current-run selection, cursor reads, IDs, and idempotency keys are handled internally. Tasks start as durable drafts; creation does not launch a worker. Use `--workspace PATH` to select another project, `--json` for scripts, and `horseness --help` for commands. See [CLI usage](docs/cli.md) for checkout execution, existing-workspace limits, and interrupted-operation recovery. The npm release has not yet been published.
 
+Execution is explicit: `task dispatch --task ID --adapter HOST --model MODEL` starts one attempt; `task show --task ID` observes its authenticated result. For larger work, use `task breakdown`, inspect the preview, then `task adopt --plan DIGEST` and `task execute`. `task execute --auto-plan` explicitly combines planning, adoption, and serial dependency execution. Adding a task never starts this process. Native host/model prerequisites and existing-workspace authorization are documented in [CLI usage](docs/cli.md#explicit-execution-planning-and-cancellation).
+
 ## The Problem
 
 Main Agent + free-form subagent summaries + session compression have inherent flaws:
