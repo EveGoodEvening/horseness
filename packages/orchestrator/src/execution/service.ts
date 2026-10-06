@@ -310,6 +310,8 @@ export class TaskExecutionServiceV1 {
   }
 
   private workflowAuthority(view: ExecutionView, authorization: TaskWorkflowAuthorizationV1): ExecutionGrantObservationV1 {
+    const registered=view.state.workflows[authorization.workflowId];
+    if(!registered||registered.state!=="running"||canonicalJson(registered.authorization as unknown as JsonValue)!==canonicalJson(authorization as unknown as JsonValue))throw new DomainError("WORKFLOW_STOPPED");
     const parent = authorization.parentWorkflowId ? view.state.workflows[authorization.parentWorkflowId] : null;
     if (authorization.parentWorkflowId && (!parent || parent.state !== "running")) throw new DomainError("WORKFLOW_STOPPED");
     const grantTask = parent?.authorization.targetTaskId ?? authorization.planningSource?.taskId ?? authorization.targetTaskId;
@@ -362,7 +364,12 @@ export class TaskExecutionServiceV1 {
       view = this.view(runId); observed = this.workflowAuthority(view, authorization);
     }
     const existing = this.taskAttempts(view, taskId);
-    if (existing.length) return existing.at(-1)!.prepared;
+    if (existing.length) {
+      const retained=existing.at(-1)!;
+      if(retained.prepared.profileDigest!==taskExecutionProfileDigest(authorization.executionProfile))throw new DomainError("EXECUTION_PROFILE_MISMATCH");
+      if(retained.state.state==="planned"&&(retained.prepared.workflowId!==authorization.workflowId||retained.prepared.forkPin.core.createdByPrincipalId!==authorization.issuerPrincipalId||retained.prepared.forkPin.core.createdByGrantDigest!==authorization.issuerGrantDigest))throw new DomainError("AUTHORIZATION_DENIED");
+      return retained.prepared;
+    }
     const deps = this.dependencies(view, taskId);
     if (!deps.satisfied || deps.unknown || deps.cancelled) throw new DomainError("TASK_NOT_READY");
     const attemptId = `attempt:${domainDigest("horseness.task-attempt.v1", { workflowId: authorization.workflowId, taskId })}`, generation = 1;
@@ -400,6 +407,8 @@ export class TaskExecutionServiceV1 {
   }
 
   private boundOperation(prepared: TaskExecutionPreparedDataV1): BoundAdapterOperationV1 {
+    const grant=this.grants.observe(prepared.binding.allowedProducerGrantDigest)?.grant;
+    if(!grant||grant.principalId!==prepared.binding.allowedProducerPrincipalId||grant.workspaceId!==this.workspaceId||grant.runId!==prepared.forkPin.core.runId||grant.taskId!==prepared.taskId||grant.attemptId!==prepared.attemptId||grant.generation!==prepared.generation||grant.adapterId!==BRIDGE_ADAPTER[prepared.profile.adapterId]||!grant.allowedMethods.includes("receipt.submit.v1"))throw new DomainError("AUTHORIZATION_DENIED");
     const capability = this.grants.reference(prepared.binding.allowedProducerGrantDigest);
     if (!capability) throw new DomainError("AUTHORIZATION_DENIED");
     return { schemaVersion: "1", workspaceId: this.workspaceId, runId: prepared.forkPin.core.runId, taskId: prepared.taskId, attemptId: prepared.attemptId, generation: prepared.generation, forkPinDigest: prepared.forkPin.forkPinDigest, contextManifestCoreDigest: prepared.binding.contextManifestCoreDigest, attemptContextBindingDigest: attemptContextBindingDigest(prepared.binding), providerIdempotencyKeyDigest: domainDigest("horseness.provider-idempotency-key.v1", prepared.binding.providerIdempotencyKey), attemptCapability: capability };
@@ -460,6 +469,8 @@ export class TaskExecutionServiceV1 {
     if (contextSourceDigest(original) !== prepared.manifest.renderedOutputDigest) throw new DomainError("ARTIFACT_MISMATCH");
     if (state.state === "planned") {
       const observed = this.workflowAuthority(view, authorization);
+      if(prepared.workflowId!==authorization.workflowId||prepared.profileDigest!==taskExecutionProfileDigest(authorization.executionProfile)||prepared.forkPin.core.createdByPrincipalId!==authorization.issuerPrincipalId||prepared.forkPin.core.createdByGrantDigest!==authorization.issuerGrantDigest)throw new DomainError("AUTHORIZATION_DENIED");
+      this.boundOperation(prepared);
       assertTaskWorkflowLaunchV1(view.state, authorization.workflowId, prepared.taskId, this.clock(), authorization.issuerPrincipalId, authorization.issuerGrantDigest);
       if (Date.parse(this.clock()) >= Date.parse(prepared.lease.expiresAt)) throw new DomainError("TASK_NOT_READY", "execution lease expired before handoff");
       const descriptor = prepared.manifest.sources.find(source => source.kind === "pinned-policy");

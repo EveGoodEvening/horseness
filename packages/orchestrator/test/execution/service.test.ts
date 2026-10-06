@@ -46,7 +46,7 @@ function fixture(interruptPrepared=false,adapterId:string|null=null) {
     producer(input) {
       const current = authority.authenticatedAuthorityState("workspace", "grants"), state = current.state as unknown as { grants: AuthenticatedGrantV1[] };
       const principalId = `producer:${input.attemptId}`, grantDigest = `grant:${input.attemptId}`;
-      if (!state.grants.some(item => item.grantDigest === grantDigest)) replaceGrants([...state.grants, { ...owner, principalId, grantDigest, principalRole: "adapter", runId: input.runId, taskId: input.taskId, attemptId: input.attemptId, generation: input.generation, expiresAt: input.expiresAt, allowedMethods: ["receipt.submit.v1"] }]);
+      if (!state.grants.some(item => item.grantDigest === grantDigest)) replaceGrants([...state.grants, { ...owner, principalId, grantDigest, principalRole: "adapter", runId: input.runId, taskId: input.taskId, attemptId: input.attemptId, generation: input.generation, adapterId:input.adapterId, expiresAt: input.expiresAt, allowedMethods: ["receipt.submit.v1"] }]);
       return { principalId, grantDigest, capability: grantDigest };
     },
     reference(digest) { return grantAuthority.observe(digest) ? digest : null; },
@@ -165,5 +165,30 @@ test("a receipt producer cannot turn a known foreign digest into its own readabl
     await assert.rejects(f.service.submitReceipt("run",receipt,{principalId:receipt.producerPrincipalId,grantDigest:receipt.producerGrantDigest}),/receipt object has no authorized attempt publication/);
     assert.deepEqual(f.state().receipts,{});assert.equal((f.service.describe("run","task",f.request.actor) as Record<string,JsonValue>).output,null);
     assert.deepEqual(f.authority.artifacts.readReferenced(digest),bytes);
+  } finally {await f.close();}
+});
+
+test("fresh dispatch cannot launch a retained preparation with another profile",async()=>{
+  const f=fixture(true);
+  try {
+    await f.service.start(f.request);await f.stopped();
+    const original=Object.values(f.state().prepared)[0]!;
+    f.hosts.resolve=async()=>({...profile,adapterId:"claude",hostId:"claude",hostVersion:"2.1.228",providerId:"anthropic",modelId:"claude-concrete",nativeExecutablePath:"/unit/claude",nativeExecutableDigest:"b".repeat(64)});
+    await f.service.start({...f.request,operationId:"different-host",requestDigest:"different-host",adapterId:"claude",model:"claude-concrete",observationCursor:f.service.observation("run")});await f.stopped();
+    assert.equal(f.calls.launch,0);assert.deepEqual(Object.values(f.state().prepared),[original]);
+    assert.equal(Object.values(f.state().workflows).at(-1)?.reasonCode,"EXECUTION_PROFILE_MISMATCH");
+  } finally {await f.close();}
+});
+
+test("a replacement scoped issuer cannot borrow a revoked issuer's planned attempt",async()=>{
+  const f=fixture(true);
+  try {
+    await f.service.start(f.request);await f.stopped();f.revoke();
+    const current=f.authority.authenticatedAuthorityState("workspace","grants"),state=current.state as unknown as {grants:AuthenticatedGrantV1[]};
+    const replacement:AuthenticatedGrantV1={...state.grants[0]!,principalId:"replacement",grantDigest:"replacement-grant",revoked:false,adapterId:"horseness-pi-v1"};
+    f.authority.compareAndSwapAuthorityState({commandId:"replacement",workspaceId:"workspace",stateKind:"grants",expectedRevision:current.revision,expectedStateDigest:current.stateDigest,nextState:{grants:[...state.grants,replacement]} as unknown as JsonValue});
+    await f.service.start({...f.request,operationId:"new-issuer",requestDigest:"new-issuer",actor:{principalId:replacement.principalId,grantDigest:replacement.grantDigest},observationCursor:f.service.observation("run")});await f.stopped();
+    assert.equal(f.calls.launch,0);assert.equal(Object.values(f.state().attempts)[0]?.state,"planned");
+    assert.equal(Object.values(f.state().workflows).at(-1)?.reasonCode,"AUTHORIZATION_DENIED");
   } finally {await f.close();}
 });

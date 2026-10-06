@@ -17,6 +17,8 @@ let initialized = false;
 const requests = [];
 const plannerCalls = new Map();
 const model = "workflow-smoke";
+const crashReached=Promise.withResolvers();
+let crashResponse,nativeProcessId;
 
 function command(executable, args, options = {}) {
   return new Promise((resolveCommand, reject) => {
@@ -70,6 +72,10 @@ const provider = createServer(async (request, response) => {
       return streamResponse(response, JSON.stringify(plan));
     }
     if(task.instructions.includes("SMOKE_NATIVE_FAILURE"))return streamResponse(response,"The native attempt exhausted its response limit.",undefined,"length");
+    if(task.instructions.includes("SMOKE_CRASH")){
+      if(tools.length===0)return streamResponse(response,"",{name:"bash",arguments:{command:"printf '%s\\n' \"$PPID\" > native-smoke.pid"}});
+      crashResponse=response;crashReached.resolve();return;
+    }
     if (task.instructions.includes("SMOKE_SINGLE")) {
       if (tools.length === 0) return streamResponse(response, "", { name: "write", arguments: { path: "single.txt", content: "native dispatch\n" } });
       return streamResponse(response, "single file created through the native write tool");
@@ -207,8 +213,30 @@ try {
   await observeUntil(next.taskId,task=>task.lifecycle==="succeeded");
   assert.equal(requests.filter(item=>item.taskId===next.taskId).length,2);
   console.log("fresh planner identity, invalid auto-plan refusal and known native failure receipt passed");
+  const interrupted=await invoke(["task","add","--title","SMOKE_CRASH: stop after native acceptance without relaunching."]);
+  await invoke(["task","dispatch","--task",interrupted.taskId,"--adapter","pi","--model",`local/${model}`]);
+  let crashTimer;
+  try {await Promise.race([crashReached.promise,new Promise((_,reject)=>{crashTimer=setTimeout(()=>reject(new Error("native crash boundary was not reached")),30000);})]);}finally{clearTimeout(crashTimer);}
+  const beforeCrash=await invoke(["task","show","--task",interrupted.taskId]);
+  assert.equal((beforeCrash.task??beforeCrash).attempts[0].state,"launch_intent_committed");
+  nativeProcessId=Number((await readFile(join(workspace,"native-smoke.pid"),"utf8")).trim());
+  assert.ok(Number.isSafeInteger(nativeProcessId)&&nativeProcessId>1);
+  assert.ok((await readFile(`/proc/${nativeProcessId}/cmdline`,"utf8")).split("\0").includes(nativeExecutable),"only terminate this smoke's verified native process");
+  const daemonState=JSON.parse(await readFile(join(workspace,".horseness/daemon-endpoint.v1.json"),"utf8"));
+  assert.ok((await readFile(`/proc/${daemonState.processId}/cmdline`,"utf8")).includes(workspace),"only crash the owned workspace daemon");
+  process.kill(daemonState.processId,"SIGKILL");initialized=false;
+  try{process.kill(nativeProcessId,"SIGKILL");}catch(error){if(error.code!=="ESRCH")throw error;}nativeProcessId=undefined;
+  crashResponse.destroy();
+  for(let attempt=0;attempt<100;attempt++){try{process.kill(daemonState.processId,0);}catch(error){if(error.code==="ESRCH")break;throw error;}await delay(20);}
+  await invoke(["init"]);initialized=true;
+  const unknown=await observeUntil(interrupted.taskId,task=>task.attempts.some(attempt=>attempt.state==="unknown_outcome"));
+  assert.equal(unknown.lifecycle,"active");assert.equal(unknown.output,null);assert.equal(unknown.attempts.length,1);
+  assert.equal(requests.filter(item=>item.taskId===interrupted.taskId).length,2);
+  console.log("real native acceptance followed by daemon crash recovered as unknown without a second launch");
   console.log(JSON.stringify({ nativeHost: manifest.artifact.identity, executableDigest: manifest.artifact.executable.sha256, provider: "controlled-loopback", providerRequests: requests.length, automaticPlanAdopted: automaticResult.plan?.adoptedTaskIds.length === 2, canonicalRevision: 0, liveProviderAuthentication: "unobserved" }));
 } finally {
+  if(nativeProcessId){try{const commandLine=await readFile(`/proc/${nativeProcessId}/cmdline`,"utf8");if(commandLine.includes(native))process.kill(nativeProcessId,"SIGKILL");}catch(error){if(error.code!=="ENOENT"&&error.code!=="ESRCH")throw error;}}
+  crashResponse?.destroy();
   if (initialized) await command(cli, ["stop", "--workspace-path", workspace, "--json"], { env: environment });
   provider.closeAllConnections();
   await new Promise(resolveClose => provider.close(resolveClose));
