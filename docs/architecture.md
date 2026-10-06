@@ -405,3 +405,11 @@ The integration branch is exactly `main`. Before W00 sealing, the authorized boo
 ## Claim commit identity closure
 
 `ClaimAttemptV1`, `ClaimIndexRecordV1`, and the chunk ledger persist `preClaimBaseSha`, never the SHA of the commit containing those bytes. For K01 this value is A00. After integration, the live verifier obtains K01/B1 exclusively from integrated `HEAD`, requires it to be a commit with exactly one parent equal to `preClaimBaseSha`, verifies the claim and claim-index paths and canonical bytes in that exact tree, and proves checkpoint ancestry from W00 through A00 to K01. Ordinary receipts may then bind the externally observed K01/B1 as `claimIntegrationSha` and `workerBaseSha`; those receipts are later commits and are not self-referential. Renewals use the same construction from their immediate pre-claim HEAD.
+
+## Explicit task execution and decomposition
+
+ADR 0011 defines the daily execution layer. Adding a task remains a draft-only operation. Explicit dispatch selects an adapter and launches a guarded attempt; assignment is not a synonym for task completion. Initial receipt-only work does not require an unrelated accepted canonical delta, while declared canonical-change and dependency predicates remain binding.
+
+Breakdown uses a separately identified planner task through the same execution boundary and produces an immutable untrusted plan preview. Explicit adoption validates and atomically creates the work graph while the original objective is still draft. The original task is the final integration task, depending on the adopted plan's terminal work nodes; planning does not complete it or silently alter its frozen completion policy. Automatic plan adoption and dependency-ordered execution require an explicit opt-in and never bypass dispatch authorization or recovery rules. Human-language acceptance criteria are worker instructions, not autonomous semantic adjudication.
+
+The daemon composes host adapters with provider-neutral orchestration. Native output/evidence publication, immutable binding checks, authenticated receipts, and separate task resolution remain mandatory. Existing initialized workspaces gain no new authority implicitly. Planner and execution progress are durable and queryable, and an unknown external outcome never authorizes a duplicate launch.

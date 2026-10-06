@@ -4,12 +4,12 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 
 ## Global status
 
-- **Planning state:** C00–C22 are complete locally, including the ADR 0010 trusted-publishing correction at candidate `c63b786`. Historical C22 and CLI usability evidence remains unchanged.
-- **Active claims:** none; the trusted-publishing review fix is implemented and locally verified.
-- **Next eligible:** C23 after reviewed integration of the updated workflow onto GitHub `refs/heads/main` and external npm/GitHub configuration; operational phases make no source edits.
-- **Active blockers:** C23 requires the protected GitHub `release` environment and npm package-level trusted publishers or explicit initial `@horseness` package creation authority. C24 requires GitHub-hosted Linux/macOS/Windows runners; C25 requires separate npm tag and GitHub release authority. No remote workflow execution or npm settings change was performed locally.
+- **Planning state:** C00–C21 remain complete. C22 is reopened for the user-approved explicit task execution, breakdown, and optional automatic composition correction under ADR 0011; planning review precedes source work. Historical C22 evidence remains unchanged.
+- **Active claims:** none while the execution planning correction is reviewed; the forthcoming C22 claim will be tracker-only.
+- **Next eligible:** C22 execution correction, then C23 after a newly verified candidate, reviewed GitHub main integration, and external npm/GitHub configuration.
+- **Active blockers:** C23 is blocked by the reopened product correction and still requires the protected GitHub `release` environment and npm package-level trusted publishers or explicit initial package creation authority. C24/C25 retain their external runner and promotion-authority prerequisites. No remote workflow or public npm mutation was performed.
 - **Last integrated receipt:** immutable C01 `docs/checkpoints/C01/final/1.json`, envelope digest `17ddd75b49e35d3bf6f432c8c6acca30b4a66512229453aca4fc63e7f427ea7d`, indexed at A01 commit `223023330cb000b759d8a8b2419514638c1aa179`; receipt/index bytes must not be overwritten.
-- **Release readiness:** candidate `c63b786` passed all nine ordered C22 gates, fourteen-tarball install/import/bin verification, 15 release tests, and actionlint. Local npm 11.6.2/Verdaccio smoke exercised registry reconciliation and tag mutation boundaries. No public npm publication, real OIDC exchange/provenance, or new macOS/Windows execution is claimed.
+- **Release readiness:** historical candidate `c63b786` passed the recorded C22 gates; it does not establish readiness for the new execution correction. A new candidate and fresh local evidence are required before C23. No public publication, real OIDC exchange/provenance, or new macOS/Windows execution is claimed.
 - **Base chunk count:** 26 (`C00`–`C25`)
 - **Historical remediation count:** 2 (`R001`, `R002`, both complete)
 
