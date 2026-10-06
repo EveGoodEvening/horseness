@@ -18,12 +18,12 @@ horseness status
 执行必须显式授权；`task add` 永远只创建 draft。新增命令：
 
 ```sh
-horseness task dispatch --task TASK_ID --adapter pi --model CONCRETE_MODEL
+horseness task dispatch --task TASK_ID --adapter pi --model PROVIDER/MODEL
 horseness task show --task TASK_ID
 horseness task breakdown --task TASK_ID --planner claude --model CONCRETE_MODEL
 horseness task show --task TASK_ID
 horseness task adopt --task TASK_ID --plan PLAN_DIGEST
-horseness task execute --task TASK_ID --adapter pi --model CONCRETE_MODEL
+horseness task execute --task TASK_ID --adapter pi --model PROVIDER/MODEL
 horseness task cancel --task TASK_ID
 ```
 
@@ -33,8 +33,7 @@ host 可选 `pi`、`omp`、`claude`、`codex`，不会静默替换 host/model。
 
 旧工作区不会由 `init` 静默扩权。当前 authority 且拥有 `grant.issue.v1` 权限的用户可显式运行 `horseness workspace enable-execution`；通过 `grant.list.v1` 检查当前身份和 scope，再申请保持同 principal/scope/expiry 的执行授权。非 authority 被拒绝。opaque reference 在私有文件中原子替换并 fsync，不输出到终端；授权本身不调用模型。
 
-中断请求保留完整原始调用及规范化选项指纹，包括 adapter、model、plan、自动规划和 planner 选项。改变选项不能重放旧 mutation；pending 期间 `status`、`task show` 等查询仍可用。明确的最终拒绝清除 pending，未经验证的响应保留请求。本次新增执行路径尚未在本说明中宣称 native 集成验证；下文历史证据仅覆盖原四条日常命令。
-
+中断请求保留完整原始调用及规范化选项指纹，包括 adapter、model、plan、自动规划和 planner 选项。改变选项不能重放旧 mutation；pending 期间 `status`、`task show` 等查询仍可用。明确的最终拒绝清除 pending，未经验证的响应保留请求。已在隔离工作区通过真实 Pi 0.73.1 和本地确定性 provider 验证原生读写工具、receipt、重复请求恢复、重启、计划预览/采用、依赖执行、自动规划、失败结果与原生交接后的崩溃恢复；这不等于线上模型认证或其他宿主的 live 验证，详细范围见 C22 证据账本。
 
 已在真实 CLI → daemon → SQLite 路径验证上述四条命令与 daemon 重启后的状态保留。详见 [CLI 使用说明](cli.md)。以下保留原低层接口问题的背景说明；`run-create` 等协议级命令仍供高级自动化和调试使用。
 
