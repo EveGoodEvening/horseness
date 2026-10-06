@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +18,7 @@ const requests = [];
 const plannerCalls = new Map();
 const model = "workflow-smoke";
 const crashReached=Promise.withResolvers();
-let crashResponse,nativeProcessId;
+let crashResponse,nativeProcessId,nativeProcessStartTime;
 
 function command(executable, args, options = {}) {
   return new Promise((resolveCommand, reject) => {
@@ -221,8 +221,12 @@ try {
   assert.equal((beforeCrash.task??beforeCrash).attempts[0].state,"launch_intent_committed");
   nativeProcessId=Number((await readFile(join(workspace,"native-smoke.pid"),"utf8")).trim());
   assert.ok(Number.isSafeInteger(nativeProcessId)&&nativeProcessId>1);
-  assert.ok((await readFile(`/proc/${nativeProcessId}/cmdline`,"utf8")).split("\0").includes(nativeExecutable),"only terminate this smoke's verified native process");
   const daemonState=JSON.parse(await readFile(join(workspace,".horseness/daemon-endpoint.v1.json"),"utf8"));
+  const nativeStat=await readFile(`/proc/${nativeProcessId}/stat`,"utf8"),nativeFields=nativeStat.slice(nativeStat.lastIndexOf(")")+2).trim().split(/\s+/u);
+  assert.equal(Number(nativeFields[1]),daemonState.processId,"native process must be a child of the owned daemon");
+  assert.equal(await realpath(`/proc/${nativeProcessId}/cwd`),workspace);
+  assert.equal((await readFile(`/proc/${nativeProcessId}/cmdline`,"utf8")).split("\0")[0],"pi");
+  nativeProcessStartTime=nativeFields[19];
   assert.ok((await readFile(`/proc/${daemonState.processId}/cmdline`,"utf8")).includes(workspace),"only crash the owned workspace daemon");
   process.kill(daemonState.processId,"SIGKILL");initialized=false;
   try{process.kill(nativeProcessId,"SIGKILL");}catch(error){if(error.code!=="ESRCH")throw error;}nativeProcessId=undefined;
@@ -235,7 +239,7 @@ try {
   console.log("real native acceptance followed by daemon crash recovered as unknown without a second launch");
   console.log(JSON.stringify({ nativeHost: manifest.artifact.identity, executableDigest: manifest.artifact.executable.sha256, provider: "controlled-loopback", providerRequests: requests.length, automaticPlanAdopted: automaticResult.plan?.adoptedTaskIds.length === 2, canonicalRevision: 0, liveProviderAuthentication: "unobserved" }));
 } finally {
-  if(nativeProcessId){try{const commandLine=await readFile(`/proc/${nativeProcessId}/cmdline`,"utf8");if(commandLine.includes(native))process.kill(nativeProcessId,"SIGKILL");}catch(error){if(error.code!=="ENOENT"&&error.code!=="ESRCH")throw error;}}
+  if(nativeProcessId&&nativeProcessStartTime){try{const stat=await readFile(`/proc/${nativeProcessId}/stat`,"utf8");if(stat.slice(stat.lastIndexOf(")")+2).trim().split(/\s+/u)[19]===nativeProcessStartTime)process.kill(nativeProcessId,"SIGKILL");}catch(error){if(error.code!=="ENOENT"&&error.code!=="ESRCH")throw error;}}
   crashResponse?.destroy();
   if (initialized) await command(cli, ["stop", "--workspace-path", workspace, "--json"], { env: environment });
   provider.closeAllConnections();
