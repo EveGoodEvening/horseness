@@ -4,6 +4,7 @@ This project follows semantic versioning. Release notes describe the public pack
 
 ## 1.0.0 — Unreleased
 
+- Renamed CI and installer-smoke checks by responsibility instead of delivery chunk IDs, with descriptive historical-evidence steps; executable gates and receipt/artifact contracts are unchanged.
 - Fixed CI and install-smoke startup by installing the manifest-pinned pnpm before Node setup initializes its pnpm cache.
 - Restored the full CI gate chain: authenticated historical bootstrap checks use their sealed candidate, bootstrap tests launch the real daemon, and stale admission fixtures use current storage. TypeScript lint now covers its configured source/test targets without relaxing the existing rules.
 - Fixed bootstrap through aliased temporary/workspace paths and Windows path containment; Windows bootstrap capabilities now use verified current-user-only protected DACLs instead of POSIX permission bits.
