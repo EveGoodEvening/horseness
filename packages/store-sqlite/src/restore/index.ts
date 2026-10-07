@@ -226,11 +226,11 @@ function parseJournal(databasePath: string, artifactRoot: string): RestorePaths 
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("invalid restore journal");
   const keys = Object.keys(value).sort();
   if (keys.join("\0") !== ["generationToken", "hadArtifacts", "hadDatabase", "phase", "retainedBackupIdentity", "retainedBackupRoot", "version"].sort().join("\0")) throw new Error("invalid restore journal keys");
-  const journal = value as Partial<RestoreJournalV1>;
+  const journal = value as Record<string, unknown>;
   const phases: readonly RestorePhase[] = ["staged", "old-moved", "database-activated", "artifacts-activated", "committed"];
   const identity = journal.retainedBackupIdentity;
   const validIdentity = identity === null || (
-    typeof identity === "object" && identity !== null &&
+    typeof identity === "object" && identity !== null && "kind" in identity && "createdAt" in identity && "databaseDigest" in identity && "manifestDigest" in identity &&
     Object.keys(identity).sort().join("\0") === ["createdAt", "databaseDigest", "kind", "manifestDigest"].sort().join("\0") &&
     identity.kind === "HorsenessVerifiedBackupIdentityV1" &&
     typeof identity.createdAt === "string" &&
@@ -239,7 +239,7 @@ function parseJournal(databasePath: string, artifactRoot: string): RestorePaths 
   );
   if (
     journal.version !== "HorsenessRestoreJournalV1" ||
-    !phases.includes(journal.phase as RestorePhase) ||
+    !phases.some(phase => phase === journal.phase) ||
     typeof journal.generationToken !== "string" ||
     !GENERATION_TOKEN.test(journal.generationToken) ||
     typeof journal.hadDatabase !== "boolean" ||
@@ -248,7 +248,7 @@ function parseJournal(databasePath: string, artifactRoot: string): RestorePaths 
     !validIdentity ||
     ((journal.hadDatabase || journal.hadArtifacts) && (journal.retainedBackupRoot === null || identity === null))
   ) throw new Error("invalid restore journal");
-  return deriveRestorePaths(databasePath, artifactRoot, journal as RestoreJournalV1);
+  return deriveRestorePaths(databasePath, artifactRoot, journal as unknown as RestoreJournalV1);
 }
 
 function removePath(path: string, recursive: boolean, label: "database" | "artifacts" | "old-database" | "old-artifacts" | "stage-database" | "stage-artifacts" | "journal", inject: RestoreCrashInjector): void {
@@ -321,7 +321,7 @@ export function restoreBackup(backupRoot: string, databasePath: string, artifact
   backupRoot = resolveBackupRoot(backupRoot);
   const manifest = verifyBackup(backupRoot);
   const token = randomUUID();
-  let retainedBackupRoot = options.retainedBackupRoot ? resolve(options.retainedBackupRoot) : null;
+  const retainedBackupRoot = options.retainedBackupRoot ? resolve(options.retainedBackupRoot) : null;
   const preflightJournal = deriveRestorePaths(databasePath, artifactRoot, {
     version: "HorsenessRestoreJournalV1",
     phase: "staged",

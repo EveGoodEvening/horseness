@@ -9,7 +9,7 @@ const EXECUTABLE_DIGEST = "a96f944d1a596dbfb7fdd84f482be5c50e34b04bb371126840d87
 function environment(): Record<string, string> {
   if (!process.env.HOME) throw new Error("NATIVE_HOME_REQUIRED");
   const result: Record<string, string> = { HOME: process.env.HOME, PATH: process.env.PATH ?? "/usr/bin:/bin" };
-  for (const key of ["LANG", "LC_ALL", "TZ", "CODEX_HOME"]) if (process.env[key]) result[key] = process.env[key]!;
+  for (const key of ["LANG", "LC_ALL", "TZ", "CODEX_HOME"]) { const value = process.env[key]; if (value) result[key] = value; }
   return result;
 }
 export async function resolveCodexTaskProfileV1(options: NativeTaskProfileOptionsV1): Promise<TaskExecutionProfileV1> {
@@ -19,7 +19,7 @@ export async function resolveCodexTaskProfileV1(options: NativeTaskProfileOption
   if (await nativeExecutableDigestV1(path) !== EXECUTABLE_DIGEST) throw new Error("UNSUPPORTED_NATIVE_HOST: expected verified Codex 0.144.1-linux-x64; configure the daemon trusted executablePath override to its pinned executable");
   const version = await runNativeProcessV1({ executablePath: path, args: ["--version"], cwd: options.workspacePath, timeoutMs: 10_000, maxOutputBytes: 4096, env: environment() });
   if (version.exitCode !== 0 || version.stdout.trim() !== "codex-cli 0.144.1") throw new Error("UNSUPPORTED_NATIVE_HOST: expected Codex 0.144.1-linux-x64; configure the daemon trusted executablePath override");
-  let advertised = false;
+  const observation = { advertised: false };
   await runNativeProcessV1({ executablePath: path, args: ["app-server", "--stdio", "--strict-config"], cwd: options.workspacePath, timeoutMs: 10_000, maxOutputBytes: 262_144, env: environment(), input: `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { clientInfo: { name: "horseness-profile", version: "0.1.0" }, capabilities: { experimentalApi: true } } })}\n`, onLine(line, write, end) {
     const message = object(JSON.parse(line));
     if (message.error !== undefined) throw new Error("NATIVE_MODEL_METADATA_UNAVAILABLE");
@@ -29,11 +29,11 @@ export async function resolveCodexTaskProfileV1(options: NativeTaskProfileOption
     } else if (message.id === 2 && message.result !== undefined) {
       const result = object(message.result);
       if (!Array.isArray(result.data)) throw new Error("NATIVE_MODEL_METADATA_UNAVAILABLE");
-      advertised = result.data.some(item => object(item).model === options.model);
+      observation.advertised = result.data.some(item => object(item).model === options.model);
       end();
     }
   } });
-  if (!advertised) throw new Error("UNSUPPORTED_NATIVE_MODEL: select a concrete model advertised by the supported Codex native host");
+  if (!observation.advertised) throw new Error("UNSUPPORTED_NATIVE_MODEL: select a concrete model advertised by the supported Codex native host");
   return Object.freeze({ schemaVersion: "1", adapterId: "codex", hostId: "codex", hostVersion: CODEX_HOST_VERSION, nativeExecutablePath: path, nativeExecutableDigest: await nativeExecutableDigestV1(path), providerId: "openai", modelId: options.model, purpose: options.purpose, timeoutMs: options.timeoutMs ?? 120_000, maxOutputBytes: 1_048_576, lookup: "local-terminal-record", idempotentLaunch: false });
 }
 const object = (value: unknown): Record<string, unknown> => { if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("CODEX_PROTOCOL_INVALID"); return value as Record<string, unknown>; };
@@ -46,7 +46,7 @@ export function createCodexTaskParserV1(model: string, context: string, cwd: str
   const texts = new Map<string, string>();
   return {
     initialize: `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { clientInfo: { name: "horseness-task", version: "0.1.0" }, capabilities: { experimentalApi: true } } })}\n`,
-    onLine(line: string, write: (input: string) => void, end: () => void) {
+    onLine(this: void, line: string, write: (input: string) => void, end: () => void) {
       const message = object(JSON.parse(line));
       if (confinementFailed) throw new Error("CODEX_TOOL_CONFINEMENT_FAILED");
       if (message.error !== undefined) { if (!inventoryVerified) confinementFailed = true; throw new Error("CODEX_NATIVE_RPC_ERROR"); }
@@ -58,7 +58,7 @@ export function createCodexTaskParserV1(model: string, context: string, cwd: str
       } else if (message.id === 2 && message.result !== undefined) {
         const result = object(message.result); const thread = object(result.thread);
         if (!initialized || threadId || typeof thread.id !== "string" || !thread.id || result.model !== model || result.modelProvider !== "openai") throw new Error("CODEX_THREAD_MODEL_BINDING_MISMATCH");
-        threadId = thread.id; observedModel = String(result.model);
+        threadId = thread.id; observedModel = result.model;
         inventoryRequested = true;
         write(`${JSON.stringify({ jsonrpc: "2.0", id: 4, method: "mcpServerStatus/list", params: { threadId, detail: "full" } })}\n`);
       } else if (message.id === 4 && message.result !== undefined) {
@@ -70,7 +70,7 @@ export function createCodexTaskParserV1(model: string, context: string, cwd: str
         inventoryVerified = true; confinementFailed = false;
         write(`${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "turn/start", params: { threadId, model, approvalPolicy: "never", permissions, environments: [], input: [{ type: "text", text: "Execute the bound task in the supplied developer context and return its final output.", text_elements: [] }] } })}\n`);
       } else if (message.id === 3 && message.result !== undefined) {
-        if (!inventoryVerified || confinementFailed) { confinementFailed = true; throw new Error("CODEX_TOOL_CONFINEMENT_FAILED"); }
+        if (!inventoryVerified) { confinementFailed = true; throw new Error("CODEX_TOOL_CONFINEMENT_FAILED"); }
         const turn = object(object(message.result).turn);
         if (turnId || typeof turn.id !== "string" || !turn.id) throw new Error("CODEX_TURN_BINDING_MISMATCH");
         turnId = turn.id;
@@ -114,7 +114,7 @@ export async function createCodexTaskAdapterV1(options: NativeTaskAdapterOptions
   let active: Promise<NativeTaskTerminalV1 | null> | null = null;
   const collect = async () => active ? await active : await spool.load();
   const runtime = {
-    async detectCapabilities() { return { schemaVersion: "1" as const, adapterId: CODEX_ADAPTER_ID, providerId: profile.providerId, launch: true, cancel: true, reconcile: "supported" as const, reattach: "unsupported" as const, nativeResume: "unsupported" as const, contextInjection: "bytes" as const, receiptCollection: true as const, maxContextBytes: 1_048_576, outputMediaTypes: ["text/plain", "application/json"], evidenceMediaTypes: ["application/json"] }; },
+    detectCapabilities() { return Promise.resolve({ schemaVersion: "1" as const, adapterId: CODEX_ADAPTER_ID, providerId: profile.providerId, launch: true, cancel: true, reconcile: "supported" as const, reattach: "unsupported" as const, nativeResume: "unsupported" as const, contextInjection: "bytes" as const, receiptCollection: true as const, maxContextBytes: 1_048_576, outputMediaTypes: ["text/plain", "application/json"], evidenceMediaTypes: ["application/json"] }); },
     async launch(request: AdapterLaunchRequestV1) {
       if (request.renderedContextDigest !== nativeRenderedContextDigestV1(options.renderedContext)) throw new Error("NATIVE_CONTEXT_BINDING_MISMATCH");
       const retained = await spool.load(); if (retained) return retained;
@@ -129,7 +129,7 @@ export async function createCodexTaskAdapterV1(options: NativeTaskAdapterOptions
         const evidenceDigest = await spool.publish(evidenceBytes, "application/json");
         const record: NativeTaskTerminalV1 = { providerOperationId: parsed.providerOperationId, nativeSessionId: parsed.nativeSessionId, startedAt, finishedAt: new Date().toISOString(), outcome: parsed.outcome, outputDigest, evidence: [{ digest: evidenceDigest, mediaType: "application/json", size: evidenceBytes.byteLength }], provenance: { profileDigest: taskExecutionProfileDigest(profile), observedHostId: profile.hostId, observedHostVersion: profile.hostVersion, observedProviderId: profile.providerId, observedModelId: parsed.model, nativeSessionId: parsed.nativeSessionId, exitCode: wire.exitCode } };
         await spool.save(record); return record;
-      })().catch((error: unknown) => { const reason = error instanceof Error ? error.message.match(/^[A-Z][A-Z0-9_]+/)?.[0] : undefined; throw new Error(`UNKNOWN_OUTCOME: ${reason ?? "NATIVE_TERMINAL_UNAVAILABLE"}`); }); return (await active)!;
+      })().catch((error: unknown) => { const reason = error instanceof Error ? /^[A-Z][A-Z0-9_]+/.exec(error.message)?.[0] : undefined; throw new Error(`UNKNOWN_OUTCOME: ${reason ?? "NATIVE_TERMINAL_UNAVAILABLE"}`); }); return await active;
     },
     async cancel() { controller.abort(); if (active) { try { await active; } catch { /* Interrupted handoff remains unknown. */ } } const record = await spool.load(); if (!record) throw new Error("UNKNOWN_OUTCOME"); return record; },
     async reconcile() { const record = await collect(); if (!record) throw new Error("UNKNOWN_OUTCOME"); return record; },

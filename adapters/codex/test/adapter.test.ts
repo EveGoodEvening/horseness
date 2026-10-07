@@ -13,13 +13,13 @@ import { CODEX_PINNED_TOOL_CONFIG, assertSafeCodexEnvironment, classifyCodexThre
 const binding = { schemaVersion: "1", workspaceId: "ws", runId: "run", taskId: "task", attemptId: "attempt", generation: 1, forkPinDigest: "sha256:fork", contextManifestCoreDigest: "sha256:manifest", attemptContextBindingDigest: "sha256:binding", providerIdempotencyKeyDigest: "sha256:key", attemptCapability: "capability-ref" } as const;
 const attempt: CodexNativeAttemptV1 = { providerOperationId: "codex-operation", nativeSessionId: "codex-session", startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:00:01Z", outcome: "succeeded", outputDigest: "sha256:output", evidence: [{ digest: "sha256:evidence", mediaType: "application/json", size: 42 }], provenance: { package: "@openai/codex", version: "0.144.1-linux-x64", loaderDigest: "sha256:a96f944d1a596dbfb7fdd84f482be5c50e34b04bb371126840d873e4ebf26902" } };
 const calls: string[] = [];
-const runtime: CodexNativeRuntimeV1 = { async launch() { calls.push("launch"); return attempt; }, async cancel() { calls.push("cancel"); return attempt; }, async reconcile() { calls.push("reconcile"); return attempt; }, async resume(request) { calls.push(request.operation); return attempt; }, async collect() { calls.push("collect"); return attempt; } };
+const runtime: CodexNativeRuntimeV1 = { async launch() { calls.push("launch"); return Promise.resolve(attempt); }, async cancel() { calls.push("cancel"); return Promise.resolve(attempt); }, async reconcile() { calls.push("reconcile"); return Promise.resolve(attempt); }, async resume(request) { calls.push(request.operation); return Promise.resolve(attempt); }, async collect() { calls.push("collect"); return Promise.resolve(attempt); } };
 const adapter = createCodexAdapterV1({ binding, credential: { schemaVersion: "1", kind: "host-reference", reference: "codex.grant.ref", scope: { workspaceId: "ws", adapterId: CODEX_ADAPTER_ID, purpose: "horseness-attempt-grant" } }, runtime, producerPrincipalId: "worker", producerGrantDigest: "grant" });
 
-test("Codex seals known failures and cancellations without claiming successful output", async () => {
+void test("Codex seals known failures and cancellations without claiming successful output", async () => {
   for (const outcome of ["failed", "cancelled"] as const) {
     const terminal: CodexNativeAttemptV1 = { ...attempt, outcome, outputDigest: null };
-    const failedAdapter = createCodexAdapterV1({ binding, credential: { schemaVersion: "1", kind: "host-reference", reference: "codex.grant.ref", scope: { workspaceId: "ws", adapterId: CODEX_ADAPTER_ID, purpose: "horseness-attempt-grant" } }, runtime: { ...runtime, async collect() { return terminal; } }, producerPrincipalId: "worker", producerGrantDigest: "grant" });
+    const failedAdapter = createCodexAdapterV1({ binding, credential: { schemaVersion: "1", kind: "host-reference", reference: "codex.grant.ref", scope: { workspaceId: "ws", adapterId: CODEX_ADAPTER_ID, purpose: "horseness-attempt-grant" } }, runtime: { ...runtime, async collect() { return Promise.resolve(terminal); } }, producerPrincipalId: "worker", producerGrantDigest: "grant" });
     const receipt = await failedAdapter.collectReceipt(binding);
     verifyAttemptReceipt(receipt);
     assert.equal(receipt.outcome, outcome);
@@ -28,9 +28,9 @@ test("Codex seals known failures and cancellations without claiming successful o
   }
 });
 
-test("Codex package exposes meaningful immutable native contributions", () => { assert.equal(CODEX_NATIVE_PACKAGE_METADATA.hostVersionRange, "=0.144.1-linux-x64"); assert.equal(CODEX_INSTALL_CONTRIBUTIONS.length, 5); assert.deepEqual(CODEX_INSTALL_CONTRIBUTIONS.map(item => item.mode), Array(5).fill("read-only")); });
+void test("Codex package exposes meaningful immutable native contributions", () => { assert.equal(CODEX_NATIVE_PACKAGE_METADATA.hostVersionRange, "=0.144.1-linux-x64"); assert.equal(CODEX_INSTALL_CONTRIBUTIONS.length, 5); assert.deepEqual(CODEX_INSTALL_CONTRIBUTIONS.map(item => item.mode), Array(5).fill("read-only")); });
 
-test("Codex app-server item parser separates passive bookkeeping from every pinned executing tool surface", () => {
+void test("Codex app-server item parser separates passive bookkeeping from every pinned executing tool surface", () => {
   for (const type of ["userMessage", "hookPrompt", "agentMessage", "plan", "reasoning", "subAgentActivity", "enteredReviewMode", "exitedReviewMode", "contextCompaction"]) {
     assert.equal(classifyCodexThreadItemV2({ type }), "passive", type);
   }
@@ -52,7 +52,7 @@ test("Codex app-server item parser separates passive bookkeeping from every pinn
   assert.equal(recordCodexCompletedItemV2(completedItems, { ...completedMcpItem, id: "item-mcp-2" }), true);
   assert.throws(() => recordCodexCompletedItemV2(completedItems, { ...completedMcpItem, tool: "other_tool" }), /CODEX_THREAD_ITEM_LIFECYCLE_CONFLICT/);
 });
-test("Codex pinned app-server requests disable built-in tools while retaining plugin injection", () => {
+void test("Codex pinned app-server requests disable built-in tools while retaining plugin injection", () => {
   const instructions = "verified AGENTS bytes";
   const expectedConfig = {
     web_search: "disabled",
@@ -87,9 +87,9 @@ test("Codex pinned app-server requests disable built-in tools while retaining pl
     assert.equal("sandbox" in request || "sandboxPolicy" in request, false);
   }
 });
-test("Codex lifecycle retains binding, reconciles, resumes and seals a valid receipt", async () => { const capabilities = await adapter.detectCapabilities(); assert.equal(capabilities.providerId, CODEX_PROVIDER_ID); const launched = await adapter.launch({ ...binding, operation: "launch", renderedContextDigest: "sha256:rendered", providerOptions: {} }); assert.equal(launched.providerOperationId, "codex-operation"); await adapter.reconcile({ ...binding, operation: "reconcile", providerOperationId: "codex-operation" }); await adapter.resume({ ...binding, operation: "reattach", providerOperationId: "codex-operation", nativeSessionId: "codex-session" }); await adapter.resume({ ...binding, operation: "resume", providerOperationId: "codex-operation", nativeSessionId: "codex-session" }); const receipt = await adapter.collectReceipt(binding); verifyAttemptReceipt(receipt); assert.equal(receipt.providerId, CODEX_PROVIDER_ID); assert.deepEqual(calls, ["launch", "reconcile", "reattach", "resume", "collect"]); });
-test("Codex rejects binding and credential scope substitution", () => { assert.throws(() => createCodexAdapterV1({ binding, credential: { schemaVersion: "1", kind: "host-reference", reference: "codex.grant.ref", scope: { workspaceId: "other", adapterId: CODEX_ADAPTER_ID, purpose: "horseness-attempt-grant" } }, runtime, producerPrincipalId: "worker", producerGrantDigest: "grant" })); assert.throws(() => adapter.launch({ ...binding, generation: 2, operation: "launch", renderedContextDigest: "sha256:rendered", providerOptions: {} })); });
-test("Codex doctor independently hashes exact shipped package resources and rejects copied-byte tampering", async () => {
+void test("Codex lifecycle retains binding, reconciles, resumes and seals a valid receipt", async () => { const capabilities = await adapter.detectCapabilities(); assert.equal(capabilities.providerId, CODEX_PROVIDER_ID); const launched = await adapter.launch({ ...binding, operation: "launch", renderedContextDigest: "sha256:rendered", providerOptions: {} }); assert.equal(launched.providerOperationId, "codex-operation"); await adapter.reconcile({ ...binding, operation: "reconcile", providerOperationId: "codex-operation" }); await adapter.resume({ ...binding, operation: "reattach", providerOperationId: "codex-operation", nativeSessionId: "codex-session" }); await adapter.resume({ ...binding, operation: "resume", providerOperationId: "codex-operation", nativeSessionId: "codex-session" }); const receipt = await adapter.collectReceipt(binding); verifyAttemptReceipt(receipt); assert.equal(receipt.providerId, CODEX_PROVIDER_ID); assert.deepEqual(calls, ["launch", "reconcile", "reattach", "resume", "collect"]); });
+void test("Codex rejects binding and credential scope substitution", () => { assert.throws(() => createCodexAdapterV1({ binding, credential: { schemaVersion: "1", kind: "host-reference", reference: "codex.grant.ref", scope: { workspaceId: "other", adapterId: CODEX_ADAPTER_ID, purpose: "horseness-attempt-grant" } }, runtime, producerPrincipalId: "worker", producerGrantDigest: "grant" })); assert.throws(() => adapter.launch({ ...binding, generation: 2, operation: "launch", renderedContextDigest: "sha256:rendered", providerOptions: {} })); });
+void test("Codex doctor independently hashes exact shipped package resources and rejects copied-byte tampering", async () => {
   const nativeRoot = fileURLToPath(new URL("../native/", import.meta.url));
   const copiedRoot = await mkdtemp(join(tmpdir(), "horseness-codex-native-provenance-"));
   const hashContributions = () => Promise.all(CODEX_NATIVE_PACKAGE_METADATA.contributions.map(async item => ({ name: item.name, digest: `sha256:${createHash("sha256").update(await readFile(join(copiedRoot, item.name))).digest("hex")}` })));
@@ -109,20 +109,21 @@ test("Codex doctor independently hashes exact shipped package resources and reje
   }
 });
 
-test("Codex retained authority reclaims only a mismatched process incarnation", async () => {
+void test("Codex retained authority reclaims only a mismatched process incarnation", async () => {
   if (process.platform !== "linux") return;
   const root = await mkdtemp(join(tmpdir(), "horseness-codex-lock-incarnation-"));
   try {
     const key = "pid-reuse";
     const lock = join(root, "locks", createHash("sha256").update(key).digest("hex"));
     await mkdir(lock, { recursive: true, mode: 0o700 });
-    const stat = await readFile(`/proc/${process.pid}/stat`, "utf8");
+    const stat = await readFile(`/proc/${String(process.pid)}/stat`, "utf8");
     const commandEnd = stat.lastIndexOf(")");
-    const incarnation = stat.slice(commandEnd + 2).trim().split(/\s+/)[19]!;
-    await writeFile(join(lock, "owner.json"), JSON.stringify({ pid: process.pid, nonce: randomUUID(), incarnation: `${BigInt(incarnation) + 1n}` }), { mode: 0o600 });
+    const incarnation = stat.slice(commandEnd + 2).trim().split(/\s+/)[19];
+    assert.ok(incarnation);
+    await writeFile(join(lock, "owner.json"), JSON.stringify({ pid: process.pid, nonce: randomUUID(), incarnation: `${String(BigInt(incarnation) + 1n)}` }), { mode: 0o600 });
     const reclaimed = createCodexRetainedDeliveryAuthorityV1(root);
     let entered = false;
-    await reclaimed.runExclusive(key, async () => { entered = true; });
+    await reclaimed.runExclusive(key, async () => { entered = true; return Promise.resolve(); });
     assert.equal(entered, true);
 
     const peer = createCodexRetainedDeliveryAuthorityV1(root);
@@ -130,7 +131,7 @@ test("Codex retained authority reclaims only a mismatched process incarnation", 
     const held = reclaimed.runExclusive("current-owner", async () => { await new Promise<void>(resolve => { release = resolve; }); });
     while (release === undefined) await setImmediate();
     let peerEntered = false;
-    const waiting = peer.runExclusive("current-owner", async () => { peerEntered = true; });
+    const waiting = peer.runExclusive("current-owner", async () => { peerEntered = true; return Promise.resolve(); });
     for (let turn = 0; turn < 5; turn++) await setImmediate();
     assert.equal(peerEntered, false);
     release();
@@ -140,11 +141,11 @@ test("Codex retained authority reclaims only a mismatched process incarnation", 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("Codex session bindings persist across restart and reject unknown or substituted resume/fork sources", async () => {
+void test("Codex session bindings persist across restart and reject unknown or substituted resume/fork sources", async () => {
   const root = await mkdtemp(join(tmpdir(), "horseness-codex-session-bindings-"));
   const retainedRoot = join(root, "retained"); const sessionRoot = join(root, "sessions");
   const forkBinding = { ...binding, attemptId: "attempt-fork", forkPinDigest: "sha256:fork-2", attemptContextBindingDigest: "sha256:binding-2", providerIdempotencyKeyDigest: "sha256:key-2", attemptCapability: "capability-fork" } as const;
-  const authority = { client: { async publishObject() {}, async submitReceipt() { return "unused"; }, async submitProposal() { return { proposalId: "unused", proposalDigest: "unused" }; }, async startDecisionSubscription() { return { resumeToken: "unused" }; }, async observeDecision() { return { resumeToken: "unused", decision: "accepted" as const }; } }, async sealProposal() { throw new Error("unused"); } };
+  const authority = { client: { async publishObject() { return Promise.resolve(); }, async submitReceipt() { return Promise.resolve("unused"); }, async submitProposal() { return Promise.resolve({ proposalId: "unused", proposalDigest: "unused" }); }, async startDecisionSubscription() { return Promise.resolve({ resumeToken: "unused" }); }, async observeDecision() { return Promise.resolve({ resumeToken: "unused", decision: "accepted" as const }); } }, async sealProposal() { return Promise.reject(new Error("unused")); } };
   try {
     const makeRuntime = (killSwitchPath?: string) => {
       const retained = createCodexRetainedDeliveryAuthorityV1(retainedRoot);
@@ -159,7 +160,7 @@ test("Codex session bindings persist across restart and reject unknown or substi
     first.registerThreadClaim({ claim, attemptCapabilityReferences: [binding.attemptCapability], primaryAttemptCapabilityReference: binding.attemptCapability });
     assert.equal((await first.bindThreadClaim(claim, "session-1", { source: "startup" })).binding.attemptCapability, binding.attemptCapability);
     assert.equal(first.sessionForThreadClaim(claim), "session-1");
-    assert.throws(() => first.registerThreadClaim({ claim, attemptCapabilityReferences: [binding.attemptCapability], primaryAttemptCapabilityReference: binding.attemptCapability }), /reused/);
+    assert.throws(() => { first.registerThreadClaim({ claim, attemptCapabilityReferences: [binding.attemptCapability], primaryAttemptCapabilityReference: binding.attemptCapability }); }, /reused/);
     await assert.rejects(() => first.bindThreadClaim(claim, "substituted-session", { source: "startup" }), /reused|already bound/);
     await assert.rejects(() => first.registerSessionStart({ sessionId: "unknown-resume", source: "resume", previousSessionId: "missing" }), /unknown or unbound/);
     first.registerBranch({ entryId: "fork-entry", previousSessionFile: "session-1", attemptCapabilityReference: forkBinding.attemptCapability });
@@ -187,18 +188,18 @@ test("Codex session bindings persist across restart and reject unknown or substi
 });
 
 
-test("Codex live receipt validates the required subscription auth mode and rejects auth/account fields", () => {
+void test("Codex live receipt validates the required subscription auth mode and rejects auth/account fields", () => {
   const digest = `sha256:${"a".repeat(64)}`;
   const receiptBinding = { workspaceId: "w", runId: "r", taskId: "t", attemptId: "a", generation: 1, forkPinDigest: digest, contextManifestCoreDigest: digest, attemptContextBindingDigest: digest, receiptDigest: digest, proposalDigest: digest, outputDigest: digest, evidenceDigests: [digest] };
   const installedVersion = `0.1.0+horseness.${CODEX_NATIVE_PACKAGE_METADATA.packageDigest.slice("sha256:".length, "sha256:".length + 16)}`;
   const installedContributions = CODEX_NATIVE_PACKAGE_METADATA.contributions.map(item => ({ ...item, digest: item.name.endsWith("plugin.json") ? digest : item.digest }));
   const installedPackageDigest = codexNativePackageDigestV1(installedContributions);
-  const receipt: CodexSubscriptionLiveReceiptV1 = { schemaVersion: "CodexSubscriptionLiveReceiptV1", host: "codex", authMode: "existing-user-subscription-session", hostVersion: "0.144.1-linux-x64", observedModel: "codex-model", candidate: { head: "head", tree: "tree" }, command: { argv: ["pnpm", "host:smoke:codex"], digest, scenarioSetDigest: digest, batchResponseDigest: digest }, provenance: { archiveDigest: digest, archiveIdentity: "npm:codex", memberPath: "codex", executableDigest: digest, packageDigest: CODEX_NATIVE_PACKAGE_METADATA.packageDigest, contributions: CODEX_NATIVE_PACKAGE_METADATA.contributions.map(({ name, digest: contributionDigest }) => ({ name, digest: contributionDigest })), nativePlugin: { observedPluginId: "horseness-codex@horseness-c18", nativeItemPluginId: "horseness-codex@horseness-c18", installedVersion, installedPackageDigest, installedContributions, resolvedDeclarationDigest: digest } }, bindings: Array.from({ length: 5 }, (_, index) => ({ ...receiptBinding, attemptId: `a-${index}` })), redactionAudit: { passed: true, prohibitedFields: [] }, timing: { startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:00:01Z", durationMs: 1000 }, terminal: { result: "succeeded", reason: "CODEX_LIVE_SMOKE_SUCCEEDED" } };
+  const receipt: CodexSubscriptionLiveReceiptV1 = { schemaVersion: "CodexSubscriptionLiveReceiptV1", host: "codex", authMode: "existing-user-subscription-session", hostVersion: "0.144.1-linux-x64", observedModel: "codex-model", candidate: { head: "head", tree: "tree" }, command: { argv: ["pnpm", "host:smoke:codex"], digest, scenarioSetDigest: digest, batchResponseDigest: digest }, provenance: { archiveDigest: digest, archiveIdentity: "npm:codex", memberPath: "codex", executableDigest: digest, packageDigest: CODEX_NATIVE_PACKAGE_METADATA.packageDigest, contributions: CODEX_NATIVE_PACKAGE_METADATA.contributions.map(({ name, digest: contributionDigest }) => ({ name, digest: contributionDigest })), nativePlugin: { observedPluginId: "horseness-codex@horseness-c18", nativeItemPluginId: "horseness-codex@horseness-c18", installedVersion, installedPackageDigest, installedContributions, resolvedDeclarationDigest: digest } }, bindings: Array.from({ length: 5 }, (_, index) => ({ ...receiptBinding, attemptId: `a-${String(index)}` })), redactionAudit: { passed: true, prohibitedFields: [] }, timing: { startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:00:01Z", durationMs: 1000 }, terminal: { result: "succeeded", reason: "CODEX_LIVE_SMOKE_SUCCEEDED" } };
   assert.throws(() => validateCodexSubscriptionLiveReceiptV1({ ...receipt, authMode: undefined } as unknown as CodexSubscriptionLiveReceiptV1), /INVALID/);
   assert.throws(() => validateCodexSubscriptionLiveReceiptV1({ ...receipt, authMode: "api-key" } as unknown as CodexSubscriptionLiveReceiptV1), /INVALID/);
-  const sharedAttemptBindings = receipt.bindings.map((item, index) => ({ ...item, workspaceId: `w-${index}`, attemptId: "shared-attempt" }));
+  const sharedAttemptBindings = receipt.bindings.map((item, index) => ({ ...item, workspaceId: `w-${String(index)}`, attemptId: "shared-attempt" }));
   assert.deepEqual(validateCodexSubscriptionLiveReceiptV1({ ...receipt, bindings: sharedAttemptBindings }).bindings, sharedAttemptBindings);
-  assert.throws(() => validateCodexSubscriptionLiveReceiptV1({ ...receipt, bindings: receipt.bindings.map(() => receipt.bindings[0]!) }), /INVALID/);
+  assert.throws(() => validateCodexSubscriptionLiveReceiptV1({ ...receipt, bindings: receipt.bindings.map(() => receiptBinding) }), /INVALID/);
   assert.throws(() => validateCodexSubscriptionLiveReceiptV1({ ...receipt, provenance: { ...receipt.provenance, contributions: receipt.provenance.contributions.map((item, index) => index === 0 ? { ...item, digest } : item) } }), /PROVENANCE_MISMATCH/);
   assert.throws(() => validateCodexSubscriptionLiveReceiptV1({ ...receipt, provenance: { ...receipt.provenance, nativePlugin: { ...receipt.provenance.nativePlugin, installedVersion: "0.1.0" } } }), /INVALID/);
   assert.throws(() => validateCodexSubscriptionLiveReceiptV1({ ...receipt, provenance: { ...receipt.provenance, nativePlugin: { ...receipt.provenance.nativePlugin, installedVersion: "0.1.0+horseness.0000000000000000" } } }), /PROVENANCE_MISMATCH/);
@@ -208,7 +209,7 @@ test("Codex live receipt validates the required subscription auth mode and rejec
   assert.throws(() => validateCodexSubscriptionLiveReceiptV1({ ...receipt, timing: { startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:02.000Z", durationMs: 1_000 } }), /INVALID/);
 });
 
-test("Codex app-server environment allowlists native session state and strips seeded credentials", () => {
+void test("Codex app-server environment allowlists native session state and strips seeded credentials", () => {
   const environment = codexNativeEnvironment("/verified/codex", "/bounded/tmp", {
     HOME: "/native/home",
     CODEX_HOME: "/native/home/.codex",
@@ -225,5 +226,5 @@ test("Codex app-server environment allowlists native session state and strips se
     HOME: "/native/home", CODEX_HOME: "/native/home/.codex", LANG: "C.UTF-8",
     HORSENESS_CODEX_RUNTIME_SOCKET: "/bounded/runtime.sock", HORSENESS_CODEX_RUNTIME_NONCE: "n".repeat(64), HORSENESS_CODEX_THREAD_CLAIM: "c".repeat(64),
   });
-  assert.throws(() => assertSafeCodexEnvironment({ ...environment, OPENAI_API_KEY: "forbidden" }), /FORBIDDEN/);
+  assert.throws(() => { assertSafeCodexEnvironment({ ...environment, OPENAI_API_KEY: "forbidden" }); }, /FORBIDDEN/);
 });

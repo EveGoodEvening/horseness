@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, closeSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { canonicalJson, createWorkspaceGenesis, domainDigest, NO_POLICY_DIGEST, type JsonValue } from "@horseness/domain";
-import { SQLiteAuthority, StoreConflictError } from "@horseness/store-sqlite";
+import { StoreConflictError, type SQLiteAuthority } from "@horseness/store-sqlite";
 import type { AuthenticatedGrantV1, ProtocolMethodV1 } from "@horseness/protocol";
 import { GRANT_AUTHORITY_STATE_KIND, GrantStore } from "./grant-store.js";
 
@@ -62,7 +62,7 @@ export class BootstrapCeremony {
     renameSync(this.capabilityPath, this.consumingPath);
     let appended = false;
     try {
-      const capability = JSON.parse(readFileSync(this.consumingPath, "utf8")) as BootstrapCapabilityV1;
+      const capability = JSON.parse(readFileSync(this.consumingPath, "utf8")) as Omit<BootstrapCapabilityV1, "schemaVersion"> & { readonly schemaVersion: unknown };
       if (capability.schemaVersion !== "1" || capability.workspaceId !== this.workspaceId || capability.osIdentity !== identity || capability.secret !== secret || capability.capabilityId.length === 0 || capability.authorityPrincipalId.length === 0) throw new Error("bootstrap capability binding mismatch");
       if (this.authority.replay(this.workspaceId, "workspace", this.workspaceId).length !== 0) throw new StoreConflictError("workspace is already bootstrapped");
       const grantReference = `grant:${randomUUID()}`;

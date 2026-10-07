@@ -86,7 +86,7 @@ export async function nativeExecutableDigestV1(path:string):Promise<string> {
  await access(resolved,constants.X_OK);
  if(!(await stat(resolved)).isFile())throw new Error("NATIVE_EXECUTABLE_INVALID");
  const hash=createHash("sha256");
- for await(const bytes of createReadStream(resolved))hash.update(bytes);
+ for await(const bytes of createReadStream(resolved))hash.update(bytes as Buffer);
  return hash.digest("hex");
 }
 export async function runNativeProcessV1(options:NativeProcessOptionsV1):Promise<NativeProcessResultV1> {
@@ -103,8 +103,8 @@ export async function runNativeProcessV1(options:NativeProcessOptionsV1):Promise
   failure??=error;
   try{if(grouped&&child.pid!==undefined)process.kill(-child.pid,"SIGKILL");else child.kill("SIGKILL");}catch(killError){if((killError as NodeJS.ErrnoException).code!=="ESRCH")failure??=killError as Error;}
  };
- const abort=()=>kill(new Error("NATIVE_CANCELLED"));
- const timer=setTimeout(()=>kill(new Error("NATIVE_TIMEOUT")),options.timeoutMs);
+ const abort=()=>{kill(new Error("NATIVE_CANCELLED"));};
+ const timer=setTimeout(()=>{kill(new Error("NATIVE_TIMEOUT"));},options.timeoutMs);
  options.signal?.addEventListener("abort",abort,{once:true});
  if(options.signal?.aborted)abort();
  const consume=(text:string,out:boolean)=>{
@@ -125,9 +125,9 @@ export async function runNativeProcessV1(options:NativeProcessOptionsV1):Promise
   if(size>options.maxOutputBytes){kill(new Error("NATIVE_OUTPUT_LIMIT"));return;}
   consume((out?stdoutDecoder:stderrDecoder).write(bytes),out);
  };
- child.stdout.on("data",bytes=>chunk(bytes,true));
- child.stderr.on("data",bytes=>chunk(bytes,false));
- child.stdin.on("error",()=>{});
+ child.stdout.on("data",(bytes:Buffer)=>{chunk(bytes,true);});
+ child.stderr.on("data",(bytes:Buffer)=>{chunk(bytes,false);});
+ child.stdin.on("error",()=>{/* Stdin failures do not override the native process outcome. */});
  child.on("error",error=>{failure=error;});
  child.on("close",exitCode=>{
   clearTimeout(timer);options.signal?.removeEventListener("abort",abort);
@@ -181,7 +181,7 @@ export async function createNativeTaskSpoolV1(input:NativeTaskAdapterOptionsV1):
   if(provenance.profileDigest!==profileDigest)throw new Error("NATIVE_PROFILE_MISMATCH");
   if(record.outcome==="succeeded"&&(provenance.observedHostId!==profile.hostId||provenance.observedHostVersion!==profile.hostVersion||provenance.observedProviderId!==profile.providerId||provenance.observedModelId!==profile.modelId))throw new Error("NATIVE_MODEL_MISMATCH");
   if(record.outcome==="succeeded"&&(provenance.nativeSessionId!==record.nativeSessionId||provenance.exitCode!==0))throw new Error("NATIVE_TERMINAL_UNOBSERVABLE");
-  if(!["succeeded","failed","cancelled"].includes(record.outcome)||typeof record.providerOperationId!=="string"||record.providerOperationId.length===0||typeof record.nativeSessionId!=="string"||record.nativeSessionId.length===0||!Number.isFinite(Date.parse(record.startedAt))||!Number.isFinite(Date.parse(record.finishedAt))||!Array.isArray(record.evidence)||record.evidence.some(item=>!/^[a-f0-9]{64}$/.test(item.digest)||!Number.isSafeInteger(item.size)||item.size<0)||record.outputDigest!==null&&!/^[a-f0-9]{64}$/.test(record.outputDigest))throw new Error("NATIVE_TERMINAL_INVALID");
+  if(!["succeeded","failed","cancelled"].includes(record.outcome)||typeof record.providerOperationId!=="string"||record.providerOperationId.length===0||typeof record.nativeSessionId!=="string"||record.nativeSessionId.length===0||!Number.isFinite(Date.parse(record.startedAt))||!Number.isFinite(Date.parse(record.finishedAt))||!Array.isArray(record.evidence)||record.evidence.some((item:NativeTaskTerminalV1["evidence"][number])=>!/^[a-f0-9]{64}$/.test(item.digest)||!Number.isSafeInteger(item.size)||item.size<0)||record.outputDigest!==null&&!/^[a-f0-9]{64}$/.test(record.outputDigest))throw new Error("NATIVE_TERMINAL_INVALID");
   if((record.outcome==="succeeded")!==(record.outputDigest!==null))throw new Error("NATIVE_TERMINAL_OUTPUT_INVALID");
  }
  async function validatePublications(record:NativeTaskTerminalV1){

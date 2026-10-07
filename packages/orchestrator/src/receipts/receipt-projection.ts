@@ -10,7 +10,7 @@ import {
   type JsonValue,
   type TaskResolution,
 } from "@horseness/domain";
-import { type TrustedAuthorityReader } from "@horseness/store-sqlite";
+import type { TrustedAuthorityReader } from "@horseness/store-sqlite";
 
 export interface ReceiptGenerationOutcomeV1 {
   generation: number;
@@ -93,7 +93,7 @@ const receiptIdentities = new WeakMap<object, object>();
 const authorityIdentities = new WeakMap<object, object>();
 const identities = new Map<string, object>();
 const identityFor = (attemptId: string, generation: number): object => {
-  const key = `${attemptId}\u0000${generation}`;
+  const key = `${attemptId}\u0000${String(generation)}`;
   const prior = identities.get(key);
   if (prior) return prior;
   const identity = Object.freeze({}); identities.set(key, identity); return identity;
@@ -116,7 +116,7 @@ export function issueStoredReceiptCapabilities(reader:TrustedAuthorityReader,inp
   const receipt=eventState.receipt as unknown as AttemptReceiptEnvelopeV1;
   const authority=authorityState as unknown as AttemptAuthorityInputV1;
   const storedPayload=stored.envelope.payload;
-  if(storedPayload===null||typeof storedPayload!=="object"||!("receiptId" in storedPayload)||!("receiptDigest" in storedPayload)||!("outcome" in storedPayload)||receipt.receiptId!==storedPayload.receiptId||receipt.receiptDigest!==storedPayload.receiptDigest||receipt.outcome!==storedPayload.outcome)fail("UNAUTHENTICATED_RECEIPT_EVENT");
+  if((storedPayload as unknown)===null||typeof storedPayload!=="object"||!("receiptId" in storedPayload)||!("receiptDigest" in storedPayload)||!("outcome" in storedPayload)||receipt.receiptId!==storedPayload.receiptId||receipt.receiptDigest!==storedPayload.receiptDigest||receipt.outcome!==storedPayload.outcome)fail("UNAUTHENTICATED_RECEIPT_EVENT");
   verifyAttemptReceipt(receipt);
   const {binding,grant,dispatch}=authority;
   if(grant.revoked||grant.principalId!==binding.allowedProducerPrincipalId||grant.grantDigest!==binding.allowedProducerGrantDigest||dispatch.attemptId!==binding.attemptId||dispatch.generation!==binding.generation||dispatch.providerId!==binding.providerId||dispatch.providerOperationId!==binding.providerOperationId||dispatch.providerIdempotencyKeyDigest!==binding.providerIdempotencyKeyDigest||dispatch.providerHandle!==authority.providerHandle)fail("RECEIPT_AUTHORITY_INVALID");

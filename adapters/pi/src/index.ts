@@ -22,12 +22,12 @@ export const PI_NATIVE_PACKAGE_METADATA = Object.freeze({
   contributions: Object.freeze([
     Object.freeze({ kind: "extension", name: "extensions/horseness-pi.mjs", digest: "sha256:2e65ec2d93f2d8ed260dde788a9d88295c6617a597fa0a77574ad139acc24438" }),
     Object.freeze({ kind: "manifest", name: "pi-package.json", digest: "sha256:40e9360a415df49d0674f2bcd58464c9f34d082aded0d8b7d55f33ca04210ba6" }),
-  ]),
-}) satisfies NativePackageMetadataV1;
+  ] as const),
+} as const) satisfies NativePackageMetadataV1;
 
 export const PI_INSTALL_CONTRIBUTIONS = Object.freeze([
-  parseInstallContributionV1({ schemaVersion: "1", kind: "plugin", contributionId: "horseness-pi-extension", relativePath: "extensions/horseness-pi.mjs", contentDigest: PI_NATIVE_PACKAGE_METADATA.contributions[0]!.digest, sourceArtifactDigest: PI_NATIVE_PACKAGE_METADATA.packageDigest, mode: "read-only", hostScope: PI_HOST_ID }),
-  parseInstallContributionV1({ schemaVersion: "1", kind: "file", contributionId: "horseness-pi-manifest", relativePath: "pi-package.json", contentDigest: PI_NATIVE_PACKAGE_METADATA.contributions[1]!.digest, sourceArtifactDigest: PI_NATIVE_PACKAGE_METADATA.packageDigest, mode: "read-only", hostScope: PI_HOST_ID }),
+  parseInstallContributionV1({ schemaVersion: "1", kind: "plugin", contributionId: "horseness-pi-extension", relativePath: "extensions/horseness-pi.mjs", contentDigest: PI_NATIVE_PACKAGE_METADATA.contributions[0].digest, sourceArtifactDigest: PI_NATIVE_PACKAGE_METADATA.packageDigest, mode: "read-only", hostScope: PI_HOST_ID }),
+  parseInstallContributionV1({ schemaVersion: "1", kind: "file", contributionId: "horseness-pi-manifest", relativePath: "pi-package.json", contentDigest: PI_NATIVE_PACKAGE_METADATA.contributions[1].digest, sourceArtifactDigest: PI_NATIVE_PACKAGE_METADATA.packageDigest, mode: "read-only", hostScope: PI_HOST_ID }),
 ]) satisfies readonly InstallContributionV1[];
 
 export interface PiNativeAttemptV1 {
@@ -99,7 +99,7 @@ export function createPiRetainedDeliveryAuthorityV1(stateDirectory: string): PiR
     if (details.isSymbolicLink() || !details.isDirectory() || (details.mode & 0o077) !== 0 || dirname(realpathSync(directory)) !== root) throw new Error("Pi retained state path must be a private, non-symlink directory");
   }
   let closed = false;
-  type LockOwner = { readonly pid: number; readonly nonce: string; readonly incarnation: string };
+  interface LockOwner { readonly pid: number; readonly nonce: string; readonly incarnation: string }
   const held = new Map<string, LockOwner>();
   const assertOpen = () => { if (closed) throw new Error("Pi retained delivery authority is closed"); };
   const nameFor = (key: string) => createHash("sha256").update(key).digest("hex");
@@ -118,7 +118,7 @@ export function createPiRetainedDeliveryAuthorityV1(stateDirectory: string): PiR
   const syncDirectory = (path: string) => { const descriptor = openSync(path, "r"); try { fsyncSync(descriptor); } finally { closeSync(descriptor); } };
   const publish = (key: string, value: PiRetainedDeliveryV1) => {
     const path = recordPath(key);
-    const temporary = join(records, `.${nameFor(key)}.${process.pid}.${randomUUID()}.tmp`);
+    const temporary = join(records, `.${nameFor(key)}.${String(process.pid)}.${randomUUID()}.tmp`);
     const descriptor = openSync(temporary, "wx", 0o600);
     try { writeFileSync(descriptor, JSON.stringify(value), "utf8"); fsyncSync(descriptor); } finally { closeSync(descriptor); }
     renameSync(temporary, path);
@@ -127,7 +127,7 @@ export function createPiRetainedDeliveryAuthorityV1(stateDirectory: string): PiR
   const linuxProcessIncarnation = (pid: number): string => {
     if (process.platform !== "linux") throw new Error("Pi retained delivery locks require verifiable process incarnation identity");
     let stat: string;
-    try { stat = readFileSync(`/proc/${pid}/stat`, "utf8"); }
+    try { stat = readFileSync(`/proc/${String(pid)}/stat`, "utf8"); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("Pi retained delivery lock owner process is absent");
       throw new Error("Pi retained delivery lock process incarnation could not be verified", { cause: error });
@@ -155,7 +155,7 @@ export function createPiRetainedDeliveryAuthorityV1(stateDirectory: string): PiR
     const path = lockPath(key);
     const owner = { pid: process.pid, nonce: randomUUID(), incarnation: linuxProcessIncarnation(process.pid) } satisfies LockOwner;
     const deadline = Date.now() + 10_000;
-    while (true) {
+    for (;;) {
       try {
         mkdirSync(path, { mode: 0o700 });
         writeFileSync(join(path, "owner.json"), JSON.stringify(owner), { encoding: "utf8", flag: "wx", mode: 0o600 });
@@ -167,17 +167,17 @@ export function createPiRetainedDeliveryAuthorityV1(stateDirectory: string): PiR
         if (details.isSymbolicLink() || !details.isDirectory() || (details.mode & 0o077) !== 0) throw new Error("Pi retained lock path must be a private, non-symlink directory");
         let existing: LockOwner;
         try { existing = readOwner(join(path, "owner.json")); }
-        catch (ownerError) {
+        catch {
           if (Date.now() - statSync(path).mtimeMs > 1_000) { rmSync(path, { recursive: true }); syncDirectory(locks); continue; }
           if (Date.now() >= deadline) throw new Error("Pi retained delivery lock acquisition timed out");
-          const { promise: wait, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, 10); await wait; continue;
+          const { promise: wait, resolve } = Promise.withResolvers<undefined>(); setTimeout(() => { resolve(undefined); }, 10); await wait; continue;
         }
         if (!ownerIsCurrent(existing)) {
           const reread = readOwner(join(path, "owner.json"));
           if (ownersMatch(reread, existing)) { rmSync(path, { recursive: true }); syncDirectory(locks); continue; }
         }
         if (Date.now() >= deadline) throw new Error("Pi retained delivery lock acquisition timed out");
-        const { promise: wait, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, 10); await wait;
+        const { promise: wait, resolve } = Promise.withResolvers<undefined>(); setTimeout(() => { resolve(undefined); }, 10); await wait;
       }
     }
   };
@@ -203,7 +203,7 @@ export interface PiNativeContributionRuntimeV1 {
   shutdown(): Promise<void>;
 }
 function attemptKey(binding: BoundAdapterOperationV1): string {
-  return `${binding.workspaceId}:${binding.runId}:${binding.taskId}:${binding.attemptId}:${binding.generation}`;
+  return `${binding.workspaceId}:${binding.runId}:${binding.taskId}:${binding.attemptId}:${String(binding.generation)}`;
 }
 const DELIVERY_PHASES: readonly PiRetainedDeliveryPhaseV1[] = ["prepared", "publication:0", "publication:1", "receipt", "proposal", "decision-resume", "decision"];
 const publicationPhase = (step: WorkerReturnDeliveryStepV1): PiRetainedDeliveryPhaseV1 => {
@@ -216,7 +216,7 @@ class PiRetainedWorkerReturnDeliveryV1 implements WorkerReturnDeliveryAuthorityV
   constructor(private readonly retained: PiRetainedDeliveryAuthorityV1, private readonly key: string) {}
   async perform<T>(step: WorkerReturnDeliveryStepV1, operation: () => Promise<T>): Promise<T> {
     const record = this.record();
-    if (hasCompleted(record, step)) return this.completed<T>(record, step);
+    if (hasCompleted(record, step)) return this.completed(record, step) as T;
     const result = await operation();
     const next = { ...record, phase: completedPhase(step) };
     if (step === "receipt") next.receiptDigest = result as string;
@@ -240,12 +240,12 @@ class PiRetainedWorkerReturnDeliveryV1 implements WorkerReturnDeliveryAuthorityV
     if (record === undefined) throw new Error("Pi retained worker return is unavailable");
     return record;
   }
-  private completed<T>(record: PiRetainedDeliveryV1, step: WorkerReturnDeliveryStepV1): T {
-    if (step === "receipt") { if (record.receiptDigest === null) throw new Error("Pi retained receipt digest is unavailable"); return record.receiptDigest as T; }
-    if (step === "proposal") return { proposalId: record.workerReturn.proposal.proposalId, proposalDigest: record.workerReturn.proposal.proposalDigest } as T;
-    if (step === "decision-subscription") { if (record.resumeToken === null) throw new Error("Pi retained decision subscription is unavailable"); return { resumeToken: record.resumeToken } as T; }
-    if (step === "decision") { if (record.resumeToken === null || record.decision === null) throw new Error("Pi retained decision is unavailable"); return { resumeToken: record.resumeToken, decision: record.decision } as T; }
-    return undefined as T;
+  private completed(record: PiRetainedDeliveryV1, step: WorkerReturnDeliveryStepV1): unknown {
+    if (step === "receipt") { if (record.receiptDigest === null) throw new Error("Pi retained receipt digest is unavailable"); return record.receiptDigest; }
+    if (step === "proposal") return { proposalId: record.workerReturn.proposal.proposalId, proposalDigest: record.workerReturn.proposal.proposalDigest };
+    if (step === "decision-subscription") { if (record.resumeToken === null) throw new Error("Pi retained decision subscription is unavailable"); return { resumeToken: record.resumeToken }; }
+    if (step === "decision") { if (record.resumeToken === null || record.decision === null) throw new Error("Pi retained decision is unavailable"); return { resumeToken: record.resumeToken, decision: record.decision }; }
+    return undefined;
   }
 }
 function assertCanonicalTuple(record: PiRetainedDeliveryV1, receipt: AttemptReceiptEnvelopeV1, outputDigest: string, evidenceDigest: string): void {
@@ -253,7 +253,8 @@ function assertCanonicalTuple(record: PiRetainedDeliveryV1, receipt: AttemptRece
   if (record.workerReturn.receipt.receiptDigest !== receipt.receiptDigest || publications.length !== 2 || publications[0]?.kind !== "artifact" || publications[0].digest !== outputDigest || publications[1]?.kind !== "evidence" || publications[1].digest !== evidenceDigest) throw new Error("replayed Pi worker return substituted the canonical output/evidence tuple");
 }
 export function createPiNativeContributionRuntimeV1(registrations: readonly PiWorkerReturnRegistrationV1[], options: PiNativeContributionRuntimeOptionsV1): PiNativeContributionRuntimeV1 {
-  if (options?.retained === undefined) throw new Error("Pi native contribution runtime requires a durable retained delivery authority");
+  const runtimeOptions: unknown = options;
+  if (typeof runtimeOptions !== "object" || runtimeOptions === null || !("retained" in runtimeOptions) || runtimeOptions.retained === undefined) throw new Error("Pi native contribution runtime requires a durable retained delivery authority");
   for (const registration of registrations) {
     const client = registration.authority.client as WorkerReturnClientV1 & Record<string, unknown>;
     if (typeof client.startDecisionSubscription !== "function" || typeof client.observeDecision !== "function") throw new Error("Pi native contribution runtime requires resumable startDecisionSubscription and observeDecision authority methods");
@@ -273,7 +274,7 @@ export function createPiNativeContributionRuntimeV1(registrations: readonly PiWo
       const key = attemptKey(registration.binding);
       return retained.runExclusive(key, async () => {
         const receipt = await registration.adapter.collectReceipt(registration.binding);
-        if (receipt.outputDigest !== output.digest || receipt.evidence.length !== 1 || receipt.evidence[0]?.digest !== evidence.digest || receipt.evidence[0]?.mediaType !== evidence.mediaType || receipt.evidence[0]?.size !== evidence.byteLength) throw new Error("provider output does not match the bound Pi attempt receipt");
+        if (receipt.outputDigest !== output.digest || receipt.evidence.length !== 1 || receipt.evidence[0]?.digest !== evidence.digest || receipt.evidence[0].mediaType !== evidence.mediaType || receipt.evidence[0].size !== evidence.byteLength) throw new Error("provider output does not match the bound Pi attempt receipt");
         let record = retained.load(key);
         if (record === undefined) {
           const proposal = await registration.authority.sealProposal(registration.binding, receipt);
@@ -287,8 +288,8 @@ export function createPiNativeContributionRuntimeV1(registrations: readonly PiWo
         return structuredClone({ workerReturn: record.workerReturn, delivery });
       });
     },
-    async state() { return { attemptKeys: registrations.map(registration => attemptKey(registration.binding)).filter(key => retained.load(key) !== undefined) }; },
-    async shutdown() { active.clear(); retained.close(); },
+    async state() { return await Promise.resolve({ attemptKeys: registrations.map(registration => attemptKey(registration.binding)).filter(key => retained.load(key) !== undefined) }); },
+    shutdown() { active.clear(); retained.close(); return Promise.resolve(); },
   });
 }
 
@@ -310,8 +311,8 @@ class PiWorkerAdapterV1 implements WorkerAdapterV1 {
     this.#producerGrantDigest = options.producerGrantDigest;
   }
 
-  async detectCapabilities(): Promise<AdapterCapabilitiesV1> {
-    return { schemaVersion: "1", adapterId: PI_ADAPTER_ID, providerId: PI_PROVIDER_ID, launch: true, cancel: true, reconcile: "supported", reattach: "supported", nativeResume: "supported", contextInjection: "native", receiptCollection: true, maxContextBytes: 1_048_576, outputMediaTypes: ["text/plain", "application/json"], evidenceMediaTypes: ["application/json"] };
+  detectCapabilities(): Promise<AdapterCapabilitiesV1> {
+    return Promise.resolve({ schemaVersion: "1", adapterId: PI_ADAPTER_ID, providerId: PI_PROVIDER_ID, launch: true, cancel: true, reconcile: "supported", reattach: "supported", nativeResume: "supported", contextInjection: "native", receiptCollection: true, maxContextBytes: 1_048_576, outputMediaTypes: ["text/plain", "application/json"], evidenceMediaTypes: ["application/json"] });
   }
 
   async launch(request: AdapterLaunchRequestV1): Promise<AdapterOperationResultV1> { this.#guard.assert(request); this.#attempt = await this.#runtime.launch(Object.freeze(structuredClone(request))); return result("accepted", this.#attempt, { host: PI_HOST_ID, hostVersion: PI_HOST_VERSION }); }
@@ -322,7 +323,7 @@ class PiWorkerAdapterV1 implements WorkerAdapterV1 {
     this.#guard.assert(binding);
     const attempt = await this.#runtime.collect(this.#guard.binding) ?? this.#attempt;
     if (attempt === null) throw new Error("Pi native attempt receipt is unavailable");
-    return sealAttemptReceipt({ schemaVersion: "1", workspaceId: binding.workspaceId, runId: binding.runId, taskId: binding.taskId, attemptId: binding.attemptId, generation: binding.generation, attemptContextBindingDigest: binding.attemptContextBindingDigest, contextManifestCoreDigest: binding.contextManifestCoreDigest, forkPinDigest: binding.forkPinDigest, providerId: PI_PROVIDER_ID, providerOperationId: attempt.providerOperationId, providerIdempotencyKeyDigest: binding.providerIdempotencyKeyDigest, producerPrincipalId: this.#producerPrincipalId, producerGrantDigest: this.#producerGrantDigest, adapterId: PI_ADAPTER_ID, adapterVersion: PI_ADAPTER_VERSION, hostId: PI_HOST_ID, hostVersion: PI_HOST_VERSION, outcome: attempt.outcome, startedAt: attempt.startedAt, finishedAt: attempt.finishedAt, outputDigest: attempt.outputDigest, evidence: attempt.evidence, provenance: attempt.provenance, nonce: `${binding.attemptId}:${binding.generation}:${attempt.providerOperationId}` });
+    return sealAttemptReceipt({ schemaVersion: "1", workspaceId: binding.workspaceId, runId: binding.runId, taskId: binding.taskId, attemptId: binding.attemptId, generation: binding.generation, attemptContextBindingDigest: binding.attemptContextBindingDigest, contextManifestCoreDigest: binding.contextManifestCoreDigest, forkPinDigest: binding.forkPinDigest, providerId: PI_PROVIDER_ID, providerOperationId: attempt.providerOperationId, providerIdempotencyKeyDigest: binding.providerIdempotencyKeyDigest, producerPrincipalId: this.#producerPrincipalId, producerGrantDigest: this.#producerGrantDigest, adapterId: PI_ADAPTER_ID, adapterVersion: PI_ADAPTER_VERSION, hostId: PI_HOST_ID, hostVersion: PI_HOST_VERSION, outcome: attempt.outcome, startedAt: attempt.startedAt, finishedAt: attempt.finishedAt, outputDigest: attempt.outputDigest, evidence: attempt.evidence, provenance: attempt.provenance, nonce: `${binding.attemptId}:${String(binding.generation)}:${attempt.providerOperationId}` });
   }
 }
 

@@ -13,7 +13,7 @@ export const CLAUDE_HOST_ID = "claude" as const;
 export const CLAUDE_HOST_VERSION = "2.1.228" as const;
 export const CLAUDE_PROVIDER_ID = "claude-native-provider-v1" as const;
 
-export type ClaudeNativeContributionDigestV1 = { readonly kind: string; readonly name: string; readonly digest: string };
+export interface ClaudeNativeContributionDigestV1 { readonly kind: string; readonly name: string; readonly digest: string }
 export function claudeNativePackageDigestV1(contributions: readonly ClaudeNativeContributionDigestV1[]): string {
   return `sha256:${createHash("sha256").update(JSON.stringify({ schemaVersion: "ClaudeNativePackageDigestV1", contributions })).digest("hex")}`;
 }
@@ -42,7 +42,7 @@ export const CLAUDE_NATIVE_PACKAGE_METADATA = Object.freeze({
 }) satisfies NativePackageMetadataV1;
 
 export const CLAUDE_INSTALL_CONTRIBUTIONS = Object.freeze(CLAUDE_NATIVE_PACKAGE_METADATA.contributions.map((item, index) =>
-  parseInstallContributionV1({ schemaVersion: "1", kind: index === 0 ? "plugin" : "file", contributionId: `horseness-claude-${index}`, relativePath: item.name, contentDigest: item.digest, sourceArtifactDigest: CLAUDE_NATIVE_PACKAGE_METADATA.packageDigest, mode: "read-only", hostScope: CLAUDE_HOST_ID }),
+  parseInstallContributionV1({ schemaVersion: "1", kind: index === 0 ? "plugin" : "file", contributionId: `horseness-claude-${String(index)}`, relativePath: item.name, contentDigest: item.digest, sourceArtifactDigest: CLAUDE_NATIVE_PACKAGE_METADATA.packageDigest, mode: "read-only", hostScope: CLAUDE_HOST_ID }),
 )) satisfies readonly InstallContributionV1[];
 
 export interface ClaudeSubscriptionLiveReceiptV1 {
@@ -60,14 +60,17 @@ export interface ClaudeSubscriptionLiveReceiptV1 {
   readonly terminal: { readonly result: "succeeded" | "failed"; readonly reason: string };
 }
 export function validateClaudeSubscriptionLiveReceiptV1(value: ClaudeSubscriptionLiveReceiptV1): ClaudeSubscriptionLiveReceiptV1 {
-  const bindingIdentities = value.bindings.map(item => `${item.workspaceId}:${item.runId}:${item.taskId}:${item.attemptId}:${item.generation}`);
+  const bindingIdentities = value.bindings.map(item => `${item.workspaceId}:${item.runId}:${item.taskId}:${item.attemptId}:${String(item.generation)}`);
   const authMode: unknown = value.authMode;
-  if (value.schemaVersion !== "ClaudeSubscriptionLiveReceiptV1" || value.host !== "claude" || authMode !== "existing-user-subscription-session" || value.observedModel.length === 0 || value.candidate.head.length === 0 || value.candidate.tree.length === 0 || value.command.argv.length === 0 || value.bindings.length !== 5 || new Set(bindingIdentities).size !== 5 || value.provenance.contributions.length === 0 || value.timing.durationMs < 0 || value.terminal.reason.length === 0 || value.redactionAudit.passed !== true) throw new Error("CLAUDE_LIVE_RECEIPT_INVALID");
+  const schemaVersion: unknown = value.schemaVersion;
+  const host: unknown = value.host;
+  const redactionPassed: unknown = value.redactionAudit.passed;
+  if (schemaVersion !== "ClaudeSubscriptionLiveReceiptV1" || host !== "claude" || authMode !== "existing-user-subscription-session" || value.observedModel.length === 0 || value.candidate.head.length === 0 || value.candidate.tree.length === 0 || value.command.argv.length === 0 || value.bindings.length !== 5 || new Set(bindingIdentities).size !== 5 || value.provenance.contributions.length === 0 || value.timing.durationMs < 0 || value.terminal.reason.length === 0 || redactionPassed !== true) throw new Error("CLAUDE_LIVE_RECEIPT_INVALID");
   const digests = [value.command.digest, value.command.scenarioSetDigest, value.command.batchResponseDigest, value.provenance.archiveDigest, value.provenance.executableDigest, value.provenance.packageDigest, ...value.provenance.contributions.map(item => item.digest), ...value.bindings.flatMap(item => [item.forkPinDigest, item.contextManifestCoreDigest, item.attemptContextBindingDigest, item.receiptDigest, item.proposalDigest, item.outputDigest, ...item.evidenceDigests])];
   if (digests.some(digest => !/^(?:sha256:)?[a-f0-9]{64}$/.test(digest))) throw new Error("CLAUDE_LIVE_RECEIPT_DIGEST_INVALID");
   const observedContributions = value.provenance.contributions.map(observedClaudeContribution);
   if (observedContributions.some(item => item === null) || JSON.stringify(value.provenance.contributions) !== JSON.stringify(CLAUDE_NATIVE_CONTRIBUTIONS.map(({ name, digest }) => ({ name, digest }))) || value.provenance.packageDigest !== claudeNativePackageDigestV1(observedContributions as ClaudeNativeContributionDigestV1[]) || value.provenance.packageDigest !== CLAUDE_NATIVE_PACKAGE_METADATA.packageDigest) throw new Error("CLAUDE_LIVE_RECEIPT_PROVENANCE_MISMATCH");
-  if (JSON.stringify(value).match(/"(?:account|email|subscriptionId|credential|authorization|token|cookie|authPath|tokenFingerprint)"\s*:/i)) throw new Error("CLAUDE_LIVE_RECEIPT_REDACTION_FAILED");
+  if (/"(?:account|email|subscriptionId|credential|authorization|token|cookie|authPath|tokenFingerprint)"\s*:/i.exec(JSON.stringify(value))) throw new Error("CLAUDE_LIVE_RECEIPT_REDACTION_FAILED");
   return Object.freeze(structuredClone(value));
 }
 export interface ClaudeNativeAttemptV1 {
@@ -141,7 +144,7 @@ export function createClaudeRetainedDeliveryAuthorityV1(stateDirectory: string):
     if (details.isSymbolicLink() || !details.isDirectory() || (details.mode & 0o077) !== 0 || dirname(realpathSync(directory)) !== root) throw new Error("Claude retained state path must be a private, non-symlink directory");
   }
   let closed = false;
-  type LockOwner = { readonly pid: number; readonly nonce: string; readonly incarnation: string };
+  interface LockOwner { readonly pid: number; readonly nonce: string; readonly incarnation: string }
   const held = new Map<string, LockOwner>();
   const assertOpen = () => { if (closed) throw new Error("Claude retained delivery authority is closed"); };
   const nameFor = (key: string) => createHash("sha256").update(key).digest("hex");
@@ -160,7 +163,7 @@ export function createClaudeRetainedDeliveryAuthorityV1(stateDirectory: string):
   const syncDirectory = (path: string) => { const descriptor = openSync(path, "r"); try { fsyncSync(descriptor); } finally { closeSync(descriptor); } };
   const publish = (key: string, value: ClaudeRetainedDeliveryV1) => {
     const path = recordPath(key);
-    const temporary = join(records, `.${nameFor(key)}.${process.pid}.${randomUUID()}.tmp`);
+    const temporary = join(records, `.${nameFor(key)}.${String(process.pid)}.${randomUUID()}.tmp`);
     const descriptor = openSync(temporary, "wx", 0o600);
     try { writeFileSync(descriptor, JSON.stringify(value), "utf8"); fsyncSync(descriptor); } finally { closeSync(descriptor); }
     renameSync(temporary, path);
@@ -169,7 +172,7 @@ export function createClaudeRetainedDeliveryAuthorityV1(stateDirectory: string):
   const linuxProcessIncarnation = (pid: number): string => {
     if (process.platform !== "linux") throw new Error("Claude retained delivery locks require verifiable process incarnation identity");
     let stat: string;
-    try { stat = readFileSync(`/proc/${pid}/stat`, "utf8"); }
+    try { stat = readFileSync(`/proc/${String(pid)}/stat`, "utf8"); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("Claude retained delivery lock owner process is absent");
       throw new Error("Claude retained delivery lock process incarnation could not be verified", { cause: error });
@@ -197,7 +200,7 @@ export function createClaudeRetainedDeliveryAuthorityV1(stateDirectory: string):
     const path = lockPath(key);
     const owner = { pid: process.pid, nonce: randomUUID(), incarnation: linuxProcessIncarnation(process.pid) } satisfies LockOwner;
     const deadline = Date.now() + 10_000;
-    while (true) {
+    for (;;) {
       try {
         mkdirSync(path, { mode: 0o700 });
         writeFileSync(join(path, "owner.json"), JSON.stringify(owner), { encoding: "utf8", flag: "wx", mode: 0o600 });
@@ -209,17 +212,17 @@ export function createClaudeRetainedDeliveryAuthorityV1(stateDirectory: string):
         if (details.isSymbolicLink() || !details.isDirectory() || (details.mode & 0o077) !== 0) throw new Error("Claude retained lock path must be a private, non-symlink directory");
         let existing: LockOwner;
         try { existing = readOwner(join(path, "owner.json")); }
-        catch (ownerError) {
+        catch {
           if (Date.now() - statSync(path).mtimeMs > 1_000) { rmSync(path, { recursive: true }); syncDirectory(locks); continue; }
           if (Date.now() >= deadline) throw new Error("Claude retained delivery lock acquisition timed out");
-          const { promise: wait, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, 10); await wait; continue;
+          const { promise: wait, resolve } = Promise.withResolvers<undefined>(); setTimeout(resolve, 10); await wait; continue;
         }
         if (!ownerIsCurrent(existing)) {
           const reread = readOwner(join(path, "owner.json"));
           if (ownersMatch(reread, existing)) { rmSync(path, { recursive: true }); syncDirectory(locks); continue; }
         }
         if (Date.now() >= deadline) throw new Error("Claude retained delivery lock acquisition timed out");
-        const { promise: wait, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, 10); await wait;
+        const { promise: wait, resolve } = Promise.withResolvers<undefined>(); setTimeout(resolve, 10); await wait;
       }
     }
   };
@@ -301,7 +304,7 @@ export interface ClaudeNativeContributionRuntimeV1 {
   shutdown(): Promise<void>;
 }
 function attemptKey(binding: BoundAdapterOperationV1): string {
-  return `${binding.workspaceId}:${binding.runId}:${binding.taskId}:${binding.attemptId}:${binding.generation}`;
+  return `${binding.workspaceId}:${binding.runId}:${binding.taskId}:${binding.attemptId}:${String(binding.generation)}`;
 }
 const DELIVERY_PHASES: readonly ClaudeRetainedDeliveryPhaseV1[] = ["prepared", "publication:0", "publication:1", "receipt", "proposal", "decision-resume", "decision"];
 const publicationPhase = (step: WorkerReturnDeliveryStepV1): ClaudeRetainedDeliveryPhaseV1 => {
@@ -314,7 +317,7 @@ class ClaudeRetainedWorkerReturnDeliveryV1 implements WorkerReturnDeliveryAuthor
   constructor(private readonly retained: ClaudeRetainedDeliveryAuthorityV1, private readonly key: string) {}
   async perform<T>(step: WorkerReturnDeliveryStepV1, operation: () => Promise<T>): Promise<T> {
     const record = this.record();
-    if (hasCompleted(record, step)) return this.completed<T>(record, step);
+    if (hasCompleted(record, step)) return this.completed(record, step) as T;
     const result = await operation();
     const next = { ...record, phase: completedPhase(step) };
     if (step === "receipt") next.receiptDigest = result as string;
@@ -338,23 +341,23 @@ class ClaudeRetainedWorkerReturnDeliveryV1 implements WorkerReturnDeliveryAuthor
     if (record === undefined) throw new Error("Claude retained worker return is unavailable");
     return record;
   }
-  private completed<T>(record: ClaudeRetainedDeliveryV1, step: WorkerReturnDeliveryStepV1): T {
-    if (step === "receipt") { if (record.receiptDigest === null) throw new Error("Claude retained receipt digest is unavailable"); return record.receiptDigest as T; }
-    if (step === "proposal") return { proposalId: record.workerReturn.proposal.proposalId, proposalDigest: record.workerReturn.proposal.proposalDigest } as T;
-    if (step === "decision-subscription") { if (record.resumeToken === null) throw new Error("Claude retained decision subscription is unavailable"); return { resumeToken: record.resumeToken } as T; }
-    if (step === "decision") { if (record.resumeToken === null || record.decision === null) throw new Error("Claude retained decision is unavailable"); return { resumeToken: record.resumeToken, decision: record.decision } as T; }
-    return undefined as T;
+  private completed(record: ClaudeRetainedDeliveryV1, step: WorkerReturnDeliveryStepV1): unknown {
+    if (step === "receipt") { if (record.receiptDigest === null) throw new Error("Claude retained receipt digest is unavailable"); return record.receiptDigest; }
+    if (step === "proposal") return { proposalId: record.workerReturn.proposal.proposalId, proposalDigest: record.workerReturn.proposal.proposalDigest };
+    if (step === "decision-subscription") { if (record.resumeToken === null) throw new Error("Claude retained decision subscription is unavailable"); return { resumeToken: record.resumeToken }; }
+    if (step === "decision") { if (record.resumeToken === null || record.decision === null) throw new Error("Claude retained decision is unavailable"); return { resumeToken: record.resumeToken, decision: record.decision }; }
+    return undefined;
   }
 }
 function assertCanonicalTuple(record: ClaudeRetainedDeliveryV1, receipt: AttemptReceiptEnvelopeV1, outputDigest: string, evidenceDigest: string): void {
   const publications = record.workerReturn.publications;
   if (record.workerReturn.receipt.receiptDigest !== receipt.receiptDigest || publications.length !== 2 || publications[0]?.kind !== "artifact" || publications[0].digest !== outputDigest || publications[1]?.kind !== "evidence" || publications[1].digest !== evidenceDigest) throw new Error("replayed Claude worker return substituted the canonical output/evidence tuple");
 }
-type ClaudeSessionBindingStateV1 = {
+interface ClaudeSessionBindingStateV1 {
   readonly schemaVersion: "ClaudeSessionBindingStateV1";
   readonly sessions: Readonly<Record<string, string>>;
   readonly branches: Readonly<Record<string, ClaudeNativeBranchRegistrationV1>>;
-};
+}
 function createSessionBindingStore(directory: string | undefined) {
   if (directory === undefined || !isAbsolute(directory)) throw new Error("Claude session binding state directory must be absolute");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -364,16 +367,16 @@ function createSessionBindingStore(directory: string | undefined) {
     try {
       const details = lstatSync(path);
       if (details.isSymbolicLink() || !details.isFile() || (details.mode & 0o077) !== 0) throw new Error("Claude session binding state must be a private regular file");
-      const parsed = JSON.parse(readFileSync(path, "utf8")) as ClaudeSessionBindingStateV1;
+      const parsed = JSON.parse(readFileSync(path, "utf8")) as { readonly schemaVersion: unknown; readonly sessions: unknown; readonly branches: unknown };
       if (parsed.schemaVersion !== "ClaudeSessionBindingStateV1" || parsed.sessions === null || parsed.branches === null) throw new Error("Claude session binding state is invalid");
-      return parsed;
+      return parsed as ClaudeSessionBindingStateV1;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return { schemaVersion: "ClaudeSessionBindingStateV1", sessions: {}, branches: {} };
       throw error;
     }
   };
   const publish = (state: ClaudeSessionBindingStateV1) => {
-    const temporary = join(root, `.session-bindings.${process.pid}.${randomUUID()}.tmp`);
+    const temporary = join(root, `.session-bindings.${String(process.pid)}.${randomUUID()}.tmp`);
     const descriptor = openSync(temporary, "wx", 0o600);
     try { writeFileSync(descriptor, JSON.stringify(state), "utf8"); fsyncSync(descriptor); } finally { closeSync(descriptor); }
     renameSync(temporary, path);
@@ -382,7 +385,9 @@ function createSessionBindingStore(directory: string | undefined) {
   return { read, publish };
 }
 export function createClaudeNativeContributionRuntimeV1(registrations: readonly ClaudeWorkerReturnRegistrationV1[], options: ClaudeNativeContributionRuntimeOptionsV1): ClaudeNativeContributionRuntimeV1 {
-  if (options?.retained === undefined) throw new Error("Claude native contribution runtime requires a durable retained delivery authority");
+  const runtimeOptions: ClaudeNativeContributionRuntimeOptionsV1 | undefined = options as ClaudeNativeContributionRuntimeOptionsV1 | undefined;
+  const retainedInput: unknown = runtimeOptions?.retained;
+  if (retainedInput === undefined) throw new Error("Claude native contribution runtime requires a durable retained delivery authority");
   for (const registration of registrations) {
     const client = registration.authority.client as WorkerReturnClientV1 & Record<string, unknown>;
     if (typeof client.startDecisionSubscription !== "function" || typeof client.observeDecision !== "function") throw new Error("Claude native contribution runtime requires resumable startDecisionSubscription and observeDecision authority methods");
@@ -399,7 +404,7 @@ export function createClaudeNativeContributionRuntimeV1(registrations: readonly 
   let pendingBranch: ClaudeNativeBranchRegistrationV1 | null = null;
   let revoker: (() => Promise<void>) | null = null;
   let revoked = false;
-  const persistSessions = () => sessionStore.publish({ schemaVersion: "ClaudeSessionBindingStateV1", sessions: Object.fromEntries(sessions), branches: Object.fromEntries(branchesByEntry) });
+  const persistSessions = () => { sessionStore.publish({ schemaVersion: "ClaudeSessionBindingStateV1", sessions: Object.fromEntries(sessions), branches: Object.fromEntries(branchesByEntry) }); };
   for (const registration of registrations) {
     const reference = parseCredentialReferenceV1({ schemaVersion: "1", kind: "host-reference", reference: registration.capabilityReference, scope: { workspaceId: registration.binding.workspaceId, adapterId: CLAUDE_ADAPTER_ID, purpose: "claude-attempt-return" } });
     if (reference.reference !== registration.binding.attemptCapability) throw new Error("Claude attempt capability reference does not match immutable binding");
@@ -416,7 +421,7 @@ export function createClaudeNativeContributionRuntimeV1(registrations: readonly 
         const receipt = await registration.adapter.collectReceipt(registration.binding);
         if (receipt.outputDigest !== output.digest) throw new Error("Claude provider output digest does not match the bound attempt receipt");
         if (receipt.evidence.length !== 1 || receipt.evidence[0]?.digest !== evidence.digest) throw new Error("Claude provider evidence digest does not match the bound attempt receipt");
-        if (receipt.evidence[0]?.mediaType !== evidence.mediaType || receipt.evidence[0]?.size !== evidence.byteLength) throw new Error("Claude provider evidence descriptor does not match the bound attempt receipt");
+        if (receipt.evidence[0].mediaType !== evidence.mediaType || receipt.evidence[0].size !== evidence.byteLength) throw new Error("Claude provider evidence descriptor does not match the bound attempt receipt");
         let record = retained.load(key);
         if (record === undefined) {
           const proposal = await registration.authority.sealProposal(registration.binding, receipt);
@@ -438,7 +443,7 @@ export function createClaudeNativeContributionRuntimeV1(registrations: readonly 
       for (const input of inputs) {
         const result = await this.deliver(input.attemptCapabilityReference, input.output, input.evidence);
         const { binding, receipt, proposal } = result.workerReturn;
-        results.push({ workspaceId: binding.workspaceId, runId: binding.runId, taskId: binding.taskId, attemptId: binding.attemptId, generation: binding.generation, decision: result.delivery.decision, receiptDigest: receipt.receiptDigest, proposalDigest: proposal.proposalDigest, outputDigest: receipt.outputDigest!, evidenceDigests: receipt.evidence.map(item => item.digest) });
+        results.push({ workspaceId: binding.workspaceId, runId: binding.runId, taskId: binding.taskId, attemptId: binding.attemptId, generation: binding.generation, decision: result.delivery.decision, receiptDigest: receipt.receiptDigest, proposalDigest: proposal.proposalDigest, outputDigest: input.output.digest, evidenceDigests: receipt.evidence.map(item => item.digest) });
         if (result.delivery.decision === "accepted") {
           const authority = active.get(input.attemptCapabilityReference)?.authority;
           if (canonicalAcceptedAdvance !== null || authority?.canonicalAcceptedAdvance === undefined) throw new Error("Claude native worker return batch lacks one authoritative accepted canonical advance");
@@ -448,14 +453,14 @@ export function createClaudeNativeContributionRuntimeV1(registrations: readonly 
       if (canonicalAcceptedAdvance === null) throw new Error("Claude native worker return batch lacks one authoritative accepted canonical advance");
       return structuredClone({ schemaVersion: "HorsenessClaudeWorkerReturnBatchResultV1" as const, sessionId: sessionId ?? null, results, canonicalAcceptedAdvance });
     },
-    async state() { return { attemptKeys: registrations.map(registration => attemptKey(registration.binding)).filter(key => retained.load(key) !== undefined) }; },
-    async contextForAttempt() { if (revoked || selectedCapability === null) return null; const context = contexts.get(selectedCapability); return context === undefined ? null : structuredClone(context); },
-    async registerSessionStart(start: ClaudeNativeSessionStartV1) {
+    state() { return new Promise<{ readonly attemptKeys: readonly string[] }>(resolve => { resolve({ attemptKeys: registrations.map(registration => attemptKey(registration.binding)).filter(key => retained.load(key) !== undefined) }); }); },
+    contextForAttempt() { return new Promise<ClaudeNativeAttemptContextV1 | null>(resolve => { if (revoked || selectedCapability === null) { resolve(null); return; } const context = contexts.get(selectedCapability); resolve(context === undefined ? null : structuredClone(context)); }); },
+    registerSessionStart(start: ClaudeNativeSessionStartV1) { return new Promise<ClaudeNativeAttemptContextV1>(resolve => {
       if (revoked || start.sessionId.length === 0) throw new Error("invalid Claude session start");
       const existing = sessions.get(start.sessionId);
       if (existing !== undefined) {
         if (start.source === "startup" || (start.previousSessionId !== undefined && sessions.get(start.previousSessionId) !== existing)) throw new Error("Claude session binding substitution rejected");
-        const context = contexts.get(existing); if (context === undefined) throw new Error("Claude session references an unknown attempt capability"); return structuredClone(context);
+        const context = contexts.get(existing); if (context === undefined) throw new Error("Claude session references an unknown attempt capability"); resolve(structuredClone(context)); return;
       }
       let capability: string | undefined;
       if (start.source === "startup") capability = selectedCapability ?? undefined;
@@ -469,10 +474,11 @@ export function createClaudeNativeContributionRuntimeV1(registrations: readonly 
         if (start.branchEntryId !== undefined) throw new Error("Claude branch entry id is only valid for a fork session");
         if (start.previousSessionId !== undefined) capability = sessions.get(start.previousSessionId);
       }
-      if (capability === undefined || !active.has(capability) || !contexts.has(capability)) throw new Error("Claude session source is unknown or unbound");
+      const context = capability === undefined ? undefined : contexts.get(capability);
+      if (capability === undefined || !active.has(capability) || context === undefined) throw new Error("Claude session source is unknown or unbound");
       sessions.set(start.sessionId, capability); selectedCapability = capability; persistSessions();
-      return structuredClone(contexts.get(capability)!);
-    },
+      resolve(structuredClone(context));
+    }); },
     registerBranch(registration: ClaudeNativeBranchRegistrationV1) {
       if (revoked) throw new Error("Claude native contribution runtime is revoked");
       const { entryId, previousSessionFile, attemptCapabilityReference } = registration;
@@ -491,14 +497,15 @@ export function createClaudeNativeContributionRuntimeV1(registrations: readonly 
       branchesBySession.set(previousSessionFile, immutable);
       persistSessions();
     },
-    async beforeBranch(entryId: string) {
+    beforeBranch(entryId: string) { return new Promise<void>(resolve => {
       if (revoked || typeof entryId !== "string" || entryId.length === 0) throw new Error("invalid Claude branch entry id");
       const branch = branchesByEntry.get(entryId);
       if (branch === undefined) throw new Error("unknown Claude branch entry id");
       pendingBranch = branch;
-    },
-    async activateSession(previousSessionFile: string | null) {
-      if (revoked) return null;
+      resolve();
+    }); },
+    activateSession(previousSessionFile: string | null) { return new Promise<{ readonly forkPinDigest: string } | null>(resolve => {
+      if (revoked) { resolve(null); return; }
       if (previousSessionFile !== null) {
         const pending = pendingBranch;
         pendingBranch = null;
@@ -508,12 +515,12 @@ export function createClaudeNativeContributionRuntimeV1(registrations: readonly 
         selectedCapability = mapped.attemptCapabilityReference;
       }
       const context = selectedCapability === null ? undefined : contexts.get(selectedCapability);
-      return context === undefined ? null : { forkPinDigest: context.binding.forkPinDigest };
-    },
+      resolve(context === undefined ? null : { forkPinDigest: context.binding.forkPinDigest });
+    }); },
     registerRevoker(next: () => Promise<void>) { if (revoker !== null) throw new Error("Claude native grant revoker is already registered"); revoker = next; },
     async revoke() { if (revoked) return; revoked = true; active.clear(); contexts.clear(); branchesByEntry.clear(); branchesBySession.clear(); sessions.clear(); selectedCapability = null; pendingBranch = null; persistSessions(); const current = revoker; revoker = null; if (current !== null) await current(); else retained.close(); },
-    async sessionShutdown() { pendingBranch = null; },
-    async shutdown() { active.clear(); contexts.clear(); branchesByEntry.clear(); branchesBySession.clear(); sessions.clear(); selectedCapability = null; pendingBranch = null; retained.close(); },
+    sessionShutdown() { return new Promise<void>(resolve => { pendingBranch = null; resolve(); }); },
+    shutdown() { return new Promise<void>(resolve => { active.clear(); contexts.clear(); branchesByEntry.clear(); branchesBySession.clear(); sessions.clear(); selectedCapability = null; pendingBranch = null; retained.close(); resolve(); }); },
   });
 }
 
@@ -548,14 +555,14 @@ class ClaudeWorkerAdapterV1 implements WorkerAdapterV1 {
     this.#guard.assert(binding);
     const attempt = await this.#runtime.collect(this.#guard.binding) ?? this.#attempt;
     if (attempt === null) throw new Error("Claude native attempt receipt is unavailable");
-    return sealAttemptReceipt({ schemaVersion: "1", workspaceId: binding.workspaceId, runId: binding.runId, taskId: binding.taskId, attemptId: binding.attemptId, generation: binding.generation, attemptContextBindingDigest: binding.attemptContextBindingDigest, contextManifestCoreDigest: binding.contextManifestCoreDigest, forkPinDigest: binding.forkPinDigest, providerId: CLAUDE_PROVIDER_ID, providerOperationId: attempt.providerOperationId, providerIdempotencyKeyDigest: binding.providerIdempotencyKeyDigest, producerPrincipalId: this.#producerPrincipalId, producerGrantDigest: this.#producerGrantDigest, adapterId: CLAUDE_ADAPTER_ID, adapterVersion: CLAUDE_ADAPTER_VERSION, hostId: CLAUDE_HOST_ID, hostVersion: CLAUDE_HOST_VERSION, outcome: attempt.outcome, startedAt: attempt.startedAt, finishedAt: attempt.finishedAt, outputDigest: attempt.outputDigest, evidence: attempt.evidence, provenance: attempt.provenance, nonce: `${binding.attemptId}:${binding.generation}:${attempt.providerOperationId}` });
+    return sealAttemptReceipt({ schemaVersion: "1", workspaceId: binding.workspaceId, runId: binding.runId, taskId: binding.taskId, attemptId: binding.attemptId, generation: binding.generation, attemptContextBindingDigest: binding.attemptContextBindingDigest, contextManifestCoreDigest: binding.contextManifestCoreDigest, forkPinDigest: binding.forkPinDigest, providerId: CLAUDE_PROVIDER_ID, providerOperationId: attempt.providerOperationId, providerIdempotencyKeyDigest: binding.providerIdempotencyKeyDigest, producerPrincipalId: this.#producerPrincipalId, producerGrantDigest: this.#producerGrantDigest, adapterId: CLAUDE_ADAPTER_ID, adapterVersion: CLAUDE_ADAPTER_VERSION, hostId: CLAUDE_HOST_ID, hostVersion: CLAUDE_HOST_VERSION, outcome: attempt.outcome, startedAt: attempt.startedAt, finishedAt: attempt.finishedAt, outputDigest: attempt.outputDigest, evidence: attempt.evidence, provenance: attempt.provenance, nonce: `${binding.attemptId}:${String(binding.generation)}:${attempt.providerOperationId}` });
   }
 }
 
 export function createClaudeAdapterV1(options: ClaudeAdapterOptionsV1): SecureWorkerAdapterV1 { return new SecureWorkerAdapterV1(options.binding, new ClaudeWorkerAdapterV1(options)); }
 export function claudeDoctorV1(input: { readonly nativePackageVersion: string | null; readonly loaderDigest: string | null; readonly contributions: readonly { readonly name: string; readonly digest: string }[] }): DoctorProbeResultV1 {
   const observed = input.contributions.map(observedClaudeContribution);
-  const contributionsMatch = observed.every(item => item !== null) && JSON.stringify(input.contributions) === JSON.stringify(CLAUDE_NATIVE_CONTRIBUTIONS.map(({ name, digest }) => ({ name, digest }))) && claudeNativePackageDigestV1(observed as ClaudeNativeContributionDigestV1[]) === CLAUDE_NATIVE_PACKAGE_METADATA.packageDigest;
+  const contributionsMatch = observed.every(item => item !== null) && JSON.stringify(input.contributions) === JSON.stringify(CLAUDE_NATIVE_CONTRIBUTIONS.map(({ name, digest }) => ({ name, digest }))) && claudeNativePackageDigestV1(observed) === CLAUDE_NATIVE_PACKAGE_METADATA.packageDigest;
   return parseDoctorProbeResultV1({ schemaVersion: "1", checks: [
     { code: "CLAUDE_NATIVE_VERSION", status: input.nativePackageVersion === CLAUDE_HOST_VERSION ? "ok" : "error", evidenceDigest: input.nativePackageVersion === null ? null : `version:${input.nativePackageVersion}` },
     { code: "Claude_EXTENSION_LOADER", status: input.loaderDigest === "sha256:d535985e6941a3eb00179ccd7f52ceb0c6623a0305a518ebc4e6514f84a94c99" ? "ok" : "error", evidenceDigest: input.loaderDigest },

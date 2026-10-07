@@ -90,10 +90,10 @@ export function lowercaseBase32NoPadding(bytes: Uint8Array): string {
     bits += 8;
     while (bits >= 5) {
       bits -= 5;
-      output += BASE32[(accumulator >>> bits) & 31];
+      output += BASE32.charAt((accumulator >>> bits) & 31);
     }
   }
-  if (bits > 0) output += BASE32[(accumulator << (5 - bits)) & 31];
+  if (bits > 0) output += BASE32.charAt((accumulator << (5 - bits)) & 31);
   return output;
 }
 

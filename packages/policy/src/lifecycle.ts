@@ -1,7 +1,7 @@
 import {
   DomainError,
   NO_POLICY_DIGEST,
-  NO_POLICY_V1,
+  type NO_POLICY_V1,
   canonicalScope,
   domainDigest,
   validatePointer,
@@ -24,7 +24,7 @@ const EFFECTS = ["accepted", "rejected", "quarantined", "approval_required"] as 
 const encoder = new TextEncoder();
 export function compareUtf8(left: string, right: string): number {
   const a = encoder.encode(left); const b = encoder.encode(right); const length = Math.min(a.length, b.length);
-  for (let index = 0; index < length; index += 1) if (a[index] !== b[index]) return a[index]! - b[index]!;
+  for (let index = 0; index < length; index += 1) { const leftByte = a[index]; const rightByte = b[index]; if (leftByte !== undefined && rightByte !== undefined && leftByte !== rightByte) return leftByte - rightByte; }
   return a.length - b.length;
 }
 function fail(code: string): never { throw new DomainError(code); }
@@ -38,8 +38,8 @@ function text(value: unknown, code: string): asserts value is string { if (typeo
 function nullableText(value: unknown, code: string): void { if (value !== null) text(value, code); }
 function natural(value: unknown, code: string): void { if (!Number.isSafeInteger(value) || (value as number) < 0) fail(code); }
 function sortedUnique(values: unknown, code: string): asserts values is string[] {
-  if (!Array.isArray(values) || values.some((value) => typeof value !== "string" || value.length === 0)) fail(code);
-  if (values.some((value, index) => index > 0 && compareUtf8(values[index - 1]!, value) >= 0)) fail(code);
+  if (!Array.isArray(values) || !values.every((value: unknown): value is string => typeof value === "string" && value.length > 0)) fail(code);
+  if (values.some((value, index) => { const previous = values[index - 1]; return index > 0 && (previous === undefined || compareUtf8(previous, value) >= 0); })) fail(code);
 }
 function canonicalPointer(value: unknown, code: string): asserts value is string {
   if (typeof value !== "string") fail(code);
@@ -61,7 +61,7 @@ function validateRule(value: unknown): void {
   sortedUnique(item.constraints, "POLICY_RULE_INVALID");
   if (!Array.isArray(item.evidence)) fail("POLICY_RULE_INVALID"); item.evidence.forEach(validateEvidence);
   const ids = item.evidence.map((entry) => (entry as EvidenceRequirementV1).evidenceId);
-  if (new Set(ids).size !== ids.length || ids.some((id, index) => index > 0 && compareUtf8(ids[index - 1]!, id) >= 0)) fail("POLICY_RULE_INVALID");
+  if (new Set(ids).size !== ids.length || ids.some((id, index) => { const previous = ids[index - 1]; return index > 0 && (previous === undefined || compareUtf8(previous, id) >= 0); })) fail("POLICY_RULE_INVALID");
 }
 export function parseNoPolicyV1(value: unknown): NoPolicyV1 {
   const item = record(value, ["schemaVersion", "kind", "rules"], "POLICY_DOCUMENT_INVALID");
@@ -81,7 +81,7 @@ export function parsePolicyDocumentCoreV1(value: unknown): PolicyDocumentCoreV1 
   if ((core.revision === 0) !== (core.predecessorDigest === null)) fail("POLICY_LINEAGE_INVALID");
   if (!Array.isArray(core.rules)) fail("POLICY_DOCUMENT_INVALID"); core.rules.forEach(validateRule);
   const ids = core.rules.map((rule) => (rule as PolicyRuleV1).ruleId);
-  if (new Set(ids).size !== ids.length || ids.some((id, index) => index > 0 && compareUtf8(ids[index - 1]!, id) >= 0)) fail("POLICY_RULE_ORDER_INVALID");
+  if (new Set(ids).size !== ids.length || ids.some((id, index) => { const previous = ids[index - 1]; return index > 0 && (previous === undefined || compareUtf8(previous, id) >= 0); })) fail("POLICY_RULE_ORDER_INVALID");
   return value as PolicyDocumentCoreV1;
 }
 export function policyDocumentDigest(core: PolicyDocumentCoreV1): string { parsePolicyDocumentCoreV1(core); return domainDigest("horseness.policy.v1", core as unknown as JsonValue); }

@@ -15,7 +15,7 @@ import {
   type SealedForkPinV1,
 } from "@horseness/domain";
 import {
-  METHOD_REGISTRY_V1,
+  type METHOD_REGISTRY_V1,
   methodDefinition,
   type JsonRpcFailureV1,
   type JsonRpcRequestV1,
@@ -45,7 +45,7 @@ export class CoordinatorFailureV1 extends SdkError {
     const data=response.error.data,details=data.details;
     const record=details!==null&&typeof details==="object"&&!Array.isArray(details)?details as Readonly<Record<string,JsonValue>>:null;
     const workflow=record?.schemaVersion==="1"&&typeof record.reasonCode==="string"&&typeof record.definitive==="boolean";
-    const reasonCode=workflow?String(record.reasonCode):data.reasonCode;
+    const reasonCode=workflow&&typeof record.reasonCode==="string"?record.reasonCode:data.reasonCode;
     const message=workflow&&typeof record.message==="string"?record.message:response.error.message;
     super("TRANSPORT_FAILURE",`${reasonCode}: ${message}`);
     this.name="CoordinatorFailureV1";this.reasonCode=reasonCode;this.definitive=workflow?record.definitive===true:Object.hasOwn(DEFINITIVE_PROTOCOL_CODES,reasonCode);this.details=details;
@@ -97,11 +97,12 @@ const REFERENCE = /^[A-Za-z0-9][A-Za-z0-9:._-]{2,255}$/u;
 const RAW_SECRET = /(?:[\s=]|bearer|token|secret|password|passwd|api[-_]?key|private[-_]?key|credential|sk[-_]|gh[pousr]_|xox[baprs]-|-----BEGIN)/iu;
 function nonEmpty(value: unknown): value is string { return typeof value === "string" && value.length > 0; }
 function opaqueCredential(value: OpaqueCredentialReferenceV1): OpaqueCredentialReferenceV1 {
-  const scope = value?.scope;
-  if (Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join(",") !== "kind,reference,schemaVersion,scope" || value.schemaVersion !== "1" || !(["keychain", "environment-reference", "host-reference"] as unknown[]).includes(value.kind) || !REFERENCE.test(value.reference) || RAW_SECRET.test(value.reference) || typeof scope !== "object" || scope === null || Array.isArray(scope) || Object.getPrototypeOf(scope) !== Object.prototype || Object.keys(scope).sort().join(",") !== "adapterId,purpose,workspaceId" || !nonEmpty(scope.workspaceId) || !nonEmpty(scope.adapterId) || !nonEmpty(scope.purpose)) {
+  const unchecked=value as {readonly schemaVersion:unknown;readonly scope:unknown}|null|undefined;
+  const scope = unchecked?.scope;
+  if (Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join(",") !== "kind,reference,schemaVersion,scope" || unchecked?.schemaVersion !== "1" || !(["keychain", "environment-reference", "host-reference"] as unknown[]).includes(value.kind) || !REFERENCE.test(value.reference) || RAW_SECRET.test(value.reference) || typeof scope !== "object" || scope === null || Array.isArray(scope) || Object.getPrototypeOf(scope) !== Object.prototype || Object.keys(scope).sort().join(",") !== "adapterId,purpose,workspaceId" || !("workspaceId" in scope) || !nonEmpty(scope.workspaceId) || !("adapterId" in scope) || !nonEmpty(scope.adapterId) || !("purpose" in scope) || !nonEmpty(scope.purpose)) {
     throw new SdkError("CREDENTIAL_NOT_OPAQUE", "credential must be an opaque reference, never secret material");
   }
-  return Object.freeze({ ...value, scope: Object.freeze({ ...scope }) });
+  return Object.freeze({ ...value, scope: Object.freeze({ workspaceId:scope.workspaceId,adapterId:scope.adapterId,purpose:scope.purpose }) });
 }
 
 export function coordinatorCursorMatchesV1(requirement: (typeof METHOD_REGISTRY_V1)[number]["cursor"], cursor: ObservationCursorV1): boolean {
@@ -148,7 +149,8 @@ export class CoordinatorClientV1 {
       },
     };
     const response = await this.transport.request(request, this.#credential);
-    if (response.jsonrpc !== "2.0" || response.id !== request.id) throw new SdkError("INVALID_RESPONSE", "transport response does not match request");
+    const responseVersion:unknown=response.jsonrpc;
+    if (responseVersion !== "2.0" || response.id !== request.id) throw new SdkError("INVALID_RESPONSE", "transport response does not match request");
     if ("error" in response) failure(response);
     if (response.result.method !== call.method) throw new SdkError("INVALID_RESPONSE", "protocol method response was substituted");
     let parsed: MethodResultV1;
@@ -187,7 +189,8 @@ function cloneFreeze<T>(value: T): T {
 }
 function assertBinding(binding: WorkerBindingV1): void {
   try { verifyForkPin(binding.forkPin); contextManifestCoreDigest(binding.manifest); attemptContextBindingDigest(binding.contextBinding); } catch { throw new SdkError("INVALID_BINDING", "worker binding failed domain verification"); }
-  const valid = binding.schemaVersion === "1" && binding.generation >= 1 && binding.providerId.length > 0 && binding.providerIdempotencyKeyDigest.length > 0 &&
+  const bindingVersion:unknown=binding.schemaVersion;
+  const valid = bindingVersion === "1" && binding.generation >= 1 && binding.providerId.length > 0 && binding.providerIdempotencyKeyDigest.length > 0 &&
     binding.forkPin.core.workspaceId === binding.workspaceId && binding.forkPin.core.runId === binding.runId &&
     binding.manifest.workspaceId === binding.workspaceId && binding.manifest.runId === binding.runId && binding.manifest.attemptId === binding.attemptId && binding.manifest.generation === binding.generation && binding.manifest.forkPinDigest === binding.forkPin.forkPinDigest &&
     binding.contextBinding.attemptId === binding.attemptId && binding.contextBinding.generation === binding.generation && binding.contextBinding.forkPinDigest === binding.forkPin.forkPinDigest && binding.contextBinding.contextManifestCoreDigest === contextManifestCoreDigest(binding.manifest) &&
@@ -231,7 +234,7 @@ export class WorkerClientV1 {
   }
   get binding(): Readonly<WorkerBindingV1> { return this.#binding; }
   async readBoundContext(): Promise<ContextManifestCoreV1> {
-    const result = await this.#attemptCall("context.get.v1", { operationId: `context:${this.#binding.attemptId}:${this.#binding.generation}`, attemptId: this.#binding.attemptId, generation: this.#binding.generation, manifestDigest: contextManifestCoreDigest(this.#binding.manifest) });
+    const result = await this.#attemptCall("context.get.v1", { operationId: `context:${this.#binding.attemptId}:${String(this.#binding.generation)}`, attemptId: this.#binding.attemptId, generation: this.#binding.generation, manifestDigest: contextManifestCoreDigest(this.#binding.manifest) });
     if (!same(result.value, this.#binding.manifest)) throw new SdkError("SCOPE_SUBSTITUTION", "context manifest differs from immutable binding");
     return result.value as ContextManifestCoreV1;
   }
@@ -281,7 +284,7 @@ export class WorkerClientV1 {
     return { events, resume: next };
   }
   async cancelOwnAttempt(reason: string, force = false): Promise<MethodDtoValueV1> {
-    const operationId = `cancel:${this.#binding.attemptId}:${this.#binding.generation}`;
+    const operationId = `cancel:${this.#binding.attemptId}:${String(this.#binding.generation)}`;
     return (await this.#attemptCall("dispatch.cancel.v1", { operationId, dispatchId: this.#binding.dispatchId, reason, force }, operationId)).value;
   }
   #assertReceipt(receipt: AttemptReceiptEnvelopeV1): void {

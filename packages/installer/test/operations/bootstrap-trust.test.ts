@@ -12,7 +12,7 @@ const FIXTURE_PRIVATE_KEY = createPrivateKey(`-----BEGIN PRIVATE KEY-----\nMC4CA
 const sha = (bytes: string | Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 function canonical(value: unknown): string { if (value === null || typeof value === "boolean" || typeof value === "string") return JSON.stringify(value); if (typeof value === "number") return String(value); if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`; const object = value as Record<string, unknown>; return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonical(object[key])}`).join(",")}}`; }
 async function snapshot(path: string): Promise<string> { const rows: string[] = []; async function walk(current: string): Promise<void> { for (const entry of await readdir(current, { withFileTypes: true })) { const child = join(current, entry.name); const info = await stat(child); const digest = entry.isDirectory() ? "d" : entry.isSocket() ? "socket" : sha(await readFile(child)); rows.push(`${child.slice(path.length)}:${info.size}:${digest}`); if (entry.isDirectory()) await walk(child); } } await walk(path); return rows.sort().join("\n"); }
-async function runEnvelope(envelope: unknown, root: string, create = true) { const release = join(root, "release.json"); await writeFile(release, JSON.stringify(envelope)); const workspace = join(root, "workspace"); const home = join(root, "home"); const executable = resolve(import.meta.dirname, "../../../../apps/bootstrap/dist/horseness-bootstrap.mjs"); const args = [executable, "install", "--manifest", release, "--workspace", workspace, "--host", "pi", "--scope", "user", "--clean-home", home, "--accept-executable-risk", "fixture-release-digest", ...(create ? ["--create-workspace"] : [])]; return { result: spawnSync(process.execPath, args, { encoding: "utf8", timeout: 60_000 }), workspace, home }; }
+async function runEnvelope(envelope: unknown, root: string, create = true, daemonExecutable?: string) { const release = join(root, "release.json"); await writeFile(release, JSON.stringify(envelope)); const workspace = join(root, "workspace"); const home = join(root, "home"); const executable = resolve(import.meta.dirname, "../../../../apps/bootstrap/dist/horseness-bootstrap.mjs"); const args = [executable, "install", "--manifest", release, "--workspace", workspace, "--host", "pi", "--scope", "user", "--clean-home", home, "--accept-executable-risk", "fixture-release-digest", ...(create ? ["--create-workspace"] : [])]; return { result: spawnSync(process.execPath, args, { encoding: "utf8", timeout: 60_000, env: { ...process.env, ...(daemonExecutable ? { HORSENESS_DAEMON_EXECUTABLE: daemonExecutable } : {}) } }), workspace, home }; }
 function resign(envelope: TestEnvelope, mutate: (manifest: MutableManifest) => void, key: KeyObject = FIXTURE_PRIVATE_KEY): TestEnvelope { const copy = structuredClone(envelope); mutate(copy.signedManifest.manifest); copy.signedManifest.manifestDigest = sha(`horseness.release-manifest.v1\0${canonical(copy.signedManifest.manifest)}`); copy.signedManifest.signature = sign(null, Buffer.from(canonical(copy.signedManifest.manifest)), key).toString("base64"); const neutral = { releaseVersion: copy.catalog.releaseVersion, releaseManifestDigest: copy.signedManifest.manifestDigest, authenticatedManifestKeyId: copy.signedManifest.keyId, authenticatedManifestSequence: copy.signedManifest.manifest.sequence, contributions: copy.catalog.contributions }; copy.catalogDigest = sha(`horseness.neutral-install-catalog.v1\0${canonical(neutral)}`); return copy; }
 const fixture = JSON.parse(await readFile(resolve(import.meta.dirname, "../../../../apps/bootstrap/generated/fixture-release.json"), "utf8")) as TestEnvelope;
 test("self-signed, wrong identity, and revoked releases fail before workspace or host mutation", async () => {
@@ -23,7 +23,29 @@ test("self-signed, wrong identity, and revoked releases fail before workspace or
 });
 
 test("authenticated release replay is rejected without changing installed state", async () => {
-  const root = await mkdtemp(join(tmpdir(), "horseness-bootstrap-replay-")); const first = await runEnvelope(fixture, root); assert.equal(first.result.status, 0, first.result.stderr); const before = `${await snapshot(first.workspace)}\n${await snapshot(first.home)}`; const replay = resign(fixture, (manifest) => { manifest.sequence = 19; }); const second = await runEnvelope(replay, root, false); assert.equal(second.result.status, 1); assert.equal(`${await snapshot(first.workspace)}\n${await snapshot(first.home)}`, before); try { const endpoint = JSON.parse(await readFile(join(first.workspace, ".horseness/daemon-endpoint.v1.json"), "utf8")) as { processId: number }; process.kill(endpoint.processId, "SIGTERM"); } catch {}
+  const root = await mkdtemp(join(tmpdir(), "horseness-bootstrap-replay-"));
+  const daemonRoot = join(root, "daemon");
+  const daemonExecutable = join(daemonRoot, "bin/horseness-daemon.mjs");
+  try {
+    const deployed = spawnSync("corepack", ["pnpm", "--config.node-linker=hoisted", "--config.strict-peer-dependencies=false", "--filter", "@horseness/daemon", "deploy", "--prod", "--legacy", daemonRoot], { cwd: resolve(import.meta.dirname, "../../../.."), encoding: "utf8", timeout: 60_000 });
+    assert.equal(deployed.status, 0, deployed.stderr || deployed.stdout);
+    const first = await runEnvelope(fixture, root, true, daemonExecutable);
+    assert.equal(first.result.status, 0, first.result.stderr);
+    const before = `${await snapshot(first.workspace)}\n${await snapshot(first.home)}`;
+    const replay = resign(fixture, (manifest) => { manifest.sequence = 19; });
+    const second = await runEnvelope(replay, root, false, daemonExecutable);
+    assert.equal(second.result.status, 1);
+    assert.equal(`${await snapshot(first.workspace)}\n${await snapshot(first.home)}`, before);
+  } finally {
+    try {
+      const endpoint = JSON.parse(await readFile(join(root, "workspace/.horseness/daemon-endpoint.v1.json"), "utf8")) as { processId: number };
+      process.kill(endpoint.processId, "SIGTERM");
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || (error.code !== "ENOENT" && error.code !== "ESRCH")) throw error;
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
 });
 
 test("malicious path-traversal envelope fails without creating escaped file", async () => {

@@ -15,7 +15,7 @@ export interface EndpointStateV1 { readonly schemaVersion: "1"; readonly workspa
 export function daemonProcessIncarnation(processId: number): string {
   if (process.platform !== "linux") throw new Error("verifiable daemon process incarnation is unsupported on this platform");
   let stat: string;
-  try { stat = readFileSync(`/proc/${processId}/stat`, "utf8"); }
+  try { stat = readFileSync(`/proc/${String(processId)}/stat`, "utf8"); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("daemon process is not live");
     throw new Error("daemon process incarnation could not be verified", { cause: error });
@@ -49,7 +49,7 @@ export class Daemon {
     const bootstrapAuthority=SQLiteAuthority.open(this.config.databasePath,this.config.artifactRoot);
     const existing=bootstrapAuthority.replay(this.config.workspaceId,"workspace",this.config.workspaceId);
     if(existing.length===0)this.authorityValue=bootstrapAuthority;
-    else{bootstrapAuthority.close();this.authorityValue=SQLiteAuthority.openAuthenticatedWorkspace(this.config.databasePath,this.config.artifactRoot,{workspaceId:this.config.workspaceId,sessionId:`daemon:${process.pid}:${randomUUID()}`,credential:this.credential}).authority;}
+    else{bootstrapAuthority.close();this.authorityValue=SQLiteAuthority.openAuthenticatedWorkspace(this.config.databasePath,this.config.artifactRoot,{workspaceId:this.config.workspaceId,sessionId:`daemon:${String(process.pid)}:${randomUUID()}`,credential:this.credential}).authority;}
     this.grants = new GrantStore(this.authorityValue,this.config.workspaceId,this.config.authorityTime);
     this.bootstrap = new BootstrapCeremony(this.authorityValue, this.config.bootstrapCapabilityPath, this.config.workspaceId, this.config.authorityTime, this.identity);
     this.bootstrap.recoverInterruptedConsumption();
@@ -65,7 +65,7 @@ export class Daemon {
   consumeBootstrapCapability(secret: string): BootstrapResultV1 {
     const result = this.bootstrap.consumeBootstrapCapability(secret);
     this.authorityValue.close();
-    this.authorityValue=SQLiteAuthority.openAuthenticatedWorkspace(this.config.databasePath,this.config.artifactRoot,{workspaceId:this.config.workspaceId,sessionId:`daemon:${process.pid}:${randomUUID()}`,credential:this.credential}).authority;
+    this.authorityValue=SQLiteAuthority.openAuthenticatedWorkspace(this.config.databasePath,this.config.artifactRoot,{workspaceId:this.config.workspaceId,sessionId:`daemon:${String(process.pid)}:${randomUUID()}`,credential:this.credential}).authority;
     this.grants=new GrantStore(this.authorityValue,this.config.workspaceId,this.config.authorityTime);
     this.bootstrap=new BootstrapCeremony(this.authorityValue,this.config.bootstrapCapabilityPath,this.config.workspaceId,this.config.authorityTime,this.identity);
     this.server=new DaemonServer(this.authorityValue,this.grants,{workspaceId:this.config.workspaceId,workspacePath:this.config.workspacePath,stateRoot:this.config.stateDirectory,authorityTime:this.config.authorityTime});
@@ -75,7 +75,7 @@ export class Daemon {
   rebindRestoredWorkspace():void {
     if(this.running)throw new Error("stop daemon before workspace rebind");
     this.authorityValue.close();
-    this.authorityValue=SQLiteAuthority.openAuthenticatedWorkspace(this.config.databasePath,this.config.artifactRoot,{workspaceId:this.config.workspaceId,sessionId:`daemon:${process.pid}:${randomUUID()}`,credential:this.credential}).authority;
+    this.authorityValue=SQLiteAuthority.openAuthenticatedWorkspace(this.config.databasePath,this.config.artifactRoot,{workspaceId:this.config.workspaceId,sessionId:`daemon:${String(process.pid)}:${randomUUID()}`,credential:this.credential}).authority;
     this.grants=new GrantStore(this.authorityValue,this.config.workspaceId,this.config.authorityTime);this.bootstrap=new BootstrapCeremony(this.authorityValue,this.config.bootstrapCapabilityPath,this.config.workspaceId,this.config.authorityTime,this.identity);this.server=new DaemonServer(this.authorityValue,this.grants,{workspaceId:this.config.workspaceId,workspacePath:this.config.workspacePath,stateRoot:this.config.stateDirectory,authorityTime:this.config.authorityTime});
   }
 
@@ -88,11 +88,11 @@ export class Daemon {
     try {
       mkdirSync(this.config.stateDirectory, { recursive: true, mode: 0o700 }); chmodSync(this.config.stateDirectory, 0o700);
       const state: EndpointStateV1 = Object.freeze({ schemaVersion: "1", workspaceId: this.config.workspaceId, transport: this.config.transport.kind === "stdio" ? "stdio" : "unix-socket", endpointPath: this.config.transport.kind === "unix-socket" ? this.config.transport.endpointPath : null, processId: process.pid, processIncarnation: daemonProcessIncarnation(process.pid), startedAt: this.config.authorityTime() });
-      const temporary=`${this.config.endpointStatePath}.${process.pid}.tmp`;const descriptor=openSync(temporary,"wx",0o600);
+      const temporary=`${this.config.endpointStatePath}.${String(process.pid)}.tmp`;const descriptor=openSync(temporary,"wx",0o600);
       try{writeFileSync(descriptor,`${canonicalJson(state as unknown as JsonValue)}\n`);fsyncSync(descriptor);}finally{closeSync(descriptor);}
       renameSync(temporary,this.config.endpointStatePath);chmodSync(this.config.endpointStatePath,0o600);const directory=openSync(this.config.stateDirectory,"r");try{fsyncSync(directory);}finally{closeSync(directory);}
       this.server.startExecution();
-    } catch(error) { const transport=this.transportServer;this.transportServer=null;if(transport!==null)await transport.close();rmSync(this.config.endpointStatePath,{force:true});throw error; }
+    } catch(error) { const transport:TransportServerV1|null=this.transportServer as TransportServerV1|null;this.transportServer=null;if(transport!==null)await transport.close();rmSync(this.config.endpointStatePath,{force:true});throw error; }
   }
 
   async stop(): Promise<void> {

@@ -20,7 +20,7 @@ export interface AppendResult { commandId:string; workspaceHead?:{sequence:numbe
 export interface SnapshotRecord { workspaceId:string; streamKind:EventStream; streamId:string; sequence:number; envelopeHash:string; projectionName:string; projectionVersion:string; state:JsonValue }
 export interface ArtifactPublication { data:Uint8Array|string; mediaType?:string|null; references?:readonly {ownerKind:string;ownerId:string;allowExistingEvent?:true}[]; pins?:readonly {pinId:string}[] }
 export interface AtomicProjectionUpdate { workspaceId:string; name:string; version:string; streamKind:EventStream; streamId:string; lastSequence:number; lastEnvelopeHash:string|null }
-export interface AtomicSnapshotUpdate extends SnapshotRecord {}
+export type AtomicSnapshotUpdate = SnapshotRecord;
 export interface AuthorityStateRecordV1 { readonly schemaVersion:"1"; readonly workspaceId:string; readonly stateKind:string; readonly revision:number; readonly stateDigest:string; readonly state:JsonValue }
 export interface BootstrapWorkspaceAuthorityRequestV1 { readonly commandId:string; readonly workspace:AppendRequest<WorkspaceEventPayloadV1>; readonly authorityState:AuthorityStateRecordV1 }
 export interface CompareAndSwapAuthorityStateRequestV1 { readonly commandId:string; readonly workspaceId:string; readonly stateKind:string; readonly expectedRevision:number; readonly expectedStateDigest:string; readonly nextState:JsonValue }
@@ -47,7 +47,7 @@ const now=():string=>new Date().toISOString();
 const activeWorkspaceSessions=new Map<string,{sessionId:string;authority:WeakRef<SQLiteAuthority>}>();
 const issuedCredentials=new WeakSet<object>();
 const MANIFEST=".horseness-authority.v1.json",SECRET=".horseness-authority.v1.key";
-type AuthorityManifestV1={schemaVersion:"1";authorityId:string;workspaceId:string;databasePath:string;artifactRoot:string;secretDigest:string};
+interface AuthorityManifestV1 {schemaVersion:"1";authorityId:string;workspaceId:string;databasePath:string;artifactRoot:string;secretDigest:string}
 const digest=(value:string|Buffer):string=>createHash("sha256").update(value).digest("hex");
 function canonicalExisting(path:string):string {const absolute=resolve(path);return existsSync(absolute)?realpathSync(absolute):absolute;}
 function credentialProof(manifest:AuthorityManifestV1,secret:Buffer):string{return digest(Buffer.concat([Buffer.from(canonicalJson(manifest as unknown as JsonValue)),Buffer.from([0]),secret]));}
@@ -63,7 +63,7 @@ export function createOrLoadAuthorityCredential(databasePath:string,artifactRoot
     secret=randomBytes(32);manifest={schemaVersion:"1",authorityId:randomUUID(),workspaceId,databasePath:db,artifactRoot:artifacts,secretDigest:digest(secret)};
     writeFileSync(secretPath,secret,{flag:"wx",mode:0o600});writeFileSync(manifestPath,`${canonicalJson(manifest as unknown as JsonValue)}\n`,{flag:"wx",mode:0o600});chmodSync(secretPath,0o600);chmodSync(manifestPath,0o600);
   }
-  if(manifest.schemaVersion!=="1"||!manifest.authorityId||manifest.workspaceId!==workspaceId||manifest.databasePath!==db||manifest.artifactRoot!==artifacts||secret.length!==32||!timingSafeEqual(Buffer.from(manifest.secretDigest),Buffer.from(digest(secret))))throw new StoreIntegrityError("authority credential binding mismatch");
+  if((manifest.schemaVersion as unknown)!=="1"||!manifest.authorityId||manifest.workspaceId!==workspaceId||manifest.databasePath!==db||manifest.artifactRoot!==artifacts||secret.length!==32||!timingSafeEqual(Buffer.from(manifest.secretDigest),Buffer.from(digest(secret))))throw new StoreIntegrityError("authority credential binding mismatch");
   const credential=Object.freeze({schemaVersion:"1" as const,authorityId:manifest.authorityId,workspaceId,databasePath:db,artifactRoot:artifacts,proof:credentialProof(manifest,secret),[authorityCredentialBrand]:true as const});issuedCredentials.add(credential);return credential;
 }
 
@@ -71,9 +71,9 @@ export function rebindAuthorityCredential(databasePath:string,artifactRoot:strin
   const db=canonicalExisting(databasePath),artifacts=canonicalExisting(artifactRoot),manifestPath=join(artifacts,MANIFEST),secretPath=join(artifacts,SECRET);
   if(!existsSync(db)||!existsSync(manifestPath)||!existsSync(secretPath))throw new StoreIntegrityError("authority rebind source is incomplete");
   const manifest=JSON.parse(readFileSync(manifestPath,"utf8")) as AuthorityManifestV1,secret=readFileSync(secretPath);
-  if(manifest.schemaVersion!=="1"||!manifest.workspaceId||!manifest.authorityId||secret.length!==32||!timingSafeEqual(Buffer.from(manifest.secretDigest),Buffer.from(digest(secret))))throw new StoreIntegrityError("authority rebind identity authentication failed");
+  if((manifest.schemaVersion as unknown)!=="1"||!manifest.workspaceId||!manifest.authorityId||secret.length!==32||!timingSafeEqual(Buffer.from(manifest.secretDigest),Buffer.from(digest(secret))))throw new StoreIntegrityError("authority rebind identity authentication failed");
   const workspaceId=manifest.workspaceId;const authority=SQLiteAuthority.open(db,artifacts);try{if(authority.replay(workspaceId,"workspace",workspaceId).length===0)throw new StoreIntegrityError("authority rebind workspace replay is empty");}finally{authority.close();}
-  const rebound:AuthorityManifestV1={...manifest,databasePath:db,artifactRoot:artifacts};const temporary=`${manifestPath}.${process.pid}.${randomUUID()}.tmp`;const descriptor=openSync(temporary,"wx",0o600);
+  const rebound:AuthorityManifestV1={...manifest,databasePath:db,artifactRoot:artifacts};const temporary=`${manifestPath}.${String(process.pid)}.${randomUUID()}.tmp`;const descriptor=openSync(temporary,"wx",0o600);
   try{writeFileSync(descriptor,`${canonicalJson(rebound as unknown as JsonValue)}\n`);fsyncSync(descriptor);}finally{closeSync(descriptor);}
   renameSync(temporary,manifestPath);chmodSync(manifestPath,0o600);const directory=openSync(artifacts,"r");try{fsyncSync(directory);}finally{closeSync(directory);}
   return createOrLoadAuthorityCredential(db,artifacts,workspaceId);
@@ -130,9 +130,9 @@ export class SQLiteAuthority {
     if(!request.workspaceId||!request.runId||!request.attemptId||!request.commandId||!Number.isSafeInteger(request.generation)||request.generation<1)throw new StoreIntegrityError("invalid dispatch authority identity");
     let cursor:CompositeCursorV1;try{const parsed=parseObservationCursorV1(request.authorityCursor);if(parsed.kind!=="composite")throw new Error("not composite");cursor=parsed;}catch{throw new StoreIntegrityError("invalid dispatch authority cursor");}
     if(cursor.workspaceId!==request.workspaceId||cursor.runId!==request.runId)throw new StoreIntegrityError("dispatch authority cursor identity mismatch");
-    const state=request.state as unknown as Record<string,unknown>,attempt=state.attempt as Record<string,unknown>,lease=state.lease as Record<string,unknown>|null,dispatch=state.dispatch as Record<string,unknown>;
+    const state=request.state as unknown as Record<string,unknown>,attempt=state.attempt as Record<string,unknown>|null|undefined,lease=state.lease as Record<string,unknown>|null,dispatch=state.dispatch as Record<string,unknown>|null|undefined;
     const attemptDigest=attempt?.attemptDigest,leaseDigest=lease?.leaseDigest??null,dispatchDigest=dispatch?.recordDigest,fenceValue=lease?.fenceToken??0;
-    if(typeof attemptDigest!=="string"||typeof dispatchDigest!=="string"||leaseDigest!==null&&typeof leaseDigest!=="string"||typeof fenceValue!=="number"||!Number.isSafeInteger(fenceValue)||fenceValue<0||attempt.attemptId!==request.attemptId||attempt.generation!==request.generation||dispatch.attemptId!==request.attemptId||dispatch.generation!==request.generation||lease!==null&&(lease.attemptId!==request.attemptId||lease.generation!==request.generation||canonicalJson(lease.authorityCursor as JsonValue)!==canonicalJson(cursor as unknown as JsonValue)))throw new StoreIntegrityError("invalid dispatch authority state");
+    if(typeof attemptDigest!=="string"||typeof dispatchDigest!=="string"||leaseDigest!==null&&typeof leaseDigest!=="string"||typeof fenceValue!=="number"||!Number.isSafeInteger(fenceValue)||fenceValue<0||attempt?.attemptId!==request.attemptId||attempt?.generation!==request.generation||dispatch?.attemptId!==request.attemptId||dispatch?.generation!==request.generation||lease!==null&&(lease.attemptId!==request.attemptId||lease.generation!==request.generation||canonicalJson(lease.authorityCursor as JsonValue)!==canonicalJson(cursor as unknown as JsonValue)))throw new StoreIntegrityError("invalid dispatch authority state");
     const fence=fenceValue;
     const stateJson=canonicalJson(request.state as unknown as JsonValue);this.crash("transaction.begin.before");this.db.exec("BEGIN IMMEDIATE");this.crash("transaction.begin.after");try{
       const workspace=this.db.prepare("SELECT head_sequence,head_hash FROM streams WHERE workspace_id=? AND stream_kind='workspace' AND stream_id=?").get(request.workspaceId,request.workspaceId) as {head_sequence:number;head_hash:string}|undefined;
@@ -159,7 +159,7 @@ export class SQLiteAuthority {
     let prior=request.expectedEnvelopeHash;
     for(const [index,event] of request.events.entries()){
       const envelope=event.envelope;
-      if(envelope.schemaVersion!=="1")throw new StoreIntegrityError("unsupported event schema");
+      if((envelope.schemaVersion as unknown)!=="1")throw new StoreIntegrityError("unsupported event schema");
       if(envelope.streamKind!==request.streamKind||envelope.workspaceId!==request.workspaceId||envelope.streamId!==request.streamId||envelope.sequence!==request.expectedSequence+index+1)throw new StoreIntegrityError("event does not match append stream");
       if(request.streamKind==="workspace"&&request.streamId!==request.workspaceId)throw new StoreIntegrityError("workspace stream identity mismatch");
       if(envelope.priorEnvelopeHash!==prior)throw new StoreIntegrityError("event prior hash mismatch");
@@ -185,9 +185,9 @@ export class SQLiteAuthority {
   private verifyCompositeObservation(value:CompositeCursorV1,workspaceId:string,runId:string|undefined):void {
     const cursor=parseObservationCursorV1(value);
     if(cursor.kind!=="composite"||cursor.workspaceId!==workspaceId||cursor.runId!==runId)throw new StoreIntegrityError("authority consumption observation identity invalid");
-    const heads=this.db.prepare("SELECT w.head_sequence AS ws,w.head_hash AS wh,w.context_epoch AS we,r.head_sequence AS rs,r.head_hash AS rh,r.context_epoch AS re FROM streams w JOIN streams r ON r.workspace_id=w.workspace_id WHERE w.workspace_id=? AND w.stream_kind='workspace' AND w.stream_id=w.workspace_id AND r.stream_kind='run' AND r.stream_id=?").get(workspaceId,runId!) as {ws:number;wh:string;we:number;rs:number;rh:string;re:number}|undefined;
+    const heads=this.db.prepare("SELECT w.head_sequence AS ws,w.head_hash AS wh,w.context_epoch AS we,r.head_sequence AS rs,r.head_hash AS rh,r.context_epoch AS re FROM streams w JOIN streams r ON r.workspace_id=w.workspace_id WHERE w.workspace_id=? AND w.stream_kind='workspace' AND w.stream_id=w.workspace_id AND r.stream_kind='run' AND r.stream_id=?").get(workspaceId,runId) as {ws:number;wh:string;we:number;rs:number;rh:string;re:number}|undefined;
     if(!heads||heads.ws!==cursor.workspaceSequence||heads.wh!==cursor.workspaceEnvelopeHash||heads.we!==cursor.workspaceContextEpoch||heads.rs!==cursor.runSequence||heads.rh!==cursor.runEnvelopeHash||heads.re!==cursor.runContextEpoch)throw new StoreConflictError("authority consumption observation compare-and-swap conflict");
-    this.authenticatedRows(workspaceId,"workspace",workspaceId);this.authenticatedRows(workspaceId,"run",runId!);
+    this.authenticatedRows(workspaceId,"workspace",workspaceId);this.authenticatedRows(workspaceId,"run",runId);
   }
   recordAuthorityConsumption(input:{workspaceId:string;runId?:string;principalId:string;authorityKey:string;commandId:string;observationCursor?:CompositeCursorV1;authorityStateExpectations?:readonly AuthorityStateExpectationV1[]}):boolean {
     const values=[input.workspaceId,input.principalId,input.authorityKey,input.commandId];
@@ -276,7 +276,7 @@ export class SQLiteAuthority {
   }
   bootstrapWorkspaceAuthorityAtomic(request:BootstrapWorkspaceAuthorityRequestV1):AppendResult {
     const state=request.authorityState;
-    if(request.workspace.expectedSequence!==0||request.workspace.expectedEnvelopeHash!==null||request.workspace.events.length!==1||state.schemaVersion!=="1"||state.workspaceId!==request.workspace.workspaceId||state.revision!==1||!state.stateKind)throw new StoreIntegrityError("invalid workspace authority bootstrap");
+    if(request.workspace.expectedSequence!==0||request.workspace.expectedEnvelopeHash!==null||request.workspace.events.length!==1||(state.schemaVersion as unknown)!=="1"||state.workspaceId!==request.workspace.workspaceId||state.revision!==1||!state.stateKind)throw new StoreIntegrityError("invalid workspace authority bootstrap");
     const computed=domainDigest("horseness.workspace-authority-state.v1",state.state);
     if(computed!==state.stateDigest)throw new StoreIntegrityError("workspace authority state digest mismatch");
     const digest=domainDigest("horseness.workspace-authority-bootstrap.v1",request as unknown as JsonValue);
@@ -318,7 +318,7 @@ export class SQLiteAuthority {
       manifest=JSON.parse(text) as ContextManifestRecordV1;
       if(canonicalJson(manifest as unknown as JsonValue)!==text)throw new StoreIntegrityError("context manifest bytes are not canonical");
       if(manifest.contextManifestCoreDigest!==request.contextManifestCoreDigest||contextManifestCoreDigest(manifest.core)!==request.contextManifestCoreDigest)throw new StoreIntegrityError("context manifest core digest mismatch");
-      if(request.binding.schemaVersion!=="1"||request.binding.expectedReceiptSchemaVersion!=="1"||!request.binding.attemptId||!request.binding.forkPinDigest||!request.binding.contextManifestCoreDigest||!request.binding.providerIdempotencyKey||!request.binding.allowedProducerPrincipalId||!request.binding.allowedProducerGrantDigest||!Number.isSafeInteger(request.binding.generation)||request.binding.generation<1)throw new StoreIntegrityError("invalid context binding identity");
+      if((request.binding.schemaVersion as unknown)!=="1"||(request.binding.expectedReceiptSchemaVersion as unknown)!=="1"||!request.binding.attemptId||!request.binding.forkPinDigest||!request.binding.contextManifestCoreDigest||!request.binding.providerIdempotencyKey||!request.binding.allowedProducerPrincipalId||!request.binding.allowedProducerGrantDigest||!Number.isSafeInteger(request.binding.generation)||request.binding.generation<1)throw new StoreIntegrityError("invalid context binding identity");
       if(manifest.attemptContextBindingDigest!==request.attemptContextBindingDigest||attemptContextBindingDigest(request.binding)!==request.attemptContextBindingDigest)throw new StoreIntegrityError("context binding digest mismatch");
       if(manifest.core.workspaceId!==request.workspaceId||manifest.core.runId!==request.runId||manifest.core.attemptId!==request.attemptId||manifest.core.generation!==request.generation)throw new StoreIntegrityError("context manifest publication identity mismatch");
       if(request.binding.contextManifestCoreDigest!==manifest.contextManifestCoreDigest||request.binding.attemptId!==manifest.core.attemptId||request.binding.generation!==manifest.core.generation||request.binding.forkPinDigest!==manifest.core.forkPinDigest||canonicalJson(request.binding.sourceObservationCursor as unknown as JsonValue)!==canonicalJson(manifest.core.sourceObservationCursor as unknown as JsonValue)||canonicalJson(request.binding.sourceContextVersion as unknown as JsonValue)!==canonicalJson(manifest.core.sourceContextVersion as unknown as JsonValue)||canonicalJson(request.binding.authorizationObservationCursor as unknown as JsonValue)!==canonicalJson(manifest.core.authorizationObservationCursor as unknown as JsonValue)||canonicalJson(request.binding.authorizationContextVersion as unknown as JsonValue)!==canonicalJson(manifest.core.authorizationContextVersion as unknown as JsonValue))throw new StoreIntegrityError("context manifest and binding mismatch");
@@ -351,7 +351,7 @@ export class SQLiteAuthority {
     const available=new Set(records.map(item=>item.record.digest));
     const requiredArtifactDigests=request.requiredArtifactDigests??[];
     if(records.length>0&&requiredArtifactDigests.length===0)throw new StoreIntegrityError("authoritative artifact append requires artifact digests");
-    if(records.length===0&&requiredArtifactDigests.length>0)throw new StoreIntegrityError(`required artifact was not published: ${requiredArtifactDigests[0]}`);
+    if(records.length===0&&requiredArtifactDigests.length>0)throw new StoreIntegrityError(`required artifact was not published: ${String(requiredArtifactDigests[0])}`);
     for(const digest of requiredArtifactDigests)if(!available.has(digest))throw new StoreIntegrityError(`required artifact was not published: ${digest}`);
     if(!request.workspace&&!request.run)throw new StoreIntegrityError("atomic append has no streams");
     if(request.runGenesis)throw new StoreIntegrityError("run genesis cannot be combined with artifact publication");

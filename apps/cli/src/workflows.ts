@@ -59,7 +59,7 @@ async function observeWorkspace(session: CliWorkspaceSessionV1): Promise<Workspa
   const result = await session.client.call({ method: "workspace.get.v1", workspaceId: session.state.workspaceId, observationCursor: cursor,
     input: { schemaVersion: "1", queryType: "GetWorkspaceV1", observationCursor: cursor } });
   const observed = record(result.value).observationCursor as WorkspaceCursor;
-  if (observed.kind !== "workspace-only" || observed.workspaceId !== session.state.workspaceId) throw new Error("Workspace observation identity mismatch.");
+  if ((observed.kind as unknown) !== "workspace-only" || observed.workspaceId !== session.state.workspaceId) throw new Error("Workspace observation identity mismatch.");
   session.save({ ...session.state, workspaceCursor: observed });
   return observed;
 }
@@ -72,7 +72,7 @@ async function listRuns(session: CliWorkspaceSessionV1): Promise<readonly RunSum
       input: { operationId: `query:${randomUUID()}`, limit: 100, continuationToken } });
     const value = record(result.value);
     for (const item of value.runs as readonly RunSummary[]) {
-      if (item.observationCursor.kind !== "composite" || item.observationCursor.workspaceId !== session.state.workspaceId || item.observationCursor.runId !== item.runId) throw new Error("Run observation identity mismatch.");
+      if ((item.observationCursor.kind as unknown) !== "composite" || item.observationCursor.workspaceId !== session.state.workspaceId || item.observationCursor.runId !== item.runId) throw new Error("Run observation identity mismatch.");
       runs.push(item);
     }
     continuationToken = value.nextContinuationToken as string;
@@ -94,7 +94,7 @@ async function observeRun(session: CliWorkspaceSessionV1, runId: string, observe
     input: { schemaVersion: "1", queryType: "GetRunV1", observationCursor: selected.observationCursor } });
   const value = record(result.value);
   const cursor = value.observationCursor as RunCursor;
-  if (cursor.kind !== "composite" || cursor.workspaceId !== session.state.workspaceId || cursor.runId !== runId) throw new Error("Run observation identity mismatch.");
+  if ((cursor.kind as unknown) !== "composite" || cursor.workspaceId !== session.state.workspaceId || cursor.runId !== runId) throw new Error("Run observation identity mismatch.");
   const state = record(value.state);
   session.save({ ...session.state, runs: { ...session.state.runs, [runId]: cursor } });
   return { cursor, title: selected.title, revision: Number(record(state.canonical).revision) };
@@ -212,8 +212,8 @@ async function taskOperation(invocation: CliInvocationV1): Promise<JsonValue> {
       pending = { command: invocation.command, title: taskId, runId, taskId, fingerprint, call };
     }
     const result = await commitOperation(session, pending);
-    const cursor = result.observationCursor as RunCursor;
-    if (cursor?.kind !== "composite" || cursor.workspaceId !== session.state.workspaceId || cursor.runId !== runId) throw Object.assign(new Error("Invalid task operation observation."), { code: "INVALID_RESPONSE" });
+    const cursor = result.observationCursor as RunCursor | undefined;
+    if ((cursor?.kind as unknown) !== "composite" || cursor === undefined || cursor.workspaceId !== session.state.workspaceId || cursor.runId !== runId) throw Object.assign(new Error("Invalid task operation observation."), { code: "INVALID_RESPONSE" });
     session.save({ ...session.state, runs: { ...session.state.runs, [runId]: cursor }, pending: null });
     return { ...result as Record<string, JsonValue>, runId, taskId };
   });

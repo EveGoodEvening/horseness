@@ -26,6 +26,7 @@ C21 does not inherit this waiver. Its existing security, system, install-recover
 After this correction receives independent review, C20 is eligible for the ordinary tracker-completion transaction without OS receipt artifacts. Until that transaction, C20 remains in progress and C21 remains dependency-blocked. The workflow and verifier remain available, the runtime design and security posture are unchanged, and the repository accepts a documented C20 cross-OS validation gap rather than fabricating evidence.
 
 ## Rejected Alternatives
+
 - Marking former gate 8 passed or creating synthetic or local substitute receipts.
 - Deleting or weakening the workflow, receipt writer, verifier, tests, or v2 profile.
 - Claiming Linux, macOS, or Windows C20 receipt evidence or cross-OS validation without artifacts.

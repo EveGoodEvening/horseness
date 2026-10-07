@@ -29,6 +29,7 @@ C17 and C18 can use real native authenticated behavior without Horseness possess
 The security posture is weaker than a dedicated controlled account because the verified native executable operates with the user's normal provider account scope, and provider-side usage may occur. This risk and subscription billing are explicitly accepted. No logout or provider-session revocation claim is made.
 
 ## Rejected Alternatives
+
 - Fabricating an opaque Horseness credential reference to the same native session.
 - Copying native auth files into a sandbox, fixture, adapter store, or retained state.
 - Extracting tokens, cookies, OAuth material, headers, or secret-derived fingerprints.

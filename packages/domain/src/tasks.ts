@@ -42,7 +42,7 @@ export function resolveTask(input: { taskId: string; generations: readonly Attem
   return { schemaVersion: "1", taskId: input.taskId, consideredGenerationOutcomes: terminal.map(({ generation, state: outcome, terminalEventSequence }) => ({ generation, outcome, terminalEventSequence })).sort((a, b) => a.generation - b.generation), winningGeneration, retryPolicyDigest: input.retryPolicyDigest, arbitrationReason, observationCursor: input.observationCursor, resolution };
 }
 
-export interface DependencyEdgeV1 { edgeId: string; sourceTaskId: string; dependentTaskId: string; edgeType: "requires_success" | "requires_terminal" | "requires_outcome"; allowedOutcomes?: TaskResolution[]; releasePredicate: "task-resolution" | string; propagateCancellation: boolean }
+export interface DependencyEdgeV1 { edgeId: string; sourceTaskId: string; dependentTaskId: string; edgeType: "requires_success" | "requires_terminal" | "requires_outcome"; allowedOutcomes?: TaskResolution[]; releasePredicate: string; propagateCancellation: boolean }
 export function validateDependencyEdge(edge: DependencyEdgeV1): void {
   if (!edge.edgeId || !edge.sourceTaskId || !edge.dependentTaskId || edge.sourceTaskId === edge.dependentTaskId) throw new DomainError("INVALID_DEPENDENCY");
   if (edge.edgeType === "requires_outcome") {
@@ -121,7 +121,7 @@ export function reduceDispatch(state: AttemptGenerationStateV1, input: DispatchI
 }
 
 export function assertEvaluationClock(clock: { schemaVersion: "1"; authorityTime: string; observationCursor: CompositeCursorV1 }, expectedCursor: CompositeCursorV1): void {
-  if (clock.schemaVersion !== "1" || !Number.isFinite(Date.parse(clock.authorityTime)) || domainDigest("horseness.evaluation-cursor.v1", clock.observationCursor as unknown as JsonValue) !== domainDigest("horseness.evaluation-cursor.v1", expectedCursor as unknown as JsonValue)) throw new DomainError("INVALID_EVALUATION_CLOCK");
+  if ((clock.schemaVersion as unknown) !== "1" || !Number.isFinite(Date.parse(clock.authorityTime)) || domainDigest("horseness.evaluation-cursor.v1", clock.observationCursor as unknown as JsonValue) !== domainDigest("horseness.evaluation-cursor.v1", expectedCursor as unknown as JsonValue)) throw new DomainError("INVALID_EVALUATION_CLOCK");
 }
 export interface RetryScheduledV1 { schemaVersion: "1"; attemptId: string; priorGeneration: number; generation: number; retryOrdinal: number; retryPolicyDigest: string; notBefore: string; pinDecision: "reuse" | "refresh"; forkPinDigest: string; reason: string; providerIdempotencyKeyDigest: string }
 export function scheduleRetry(input: Omit<RetryScheduledV1, "schemaVersion" | "generation"> & { prior: AttemptGenerationStateV1 }): RetryScheduledV1 {

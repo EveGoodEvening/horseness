@@ -33,7 +33,7 @@ const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 async function fsyncDirectory(path: string): Promise<void> { const handle = await open(path, "r"); try { await handle.sync(); } finally { await handle.close(); } }
 async function writeAtomic(path: string, bytes: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.tmp-${process.pid}`;
+  const temporary = `${path}.tmp-${String(process.pid)}`;
   const handle = await open(temporary, "w", 0o600);
   try { await handle.writeFile(bytes, "utf8"); await handle.sync(); } finally { await handle.close(); }
   await rename(temporary, path); await fsyncDirectory(dirname(path));
@@ -53,7 +53,7 @@ function createState(fields: Omit<InstallerStateV1, "schema" | "detailDigest">):
   return Object.freeze({ ...core, detailDigest: stateDigest(core) });
 }
 async function record(journal: InstallerJournal, operation: JournalOperationV1, state: InstallerStateV1): Promise<void> {
-  await journal.append({ operation, transactionId: state.transactionId ?? `steady-${state.generation}`, releaseVersion: state.targetVersion ?? state.installedVersion, detailDigest: state.detailDigest }, state.generation);
+  await journal.append({ operation, transactionId: state.transactionId ?? `steady-${String(state.generation)}`, releaseVersion: state.targetVersion ?? state.installedVersion, detailDigest: state.detailDigest }, state.generation);
 }
 
 export class InstallerMigrationEngine {
@@ -89,8 +89,8 @@ export class InstallerMigrationEngine {
     const expected = ["schema", "installedVersion", "generation", "phase", "transactionId", "backupPath", "stagedPath", "targetVersion", "detailDigest"].sort();
     if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) throw new InstallerMigrationError("INVALID_INSTALLER_STATE");
     const state = value as InstallerStateV1;
-    const { detailDigest: _digest, ...core } = state;
-    if (state.schema !== "horseness.installer-state.v1" || !VERSION.test(state.installedVersion) || !Number.isSafeInteger(state.generation) || state.generation < 1 || state.detailDigest !== stateDigest(core)) throw new InstallerMigrationError("INSTALLER_STATE_INTEGRITY_MISMATCH");
+    const { detailDigest, ...core } = state;
+    if ((state.schema as unknown) !== "horseness.installer-state.v1" || !VERSION.test(state.installedVersion) || !Number.isSafeInteger(state.generation) || state.generation < 1 || detailDigest !== stateDigest(core)) throw new InstallerMigrationError("INSTALLER_STATE_INTEGRITY_MISMATCH");
     return state;
   }
   private async persist(state: InstallerStateV1): Promise<void> { await writeAtomic(this.statePath, `${JSON.stringify(state)}\n`); }
@@ -100,7 +100,7 @@ export class InstallerMigrationEngine {
     return resolved;
   }
   async migrate(plan: MigrationPlanV1, crash?: (point: MigrationCrashPointV1) => void): Promise<InstallerStateV1> {
-    if (plan.schema !== "horseness.migration-plan.v1" || !VERSION.test(plan.fromVersion) || !VERSION.test(plan.toVersion) || typeof plan.reversible !== "boolean" || typeof plan.explicitMajorGate !== "boolean") throw new InstallerMigrationError("INVALID_MIGRATION_PLAN");
+    if ((plan.schema as unknown) !== "horseness.migration-plan.v1" || !VERSION.test(plan.fromVersion) || !VERSION.test(plan.toVersion) || typeof plan.reversible !== "boolean" || typeof plan.explicitMajorGate !== "boolean") throw new InstallerMigrationError("INVALID_MIGRATION_PLAN");
     const fromParts = plan.fromVersion.split(".").map((part) => Number.parseInt(part, 10));
     const toParts = plan.toVersion.split(".").map((part) => Number.parseInt(part, 10));
     const downgrade = (toParts[0] ?? 0) < (fromParts[0] ?? 0) || ((toParts[0] ?? 0) === (fromParts[0] ?? 0) && ((toParts[1] ?? 0) < (fromParts[1] ?? 0) || ((toParts[1] ?? 0) === (fromParts[1] ?? 0) && (toParts[2] ?? 0) < (fromParts[2] ?? 0))));
@@ -109,8 +109,8 @@ export class InstallerMigrationEngine {
     let state = await this.recover();
     if (state.installedVersion !== plan.fromVersion || state.phase !== "complete") throw new InstallerMigrationError("MIGRATION_SOURCE_MISMATCH");
     const generation = state.generation + 1;
-    const backupPath = this.confined(join(this.authorityRoot, "backups", `${generation}-${plan.fromVersion}`));
-    const stagedPath = this.confined(join(this.authorityRoot, "staging", `${generation}-${plan.toVersion}`));
+    const backupPath = this.confined(join(this.authorityRoot, "backups", `${String(generation)}-${plan.fromVersion}`));
+    const stagedPath = this.confined(join(this.authorityRoot, "staging", `${String(generation)}-${plan.toVersion}`));
     state = createState({ installedVersion: plan.fromVersion, generation, phase: "begun", transactionId: plan.transactionId, backupPath, stagedPath, targetVersion: plan.toVersion });
     await this.persist(state); await record(this.journal, "migration-begun", state); crash?.("after-begin");
     try {
@@ -118,7 +118,7 @@ export class InstallerMigrationEngine {
       state = createState({ ...state, phase: "backup-created" }); await this.persist(state); await record(this.journal, "backup-created", state); crash?.("after-backup");
       await mkdir(dirname(stagedPath), { recursive: true, mode: 0o700 }); await rm(stagedPath, { recursive: true, force: true }); await plan.transform(this.activeHome, stagedPath); await fsyncDirectory(stagedPath); await fsyncDirectory(dirname(stagedPath));
       state = createState({ ...state, phase: "staged" }); await this.persist(state); await record(this.journal, "staged", state); crash?.("after-stage-fsync");
-      const previous = this.confined(join(this.authorityRoot, `previous-${generation}`)); await rename(this.activeHome, previous); await rename(stagedPath, this.activeHome); crash?.("after-activate-rename"); await fsyncDirectory(this.authorityRoot); crash?.("after-activate-fsync"); await rm(previous, { recursive: true, force: true });
+      const previous = this.confined(join(this.authorityRoot, `previous-${String(generation)}`)); await rename(this.activeHome, previous); await rename(stagedPath, this.activeHome); crash?.("after-activate-rename"); await fsyncDirectory(this.authorityRoot); crash?.("after-activate-fsync"); await rm(previous, { recursive: true, force: true });
       state = createState({ installedVersion: plan.toVersion, generation, phase: "complete", transactionId: null, backupPath, stagedPath: null, targetVersion: null }); await this.persist(state); await record(this.journal, "activated", { ...state, transactionId: plan.transactionId, targetVersion: plan.toVersion }); return state;
     } catch (error) {
       if (error instanceof InstallerMigrationError && error.code === "INJECTED_CRASH") throw error;

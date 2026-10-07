@@ -18,7 +18,7 @@ function packed(args: readonly string[], env: NodeJS.ProcessEnv = {}): { status:
 
 function protectedFile(path: string, value: string): void { writeFileSync(path, value, { mode: 0o600 }); chmodSync(path, 0o600); }
 
-test("packed CLI drives a fresh daemon without internal state access", { timeout: 30_000 }, () => {
+void test("packed CLI drives a fresh daemon without internal state access", { timeout: 30_000 }, () => {
   const root = mkdtempSync(join(tmpdir(), "horseness-cli-packed-"));
   const databasePath = join(root, ".horseness", "authority.sqlite");
   const artifactRoot = join(root, ".horseness", "artifacts");

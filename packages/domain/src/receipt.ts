@@ -29,10 +29,10 @@ export function sealAttemptReceipt(core: AttemptReceiptCoreV1): AttemptReceiptEn
 }
 export function verifyAttemptReceipt(receipt: AttemptReceiptEnvelopeV1): void {
   const envelope = exactReceiptRecord(receipt, [...RECEIPT_KEYS, "receiptId", "receiptDigest"]); receiptText(envelope.receiptId); receiptText(envelope.receiptDigest);
-  const { receiptId: _receiptId, receiptDigest: _receiptDigest, ...core } = receipt;
+  const { receiptId, receiptDigest, ...core } = receipt;
   validateAttemptReceiptCore(core);
   const expected = sealAttemptReceipt(core);
-  if (expected.receiptDigest !== receipt.receiptDigest || expected.receiptId !== receipt.receiptId) throw new DomainError("RECEIPT_MISMATCH");
+  if (expected.receiptDigest !== receiptDigest || expected.receiptId !== receiptId) throw new DomainError("RECEIPT_MISMATCH");
 }
 
 export interface CanonicalDocument { workspaceId: string; runId: string; revision: number; document: JsonValue; stateHash: string; hashAlgorithmVersion: "sha256-v1"; canonicalizerVersion: "jcs-v1"; acceptedProposalId: string | null; lastCanonicalEventSequence: number }
@@ -93,7 +93,7 @@ export function reduceWorkspaceState(state: WorkspaceState | null, event: Worksp
       if (state === null) throw new DomainError("INVALID_GENESIS");
       if (event.workspaceId !== state.workspaceId) throw new DomainError("AGGREGATE_IDENTITY_MISMATCH");
       if (event.sequence !== state.lastEventSequence + 1) throw new DomainError("EVENT_SEQUENCE_INVALID");
-      if (event.consumed !== "yes" && event.consumed !== "no") throw new DomainError("MALFORMED_EVENT");
+      if ((event.consumed as unknown) !== "yes" && (event.consumed as unknown) !== "no") throw new DomainError("MALFORMED_EVENT");
       if (!(["accepted", "rejected", "conflicted", "quarantined", "approval_required"] as readonly string[]).includes(event.state)) throw new DomainError("MALFORMED_EVENT");
       if ((event.state === "accepted") !== (event.consumed === "yes")) throw new DomainError("ADMISSION_QUOTA_INCONSISTENT");
       if (Object.values(state.admissions).some((item) => item.history.some((decision) => decision.decisionEventId === event.decisionEventId))) throw new DomainError("DUPLICATE_ADMISSION_TRANSITION");

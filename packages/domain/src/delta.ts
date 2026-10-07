@@ -24,7 +24,7 @@ export function validatePointer(path: string): string[] {
   return tokens;
 }
 export function canonicalScope(scope: DeltaAuthorityScopeV1): DeltaAuthorityScopeV1 {
-  if (scope.schemaVersion !== "1" || typeof scope.workspaceId !== "string" || typeof scope.runId !== "string" || typeof scope.taskId !== "string" || !Array.isArray(scope.roots)) throw new DomainError("INVALID_ENVELOPE");
+  if ((scope.schemaVersion as unknown) !== "1" || typeof scope.workspaceId !== "string" || typeof scope.runId !== "string" || typeof scope.taskId !== "string" || !Array.isArray(scope.roots)) throw new DomainError("INVALID_ENVELOPE");
   for (const root of scope.roots) validatePointer(root);
   return { ...scope, roots: [...new Set(scope.roots)].sort() };
 }
@@ -51,8 +51,9 @@ function parentAndKey(document: JsonValue, tokens: readonly string[]): { parent:
     } else if (current !== null && typeof current === "object" && Object.hasOwn(current, token)) current = current[token] as JsonValue;
     else return undefined;
   }
-  if (current === null || typeof current !== "object") return undefined;
-  return { parent: current as JsonValue[] | Record<string, JsonValue>, key: tokens.at(-1) as string };
+  const key = tokens.at(-1);
+  if (current === null || typeof current !== "object" || key === undefined) return undefined;
+  return { parent: current as JsonValue[] | Record<string, JsonValue>, key };
 }
 function readAt(document: JsonValue, tokens: readonly string[]): { exists: boolean; value?: JsonValue } {
   if (tokens.length === 0) return { exists: true, value: document };
@@ -73,10 +74,10 @@ export function applyDelta(base: JsonValue, operations: readonly DeltaOperationV
   } catch (error) {
     return failure(error instanceof DomainError && error.code === "INVALID_POINTER" ? "INVALID_POINTER" : "INVALID_ENVELOPE");
   }
-  if (!Array.isArray(operations)) return failure("INVALID_ENVELOPE");
+  if (!Array.isArray(operations as unknown)) return failure("INVALID_ENVELOPE");
   const writes: string[] = [];
   for (const operation of operations) {
-    if (operation === null || typeof operation !== "object" || !["test", "add", "replace", "remove"].includes(operation.op)) return failure("INVALID_ENVELOPE");
+    if ((operation as unknown) === null || typeof operation !== "object" || !["test", "add", "replace", "remove"].includes(operation.op)) return failure("INVALID_ENVELOPE");
     const requiredKeys = operation.op === "add" ? ["expectedParentDigest", "op", "path", "value"] : operation.op === "replace" ? ["expectedValueDigest", "op", "path", "value"] : ["expectedValueDigest", "op", "path"];
     if (Object.keys(operation).sort().join("\0") !== requiredKeys.join("\0")) return failure("INVALID_ENVELOPE");
     if (("expectedValueDigest" in operation && typeof operation.expectedValueDigest !== "string") || ("expectedParentDigest" in operation && typeof operation.expectedParentDigest !== "string")) return failure("INVALID_ENVELOPE");
@@ -88,7 +89,7 @@ export function applyDelta(base: JsonValue, operations: readonly DeltaOperationV
     if (operation.op !== "test") writes.push(operation.path);
   }
   if (new Set(writes).size !== writes.length) return failure("DUPLICATE_WRITE_TARGET");
-  for (let index = 0; index < writes.length; index += 1) for (let other = index + 1; other < writes.length; other += 1) if ((writes[index] !== "" && writes[other]?.startsWith(`${writes[index]}/`)) || (writes[other] !== "" && writes[index]?.startsWith(`${writes[other]}/`)) || writes[index] === "" || writes[other] === "") return failure("OVERLAPPING_WRITE_TARGET");
+  for (let index = 0; index < writes.length; index += 1) for (let other = index + 1; other < writes.length; other += 1) if ((writes[index] !== "" && writes[other]?.startsWith(`${String(writes[index])}/`)) || (writes[other] !== "" && writes[index]?.startsWith(`${String(writes[other])}/`)) || writes[index] === "" || writes[other] === "") return failure("OVERLAPPING_WRITE_TARGET");
   let document = deepClone(base);
   for (const operation of operations) {
     let tokens: string[];
@@ -108,7 +109,7 @@ export function applyDelta(base: JsonValue, operations: readonly DeltaOperationV
       if (!current.exists) return failure("PATH_MISSING");
       if (jsonValueDigest(current.value as JsonValue) !== operation.expectedValueDigest) return failure("VALUE_DIGEST_MISMATCH");
       const location = parentAndKey(document, tokens) as { parent: JsonValue[] | Record<string, JsonValue>; key: string };
-      if (Array.isArray(location.parent)) location.parent.splice(Number(location.key), 1); else delete location.parent[location.key];
+      if (Array.isArray(location.parent)) location.parent.splice(Number(location.key), 1); else Reflect.deleteProperty(location.parent, location.key);
     } else {
       if (tokens.length === 0) return failure("ROOT_ADD_FORBIDDEN");
       const location = parentAndKey(document, tokens);
@@ -163,9 +164,9 @@ function validateProposalCore(value: unknown): asserts value is ProposalEnvelope
   if (cursor.workspaceId !== core.workspaceId || cursor.runId !== core.runId || canonicalJson(context.observationCursor) !== canonicalJson(cursor) || context.workspaceContextEpoch !== cursor.workspaceContextEpoch || context.runContextEpoch !== cursor.runContextEpoch) throw new DomainError("INVALID_ENVELOPE");
   if (!Array.isArray(core.operations)) throw new DomainError("INVALID_ENVELOPE");
   for (const operationValue of core.operations) {
-    const operation = operationValue as unknown as Record<string, unknown>; const tag = operation?.op;
+    const operation = operationValue as unknown as Record<string, unknown> | null | undefined; const tag = operation?.op;
     const keys = tag === "test" || tag === "remove" ? ["op", "path", "expectedValueDigest"] : tag === "replace" ? ["op", "path", "expectedValueDigest", "value"] : tag === "add" ? ["op", "path", "expectedParentDigest", "value"] : null;
-    if (keys === null) throw new DomainError("INVALID_ENVELOPE"); exactRecord(operationValue, keys); nonEmpty(operation.path); validatePointer(operation.path); nonEmpty(tag === "add" ? operation.expectedParentDigest : operation.expectedValueDigest); if (tag === "add" || tag === "replace") assertJsonValue(operation.value);
+    if (keys === null) throw new DomainError("INVALID_ENVELOPE"); const record = exactRecord(operationValue, keys); nonEmpty(record.path); validatePointer(record.path); nonEmpty(tag === "add" ? record.expectedParentDigest : record.expectedValueDigest); if (tag === "add" || tag === "replace") assertJsonValue(record.value);
   }
   if (!Array.isArray(core.evidenceClaims)) throw new DomainError("INVALID_ENVELOPE");
   const claimDigests = new Set<string>(); const claims = new Set<string>(); for (const itemValue of core.evidenceClaims) { const item = exactRecord(itemValue, ["digest", "claim"]); nonEmpty(item.digest); nonEmpty(item.claim); if (claimDigests.has(item.digest) || claims.has(item.claim)) throw new DomainError("INVALID_ENVELOPE"); claimDigests.add(item.digest); claims.add(item.claim); }

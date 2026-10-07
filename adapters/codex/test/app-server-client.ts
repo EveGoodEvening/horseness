@@ -70,9 +70,9 @@ export function assertSafeCodexEnvironment(environment: NodeJS.ProcessEnv): void
 }
 
 type JsonObject = Record<string, unknown>;
-type Pending = { resolve(value: unknown): void; reject(error: Error): void; timer: NodeJS.Timeout };
+interface Pending { resolve(value: unknown): void; reject(error: Error): void; timer: NodeJS.Timeout }
 
-export type CodexMcpCall = {
+export interface CodexMcpCall {
   readonly type: "mcpToolCall";
   readonly server: string;
   readonly tool: string;
@@ -81,9 +81,9 @@ export type CodexMcpCall = {
   readonly pluginId: string | null;
   readonly result: unknown;
   readonly error: unknown;
-};
+}
 
-export type CodexTurnObservation = {
+export interface CodexTurnObservation {
   readonly threadId: string;
   readonly turnId: string;
   readonly model: string;
@@ -92,7 +92,7 @@ export type CodexTurnObservation = {
   readonly itemDescriptors: readonly string[];
   readonly executingToolCallCount: number;
   readonly assistantText: string;
-};
+}
 
 const PASSIVE_THREAD_ITEM_TYPES: Readonly<Record<string, true>> = Object.freeze({ userMessage: true, hookPrompt: true, agentMessage: true, plan: true, reasoning: true, subAgentActivity: true, enteredReviewMode: true, exitedReviewMode: true, contextCompaction: true });
 const EXECUTING_THREAD_ITEM_TYPES: Readonly<Record<string, true>> = Object.freeze({ commandExecution: true, fileChange: true, mcpToolCall: true, dynamicToolCall: true, collabAgentToolCall: true, webSearch: true, imageView: true, sleep: true, imageGeneration: true });
@@ -110,7 +110,7 @@ export function describeCodexThreadItemV2(item: unknown): string {
   if (type !== "mcpToolCall") return type.slice(0, 64);
 
   const pluginId = typeof record.pluginId === "string" ? `@${record.pluginId}` : "";
-  const name = `${String(record.server ?? "")}/${String(record.tool ?? "")}${pluginId}`;
+  const name = `${(typeof record.server === "string" ? record.server : "")}/${(typeof record.tool === "string" ? record.tool : "")}${pluginId}`;
   const safeName = name.length <= 192 && /^[A-Za-z0-9_.:@/-]+$/.test(name) ? name : "[redacted]";
   return `${type}:${safeName}`;
 }
@@ -145,12 +145,12 @@ export class CodexAppServerClient {
     this.#child = child;
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
-    child.stdout.on("data", chunk => this.#consume(String(chunk)));
+    child.stdout.on("data", chunk => { this.#consume(String(chunk)); });
     child.stderr.on("data", chunk => {
       this.#stderr += String(chunk);
       if (Buffer.byteLength(this.#stderr) > MAX_WIRE_BYTES) this.#stderr = this.#stderr.slice(-MAX_WIRE_BYTES);
     });
-    child.once("close", code => { this.#closed = true; this.#failAll(new Error(`CODEX_APP_SERVER_EXIT_${code ?? "NONE"}`)); });
+    child.once("close", code => { this.#closed = true; this.#failAll(new Error(`CODEX_APP_SERVER_EXIT_${String(code ?? "NONE")}`)); });
     child.once("error", error => { this.#closed = true; this.#failAll(error); });
   }
 
@@ -179,17 +179,18 @@ export class CodexAppServerClient {
 
   async waitFor(predicate: (message: JsonObject) => boolean, label: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<JsonObject> {
     const deadline = Date.now() + timeoutMs;
-    while (true) {
+    for (;;) {
       const index = this.#notifications.findIndex(predicate);
-      if (index >= 0) return this.#notifications.splice(index, 1)[0]!;
+      if (index >= 0) { const notification = this.#notifications.splice(index, 1)[0]; if (notification !== undefined) return notification; }
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw new Error(`CODEX_APP_SERVER_WAIT_${label}_TIMEOUT`);
-      const { promise, resolve } = Promise.withResolvers<void>();
-      this.#waiters.add(resolve);
-      const timer = setTimeout(resolve, remaining);
+      const { promise, resolve } = Promise.withResolvers<undefined>();
+      const wake = () => { resolve(undefined); };
+      this.#waiters.add(wake);
+      const timer = setTimeout(wake, remaining);
       await promise;
       clearTimeout(timer);
-      this.#waiters.delete(resolve);
+      this.#waiters.delete(wake);
     }
   }
 
@@ -198,9 +199,9 @@ export class CodexAppServerClient {
     if (this.#closed) return;
     this.#closed = true;
     this.#child.stdin.end();
-    const { promise, resolve } = Promise.withResolvers<void>();
-    const timer = setTimeout(() => { this.#child.kill("SIGKILL"); resolve(); }, 5_000);
-    this.#child.once("close", () => resolve());
+    const { promise, resolve } = Promise.withResolvers<undefined>();
+    const timer = setTimeout(() => { this.#child.kill("SIGKILL"); resolve(undefined); }, 5_000);
+    this.#child.once("close", () => { resolve(undefined); });
     await promise;
     clearTimeout(timer);
   }
@@ -212,7 +213,7 @@ export class CodexAppServerClient {
   }
   stderr(): string { return this.#stderr; }
   observedEnvironment(): Readonly<Record<string, string>> {
-    const bytes = readFileSync(`/proc/${this.#child.pid}/environ`);
+    const bytes = readFileSync(`/proc/${String(this.#child.pid)}/environ`);
     return Object.freeze(Object.fromEntries(bytes.toString("utf8").split("\0").filter(Boolean).map(entry => { const separator = entry.indexOf("="); return [entry.slice(0, separator), entry.slice(separator + 1)]; })));
   }
 
@@ -220,7 +221,7 @@ export class CodexAppServerClient {
 
   #consume(chunk: string): void {
     this.#stdout += chunk;
-    if (Buffer.byteLength(this.#stdout) > MAX_WIRE_BYTES) return this.#failAll(new Error("CODEX_APP_SERVER_WIRE_TOO_LARGE"));
+    if (Buffer.byteLength(this.#stdout) > MAX_WIRE_BYTES) { this.#failAll(new Error("CODEX_APP_SERVER_WIRE_TOO_LARGE")); return; }
     while (this.#stdout.includes("\n")) {
       const index = this.#stdout.indexOf("\n");
       const line = this.#stdout.slice(0, index).trim();
@@ -228,7 +229,7 @@ export class CodexAppServerClient {
       if (line.length === 0) continue;
       let message: JsonObject;
       try { message = JSON.parse(line) as JsonObject; }
-      catch { return this.#failAll(new Error("CODEX_APP_SERVER_JSON_INVALID")); }
+      catch { this.#failAll(new Error("CODEX_APP_SERVER_JSON_INVALID")); return; }
       if (typeof message.id === "number" && ("result" in message || "error" in message)) {
         const pending = this.#pending.get(message.id);
         if (pending === undefined) continue;
@@ -279,7 +280,7 @@ export async function waitForMcpReady(client: CodexAppServerClient, threadId: st
 export async function observeTurn(client: CodexAppServerClient, threadId: string, params: JsonObject): Promise<CodexTurnObservation> {
   const started = responseObject(await client.request("turn/start", { threadId, ...params }), "TURN_START");
   const turn = responseObject(started.turn, "TURN_START_TURN");
-  const turnId = String(turn.id ?? "");
+  const turnId = (typeof turn.id === "string" ? turn.id : "");
   if (turnId.length === 0) throw new Error("CODEX_TURN_ID_MISSING");
   const calls: CodexMcpCall[] = [];
   const itemTypes: string[] = [];
@@ -287,7 +288,7 @@ export async function observeTurn(client: CodexAppServerClient, threadId: string
   const completedItems = new Map<string, string>();
   let executingToolCallCount = 0;
   const texts: string[] = [];
-  while (true) {
+  for (;;) {
     const message = await client.waitFor(candidate => {
       const paramsValue = candidate.params;
       if (paramsValue === null || typeof paramsValue !== "object" || Array.isArray(paramsValue)) return false;
@@ -301,12 +302,12 @@ export async function observeTurn(client: CodexAppServerClient, threadId: string
     if (message.method === "turn/completed") {
       const completed = responseObject(responseObject(message.params, "TURN_COMPLETED").turn, "TURN_COMPLETED_TURN");
       if (completed.status !== "completed") throw new Error(`CODEX_TURN_${String(completed.status).toUpperCase()}`);
-      return { threadId, turnId, model: String(completed.model ?? turn.model ?? ""), mcpCalls: calls, itemTypes, itemDescriptors, executingToolCallCount, assistantText: texts.join("\n") };
+      return { threadId, turnId, model: (typeof completed.model === "string" ? completed.model : typeof turn.model === "string" ? turn.model : ""), mcpCalls: calls, itemTypes, itemDescriptors, executingToolCallCount, assistantText: texts.join("\n") };
     }
     const item = responseObject(responseObject(message.params, "ITEM_COMPLETED").item, "ITEM_COMPLETED_ITEM");
     if (!recordCodexCompletedItemV2(completedItems, item)) continue;
     const itemDescriptor = describeCodexThreadItemV2(item);
-    const itemType = String(item.type ?? "");
+    const itemType = (typeof item.type === "string" ? item.type : "");
     itemTypes.push(itemType);
     if (itemDescriptors.length >= MAX_TURN_ITEMS) throw new Error("CODEX_TURN_ITEM_COUNT_INVALID");
     itemDescriptors.push(itemDescriptor);
@@ -326,16 +327,16 @@ export async function validatePinnedSchemas(binary: string, root: string, tempor
     assertSafeCodexEnvironment(environment);
     const child = spawn(binary, ["app-server", "generate-json-schema", "--experimental", "--out", output], { cwd: root, env: environment, stdio: ["ignore", "ignore", "pipe"] });
     let stderrBytes = 0;
-    child.stderr.on("data", chunk => { stderrBytes += Buffer.byteLength(chunk); });
-    let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, remaining);
+    child.stderr.on("data", (chunk: Buffer) => { stderrBytes += Buffer.byteLength(chunk); });
+    const deadlineState = { timedOut: false };
+    const timer = setTimeout(() => { deadlineState.timedOut = true; child.kill("SIGKILL"); }, remaining);
     const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null; spawnError: boolean }>(resolveResult => {
       let spawnError = false;
       child.once("error", () => { spawnError = true; });
-      child.once("close", (code, signal) => resolveResult({ code, signal, spawnError }));
+      child.once("close", (code, signal) => { resolveResult({ code, signal, spawnError }); });
     });
     clearTimeout(timer);
-    if (timedOut) fail("DEADLINE_EXPIRED");
+    if (deadlineState.timedOut) fail("DEADLINE_EXPIRED");
     if (result.spawnError) fail("PROCESS_START_FAILED");
     if (result.signal !== null) fail("PROCESS_SIGNALED");
     if (result.code !== 0) fail(stderrBytes > 64 * 1024 ? "GENERATOR_FAILED_DIAGNOSTIC_TOO_LARGE" : "GENERATOR_FAILED");

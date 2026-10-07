@@ -7,12 +7,12 @@ import { join } from "node:path";
 import { createNativeTaskSpoolV1, type NativeTaskAdapterOptionsV1, type NativeTaskTerminalV1 } from "@horseness/adapter-kit";
 import { taskExecutionProfileDigest, verifyAttemptReceipt } from "@horseness/domain";
 
-test("OMP requires a concrete provider/model before executable resolution",async()=>{
+void test("OMP requires a concrete provider/model before executable resolution",async()=>{
  for(const model of [null,"sonnet","anthropic/*","anthropic/claude-sonnet:high"]){
   await assert.rejects(resolveOMPTaskProfileV1({workspacePath:"/unavailable",executablePath:"/unavailable/omp",model,purpose:"planner"}),error=>error instanceof Error&&"code" in error&&error.code==="MODEL_REQUIRED");
  }
 });
-for(const outcome of ["failed","cancelled"] as const)test(`OMP collects retained ${outcome} receipts with diagnostic evidence`,async()=>{
+for(const outcome of ["failed","cancelled"] as const)void test(`OMP collects retained ${outcome} receipts with diagnostic evidence`,async()=>{
  const stateDirectory=await mkdtemp(join(tmpdir(),"horseness-omp-terminal-"));
  const options:NativeTaskAdapterOptionsV1={binding:{schemaVersion:"1",workspaceId:"workspace",runId:"run",taskId:"task",attemptId:"attempt",generation:1,forkPinDigest:"fork",contextManifestCoreDigest:"manifest",attemptContextBindingDigest:"binding",providerIdempotencyKeyDigest:"key",attemptCapability:"capability"},producerPrincipalId:"producer",producerGrantDigest:"grant",workspacePath:stateDirectory,stateDirectory,renderedContext:"task context",model:"provider/model",purpose:"work",profile:{schemaVersion:"1",adapterId:"omp",hostId:"omp",hostVersion:"17.2.15",nativeExecutablePath:"/unavailable/omp",nativeExecutableDigest:"a".repeat(64),providerId:"provider",modelId:"model",purpose:"work",timeoutMs:1000,maxOutputBytes:1048576,lookup:"local-terminal-record",idempotentLaunch:false}};
  try{

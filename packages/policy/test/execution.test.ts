@@ -10,7 +10,7 @@ const base: ExecutionPolicyInputV1 = {
   evaluationClock: { schemaVersion: "1", authorityTime: "2026-10-06T00:00:00Z", observationCursor: cursor },
 };
 
-test("execution cannot replace a pinned denial with a permissive current policy", () => {
+void test("execution cannot replace a pinned denial with a permissive current policy", () => {
   const pinned = sealPolicyDocument({ schemaVersion: "1", kind: "policy", policyId: "execution", revision: 0, predecessorDigest: null,
     rules: [{ ruleId: "deny-launch", subject: { action: "task.dispatch", pathPrefix: "/tasks", version: "1" }, effect: "rejected", constraints: [], evidence: [] }] });
   const result = evaluateExecutionPolicy({ ...base, pinnedPolicy: pinned });
@@ -20,7 +20,7 @@ test("execution cannot replace a pinned denial with a permissive current policy"
   assert.equal(evaluateExecutionPolicy({ ...base, currentPolicy: pinned, action: "task.breakdown" }).result, "accepted");
 });
 
-test("execution approval requirements cannot be satisfied by a proposal-shaped bypass", () => {
+void test("execution approval requirements cannot be satisfied by a proposal-shaped bypass", () => {
   const current = sealPolicyDocument({ schemaVersion: "1", kind: "policy", policyId: "review", revision: 0, predecessorDigest: null,
     rules: [{ ruleId: "require-review", subject: { action: "task.dispatch", pathPrefix: null, version: null }, effect: "approval_required", constraints: [], evidence: [] }] });
   const input = { ...base, currentPolicy: current };

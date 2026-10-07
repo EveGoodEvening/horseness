@@ -29,6 +29,7 @@ C20 completion requires candidate-bound Linux, macOS, and Windows receipts. If a
 C20 source ownership defers to the authoritative round-three C20 ownership row and is file-exact for all six existing flat CLI files—`apps/cli/src/parser.ts`, `apps/cli/src/runtime.ts`, `apps/cli/src/result.ts`, `apps/cli/src/index.ts`, `apps/cli/src/entry.ts`, and `apps/cli/src/registry.ts`—the new flat router/help/completion files, ten lifecycle command modules, ten matching tests, and the existing named CLI tests. Focused verifier coverage is rooted at exact `tests/boundaries-check.test.mjs` and `tests/ci-require-os-receipts.test.mjs`; no implicit `scripts/test/**`, unnamed “corresponding tests”, or directory-shaped ownership follows from this ADR.
 
 ## Rejected Alternatives
+
 - Importing adapter packages from installer core.
 - Letting adapters write host discovery targets.
 - Trusting adapter-declared digests without independently hashing signed bundle bytes.

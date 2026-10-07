@@ -13,8 +13,8 @@ export function verifyCheckpointReceipt(envelope: CheckpointReceiptEnvelopeV1, t
   const coreDigest = checkpointCoreDigest(envelope.core);
   if (coreDigest !== envelope.coreDigest || checkpointEnvelopeDigest({ recordType: envelope.recordType, schemaVersion: envelope.schemaVersion, core: envelope.core, coreDigest: envelope.coreDigest, signature: envelope.signature }) !== envelope.envelopeDigest || envelope.signature.signedDigest !== coreDigest) throw new DomainError("RECEIPT_MISMATCH");
   const matches = trust.keys.filter((key) => key.keyId === envelope.signature.keyId);
-  if (matches.length !== 1) throw new DomainError("TRUST_KEY_INVALID");
-  const key = matches[0] as CheckpointTrustKeyV1;
+  const key = matches[0];
+  if (matches.length !== 1 || key === undefined) throw new DomainError("TRUST_KEY_INVALID");
   if (key.principalId !== envelope.signature.principalId || (production && key.fixtureOnly) || !key.subjects.includes(envelope.core.subject) || !key.variants.includes(envelope.core.receiptVariant) || envelope.core.attestedAt < key.notBefore || envelope.core.attestedAt >= key.notAfter || trustedNow < key.notBefore || (key.revokedAt !== null && key.revokedAt <= envelope.core.attestedAt)) throw new DomainError("TRUST_KEY_INVALID");
   const spki = Buffer.from(key.publicKeySpkiBase64, "base64");
   if (sha256Hex(spki) !== key.spkiSha256) throw new DomainError("TRUST_KEY_INVALID");

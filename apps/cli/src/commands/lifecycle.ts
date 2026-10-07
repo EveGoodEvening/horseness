@@ -51,7 +51,7 @@ function definition(
   usage: string,
   optionNames: readonly string[],
   secretOptions: readonly string[],
-  executeCommand: (invocation: CliInvocationV1, context: CliExecutionContextV1) => Promise<JsonValue>,
+  executeCommand: (invocation: CliInvocationV1, context: CliExecutionContextV1) => JsonValue | Promise<JsonValue>,
 ): CliCommandDefinitionV1 {
   return {
     name,
@@ -82,7 +82,7 @@ function bootstrapSecret(path: string): string {
 export function registerLifecycleCommandsV1(registry: CliCommandRegistryV1): void {
   registry.register(definition("start", "Start the local workspace daemon", "start --workspace-path PATH --database-path PATH --artifact-root PATH --endpoint-path PATH --daemon-executable PATH --grant-reference-file FILE", [...PATH_OPTIONS, "grant-reference-file"], ["grant-reference-file"], async (invocation, context) => startDaemonV1(paths(invocation), required(invocation, "grant-reference-file"), context.authorityTime)));
   registry.register(definition("stop", "Stop the local workspace daemon", "stop --workspace-path PATH [--workspace-id ID]", ["workspace-path", "workspace-id"], [], async (invocation) => { await stopDaemonV1(required(invocation, "workspace-path"), optional(invocation, "workspace-id")); return { stopped: true }; }));
-  registry.register(definition("bootstrap", "Consume the one-time bootstrap capability", "bootstrap --workspace-path PATH --database-path PATH --artifact-root PATH --endpoint-path PATH --daemon-executable PATH --bootstrap-capability-file FILE --grant-reference-file FILE", [...PATH_OPTIONS, "bootstrap-capability-file", "grant-reference-file"], ["bootstrap-capability-file", "grant-reference-file"], async (invocation, context) => {
+  registry.register(definition("bootstrap", "Consume the one-time bootstrap capability", "bootstrap --workspace-path PATH --database-path PATH --artifact-root PATH --endpoint-path PATH --daemon-executable PATH --bootstrap-capability-file FILE --grant-reference-file FILE", [...PATH_OPTIONS, "bootstrap-capability-file", "grant-reference-file"], ["bootstrap-capability-file", "grant-reference-file"], (invocation, context) => {
     const capabilityPath = required(invocation, "bootstrap-capability-file");
     const grantReferencePath = resolve(required(invocation, "grant-reference-file"));
     const daemonPaths = paths(invocation);
@@ -95,7 +95,7 @@ export function registerLifecycleCommandsV1(registry: CliCommandRegistryV1): voi
       return { workspaceId: result.workspaceId, principalId: result.principalId, grantDigest: result.grantDigest, grantReferenceFile: grantReferencePath };
     } finally { rmSync(temporary, { force: true }); }
   }));
-  registry.register(definition("restore-rebind", "Rebind a moved restored workspace", "restore-rebind --workspace-path PATH --database-path PATH --artifact-root PATH --endpoint-path PATH --daemon-executable PATH", PATH_OPTIONS, [], async (invocation, context) => rebindRestoredWorkspaceV1(paths(invocation), context.authorityTime)));
+  registry.register(definition("restore-rebind", "Rebind a moved restored workspace", "restore-rebind --workspace-path PATH --database-path PATH --artifact-root PATH --endpoint-path PATH --daemon-executable PATH", PATH_OPTIONS, [], (invocation, context) => rebindRestoredWorkspaceV1(paths(invocation), context.authorityTime)));
 }
 
 async function coordinator(invocation: CliInvocationV1, context: CliExecutionContextV1, method: "grant.issue.v1" | "grant.revoke.v1", input: JsonValue): Promise<JsonValue> {
@@ -114,10 +114,10 @@ export function registerCredentialCommandsV1(registry: CliCommandRegistryV1): vo
     await coordinator(invocation, context, "grant.revoke.v1", { operationId: `${required(invocation, "idempotency-key")}:revoke`, grantDigest: required(invocation, "old-grant-digest"), reason: "credential rotation", effectiveAt: context.authorityTime() });
     return issued;
   }));
-  registry.register(definition("credential-recover", "Load an opaque recovered grant reference", "credential-recover --recovery-file FILE --workspace-id ID", ["recovery-file", "workspace-id"], ["recovery-file"], async (invocation) => {
+  registry.register(definition("credential-recover", "Load an opaque recovered grant reference", "credential-recover --recovery-file FILE --workspace-id ID", ["recovery-file", "workspace-id"], ["recovery-file"], (invocation) => {
     const parsed = JSON.parse(readProtectedSecretFileV1(required(invocation, "recovery-file"))) as Record<string, unknown>;
     if (parsed.schemaVersion !== "1" || parsed.workspaceId !== required(invocation, "workspace-id") || typeof parsed.grantReference !== "string" || !parsed.grantReference.startsWith("grant:")) throw new Error("recovery material binding mismatch");
-    return { recovered: true, workspaceId: parsed.workspaceId as string };
+    return { recovered: true, workspaceId: parsed.workspaceId };
   }));
 }
 

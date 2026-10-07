@@ -33,12 +33,12 @@ export function inspectMigrationLedger(db: DatabaseSync): number {
   if (table === undefined) return 0;
   const rows = db.prepare("SELECT version,name FROM schema_migrations ORDER BY version").all() as {version:number;name:string}[];
   const newer = rows.find((row) => row.version > CURRENT_STORAGE_SCHEMA);
-  if (newer !== undefined) throw new Error(`unsupported newer schema version ${newer.version}`);
+  if (newer !== undefined) throw new Error(`unsupported newer schema version ${String(newer.version)}`);
   for (const [index, row] of rows.entries()) {
     const expected = migrations[index];
     if (expected === undefined) {
-      if (row.version > CURRENT_STORAGE_SCHEMA) throw new Error(`unsupported newer schema version ${row.version}`);
-      throw new Error(`unknown migration ledger entry ${row.version}`);
+      if (row.version > CURRENT_STORAGE_SCHEMA) throw new Error(`unsupported newer schema version ${String(row.version)}`);
+      throw new Error(`unknown migration ledger entry ${String(row.version)}`);
     }
     if (row.version !== expected.version || row.name !== expected.name) {
       throw new Error(`migration ${String(expected.version).padStart(4, "0")} identity/order mismatch`);

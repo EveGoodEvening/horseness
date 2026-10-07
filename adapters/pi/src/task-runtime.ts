@@ -23,7 +23,8 @@ export async function resolvePiTaskProfileV1(options:NativeTaskProfileOptionsV1)
 }
 export async function createPiTaskAdapterV1(options:NativeTaskAdapterOptionsV1):Promise<NativeTaskAdapterSessionV1>{
  options={...structuredClone(options),renderedContext:options.renderedContext.normalize("NFC")};const profile=Object.freeze(options.profile);
- if(profile.adapterId!=="pi"||profile.hostId!=="pi"||profile.hostVersion!==PI_HOST_VERSION||profile.purpose!==options.purpose||profile.lookup!=="local-terminal-record"||profile.idempotentLaunch!==false)throw new Error("NATIVE_PROFILE_MISMATCH");
+ const idempotentLaunch:unknown=profile.idempotentLaunch;
+ if(profile.adapterId!=="pi"||profile.hostId!=="pi"||profile.hostVersion!==PI_HOST_VERSION||profile.purpose!==options.purpose||profile.lookup!=="local-terminal-record"||idempotentLaunch!==false)throw new Error("NATIVE_PROFILE_MISMATCH");
  const spool=await createNativeTaskSpoolV1(options);let verified:TaskExecutionProfileV1=profile;
  if(!await spool.handedOff()){
   if(await nativeExecutableDigestV1(profile.nativeExecutablePath)!==profile.nativeExecutableDigest)throw new Error("NATIVE_PROFILE_MISMATCH");
@@ -57,20 +58,20 @@ export async function createPiTaskAdapterV1(options:NativeTaskAdapterOptionsV1):
  for(const nativeMessage of end.messages as Record<string,unknown>[]){if(nativeMessage.role!=="assistant")continue;if(nativeMessage.provider!==profile.providerId||nativeMessage.model!==profile.modelId)throw new Error("NATIVE_MODEL_MISMATCH");message=nativeMessage;}
  if(!message)throw new Error("NATIVE_MODEL_UNOBSERVABLE");
  const content=message.content;if(!Array.isArray(content))throw new Error("NATIVE_OUTPUT_UNOBSERVABLE");let output="";
- for(const part of content){if(part.type!=="text")continue;if(typeof part.text!=="string")throw new Error("NATIVE_OUTPUT_UNOBSERVABLE");output+=(output.length===0?"":"\n")+part.text;}
+ for(const part of content as Record<string,unknown>[]){if(part.type!=="text")continue;if(typeof part.text!=="string")throw new Error("NATIVE_OUTPUT_UNOBSERVABLE");output+=(output.length===0?"":"\n")+part.text;}
  const outcome=result.exitCode===0&&message.stopReason==="stop"?"succeeded":"failed";
  if(outcome==="succeeded"&&output.length===0)throw new Error("NATIVE_OUTPUT_UNOBSERVABLE");
  const outputDigest=outcome==="succeeded"?await spool.publish(Buffer.from(output),"text/plain"):null;
  const provenance={profileDigest:taskExecutionProfileDigest(profile),observedHostId:profile.hostId,observedHostVersion:verified.hostVersion,observedProviderId:message.provider as string,observedModelId:message.model as string,nativeSessionId:header.id,exitCode:result.exitCode};
  const evidenceBytes=Buffer.from(JSON.stringify({provenance,stderr:result.stderr,sessionHeader:header,message:{role:message.role,provider:message.provider,model:message.model,stopReason:message.stopReason,content:message.content,errorMessage:message.errorMessage}}));const evidenceDigest=await spool.publish(evidenceBytes,"application/json");const record:NativeTaskTerminalV1={providerOperationId:header.id,nativeSessionId:header.id,startedAt,finishedAt:new Date().toISOString(),outcome,outputDigest,evidence:[{digest:evidenceDigest,mediaType:"application/json",size:evidenceBytes.byteLength}],provenance};await spool.save(record);return record;
- })();return active;},async cancel(){controller.abort();return collect();},async reconcile(){return collect();},async resume(){throw new Error("NATIVE_RESUME_UNSUPPORTED");},async collect(){return collect();}}});
+ })();return active;},async cancel(){controller.abort();return collect();},async reconcile(){return collect();},async resume(){return await Promise.reject(new Error("NATIVE_RESUME_UNSUPPORTED"));},async collect(){return collect();}}});
  const adapter:WorkerAdapterV1={
   async detectCapabilities(){const capabilities=await secure.detectCapabilities();return {...capabilities,cancel:false,reattach:"unsupported",nativeResume:"unsupported",contextInjection:"bytes",outputMediaTypes:["text/plain"]};},
   async launch(request:AdapterLaunchRequestV1){guard.assert(request);if(request.renderedContextDigest!==nativeRenderedContextDigestV1(options.renderedContext))throw new Error("NATIVE_CONTEXT_MISMATCH");return secure.launch(request);},
-  async cancel(request:AdapterCancelRequestV1){guard.assert(request);throw new Error("NATIVE_CANCEL_UNSUPPORTED");},
+  async cancel(request:AdapterCancelRequestV1){guard.assert(request);return await Promise.reject(new Error("NATIVE_CANCEL_UNSUPPORTED"));},
   async reconcile(request:AdapterReconcileRequestV1){guard.assert(request);const record=await collect();if(record===null)throw new Error("UNKNOWN_OUTCOME");return secure.reconcile(request);},
-  async resume(request:AdapterResumeRequestV1){guard.assert(request);throw new Error("NATIVE_RESUME_UNSUPPORTED");},
+  async resume(request:AdapterResumeRequestV1){guard.assert(request);return await Promise.reject(new Error("NATIVE_RESUME_UNSUPPORTED"));},
   collectReceipt:secure.collectReceipt.bind(secure),
  };
- return {adapter,publication:spool.publication,async close(){controller.abort();if(active)await active.catch(()=>{});await spool.close();}};
+ return {adapter,publication:(digest)=>spool.publication(digest),async close(){controller.abort();if(active)await active.catch(()=>{ /* Closing waits for a failed attempt before releasing its spool. */ });await spool.close();}};
 }

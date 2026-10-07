@@ -45,24 +45,24 @@ function discover(path: string, expectedWorkspaceId?: string): EndpointStateV1 {
   const absolute = resolve(path); const leaf = lstatSync(absolute); const parent = lstatSync(dirname(absolute));
   if (!leaf.isFile() || leaf.isSymbolicLink() || (leaf.mode & 0o777) !== 0o600 || !parent.isDirectory() || parent.isSymbolicLink() || (parent.mode & 0o077) !== 0 || realpathSync(absolute) !== absolute || realpathSync(dirname(absolute)) !== dirname(absolute)) throw new Error("endpoint state permissions invalid");
   if (process.platform !== "win32") { const uid = process.getuid?.(); if (uid !== undefined && (leaf.uid !== uid || parent.uid !== uid)) throw new Error("endpoint state owner mismatch"); }
-  const value = JSON.parse(readFileSync(absolute, "utf8")) as EndpointStateV1;
+  const value = JSON.parse(readFileSync(absolute, "utf8")) as Omit<EndpointStateV1, "schemaVersion"> & { readonly schemaVersion: unknown };
   if (value.schemaVersion !== "1" || typeof value.workspaceId !== "string" || (value.endpointPath !== null && typeof value.endpointPath !== "string") || !Number.isSafeInteger(value.processId) || (expectedWorkspaceId !== undefined && value.workspaceId !== expectedWorkspaceId)) throw new Error("endpoint state invalid");
-  return value;
+  return value as EndpointStateV1;
 }
-function daemonConfig(paths: CliDaemonPathsV1): Omit<CliDaemonPathsV1, "daemonExecutable"> & { transport: { kind: "unix-socket"; endpointPath: string } } {
-  return { workspacePath: resolve(paths.workspacePath), databasePath: resolve(paths.databasePath), artifactRoot: resolve(paths.artifactRoot), endpointPath: resolve(paths.endpointPath), transport: { kind: "unix-socket", endpointPath: resolve(paths.endpointPath) }, ...(paths.workspaceId === undefined ? {} : { workspaceId: paths.workspaceId }) };
+function daemonConfig(paths: CliDaemonPathsV1): Omit<CliDaemonPathsV1, "daemonExecutable" | "endpointPath"> & { transport: { kind: "unix-socket"; endpointPath: string } } {
+  return { workspacePath: resolve(paths.workspacePath), databasePath: resolve(paths.databasePath), artifactRoot: resolve(paths.artifactRoot), transport: { kind: "unix-socket", endpointPath: resolve(paths.endpointPath) }, ...(paths.workspaceId === undefined ? {} : { workspaceId: paths.workspaceId }) };
 }
 function configFile(paths: CliDaemonPathsV1, operation: "start" | "bootstrap" | "init" | "restore-rebind", authorityTime: () => string, extras: Record<string, string>): string {
   const directory = resolve(paths.workspacePath, ".horseness"); mkdirSync(directory, { recursive: true, mode: 0o700 });
   const state = lstatSync(directory); if (!state.isDirectory() || state.isSymbolicLink() || realpathSync(directory) !== directory || (state.mode & 0o077) !== 0 || (process.getuid?.() !== undefined && state.uid !== process.getuid())) throw new CliLifecycleError("LIFECYCLE_START_FAILED", "workspace state directory must be owner-only and not a symlink");
-  const path = resolve(directory, `daemon-entry.${process.pid}.${operation}.json`);
-  const { endpointPath: _endpointPath, ...daemon } = daemonConfig(paths);
+  const path = resolve(directory, `daemon-entry.${String(process.pid)}.${operation}.json`);
+  const daemon = daemonConfig(paths);
   writeFileSync(path, JSON.stringify({ schemaVersion: "1", operation, daemon, authorityTime: authorityTime(), ...extras }), { mode: 0o600, flag: "wx" });
   return path;
 }
 function runDaemonOperation(paths: CliDaemonPathsV1, operation: "bootstrap" | "init" | "restore-rebind", authorityTime: () => string, extras: Record<string, string>, code: "LIFECYCLE_BOOTSTRAP_FAILED" | "LIFECYCLE_REBIND_FAILED"): unknown {
   const executable = resolveDaemonExecutableV1(paths.daemonExecutable);
-  const resultFile = resolve(paths.workspacePath, ".horseness", `daemon-result.${process.pid}.${operation}.json`); const path = configFile(paths, operation, authorityTime, { ...extras, resultFile });
+  const resultFile = resolve(paths.workspacePath, ".horseness", `daemon-result.${String(process.pid)}.${operation}.json`); const path = configFile(paths, operation, authorityTime, { ...extras, resultFile });
   const result = spawnSync(executable, ["--config-file", path], { encoding: "utf8", env: process.env }); rmSync(path, { force: true });
   if (result.status !== 0) { rmSync(resultFile, { force: true }); throw new CliLifecycleError(code, operation === "restore-rebind" ? "workspace rebind failed" : "daemon initialization failed; inspect protected workspace state before retrying"); }
   try { return JSON.parse(readProtectedSecretFileV1(resultFile)); } finally { rmSync(resultFile, { force: true }); }

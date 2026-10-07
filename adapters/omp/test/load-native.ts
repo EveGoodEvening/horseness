@@ -6,21 +6,21 @@ const MAX_MESSAGE_BYTES = 2 * 1024 * 1024;
 const RUNTIME_KEY = Symbol.for("horseness.adapter.omp.native-runtime.v1");
 
 type JsonObject = Record<string, unknown>;
-type LoadedExtension = {
+interface LoadedExtension {
   tools: Map<string, { definition: unknown }>;
   commands: Map<string, unknown>;
   handlers: Map<string, unknown[]>;
-};
-type PendingCall = {
+}
+interface PendingCall {
   resolve(value: unknown): void;
   reject(error: Error): void;
-};
+}
 
-type NativeRunnerState = {
+interface NativeRunnerState {
   toolNames: string[];
   commandNames: string[];
   handlerNames: string[];
-};
+}
 
 export interface NativeRunnerHarness {
   loaded: { extensions: unknown[]; errors: unknown[]; runtime: unknown };
@@ -29,7 +29,7 @@ export interface NativeRunnerHarness {
     getCommand(name: string): unknown;
     hasHandlers(name: string): boolean;
     emit(event: unknown): Promise<unknown>;
-    takeErrors(): Promise<Array<{ extensionPath: string; event: string; error: string }>>;
+    takeErrors(): Promise<{ extensionPath: string; event: string; error: string }[]>;
   };
   close(): Promise<void>;
 }
@@ -60,12 +60,20 @@ async function runChild(loaderPath: string, runnerPath: string, extensionPath: s
   });
   Object.defineProperty(globalThis, RUNTIME_KEY, { configurable: true, value: runtime });
 
-  const [{ loadExtensions }, { ExtensionRunner }] = await Promise.all([import(pathToFileURL(loaderPath).href), import(pathToFileURL(runnerPath).href)]);
+  interface ChildRunner {
+    getRegisteredTool(name: string): { definition: { execute(id: string, input: unknown): Promise<unknown> } } | undefined;
+    onError(callback: (error: { extensionPath: string; event: string; error: string }) => void): void;
+    emitBeforeAgentStart(prompt: string, attachments: undefined, systemPrompt: string, context: object): Promise<unknown>;
+    emit(event: Record<string, unknown>): Promise<unknown>;
+  }
+  const [loaderModule, runnerModule]: unknown[] = await Promise.all([import(pathToFileURL(loaderPath).href), import(pathToFileURL(runnerPath).href)]);
+  const { loadExtensions } = loaderModule as { loadExtensions(paths: string[], cwd: string): Promise<{ errors: unknown[]; extensions: LoadedExtension[]; runtime: unknown }> };
+  const { ExtensionRunner } = runnerModule as { ExtensionRunner: new (extensions: LoadedExtension[], runtime: unknown, cwd: string, session: { getCwd(): string }, providers: { registerProvider(): undefined; unregisterProvider(): undefined }) => ChildRunner };
   const loaded = await loadExtensions([extensionPath], cwd);
   if (loaded.errors.length !== 0 || loaded.extensions.length !== 1) throw new Error(`OMP extension load failed: ${JSON.stringify(loaded.errors)}`);
   const extension = loaded.extensions[0] as LoadedExtension;
-  const runner = new ExtensionRunner(loaded.extensions, loaded.runtime, cwd, { getCwd: () => cwd }, { registerProvider() {}, unregisterProvider() {} });
-  const handlerErrors: Array<{ extensionPath: string; event: string; error: string }> = [];
+  const runner = new ExtensionRunner(loaded.extensions, loaded.runtime, cwd, { getCwd: () => cwd }, { registerProvider() { return undefined; }, unregisterProvider() { return undefined; } });
+  const handlerErrors: { extensionPath: string; event: string; error: string }[] = [];
   runner.onError((error: { extensionPath: string; event: string; error: string }) => {
     handlerErrors.push({ extensionPath: error.extensionPath, event: error.event, error: error.error });
   });
@@ -101,7 +109,7 @@ async function runChild(loaderPath: string, runnerPath: string, extensionPath: s
         if (!tool) throw new Error(`unknown OMP tool: ${args[0]}`);
         value = await tool.definition.execute(args[1], args[2]);
       } else if (message.method === "emit") {
-        const event = structuredClone((message.args as unknown[])[0]) as Record<string, unknown>;
+        const event = structuredClone((message.args as unknown[])[0]) as Record<string, unknown> & { prompt?: string };
         if (event.type === "before_agent_start") value = await runner.emitBeforeAgentStart(String(event.prompt ?? ""), undefined, "", {});
         else value = await runner.emit(event);
       } else if (message.method === "revoke") {
@@ -117,8 +125,8 @@ async function runChild(loaderPath: string, runnerPath: string, extensionPath: s
 
       process.stdout.write(`${serialize({ kind: "result", id: message.id, ok: true, value })}\n`);
     } catch (error) { process.stdout.write(`${serialize({ kind: "result", id: message.id, ok: false, error: error instanceof Error ? error.message : String(error) })}\n`); }
-  })().catch(error => { process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`); process.exitCode = 1; }); });
-  const { promise: closed, resolve: resolveClosed } = Promise.withResolvers<void>(); input.once("close", resolveClosed); await closed;
+  })().catch((error: unknown) => { process.stderr.write(`${error instanceof Error ? String(error.stack) : String(error)}\n`); process.exitCode = 1; }); });
+  const { promise: closed, resolve: resolveClosed } = Promise.withResolvers<undefined>(); input.once("close", () => { resolveClosed(undefined); }); await closed;
 }
 
 class NativeRpcClient {
@@ -135,10 +143,10 @@ class NativeRpcClient {
     lines.on("line", line => { void this.receive(line, resolve, reject); });
     this.child.once("error", reject);
     this.child.once("exit", (code, signal) => {
-      const message = `OMP Bun driver exited code=${code} signal=${signal}\n${this.stderr}`;
+      const message = `OMP Bun driver exited code=${String(code)} signal=${String(signal)}\n${this.stderr}`;
       for (const waiter of this.pending.values()) waiter.reject(new Error(message));
       this.pending.clear();
-      reject(new Error(`OMP Bun driver exited before ready code=${code} signal=${signal}\n${this.stderr}`));
+      reject(new Error(`OMP Bun driver exited before ready code=${String(code)} signal=${String(signal)}\n${this.stderr}`));
     });
     return promise;
   }
@@ -180,8 +188,8 @@ class NativeRpcClient {
   async close(): Promise<void> {
     this.child.stdin.end();
     if (this.child.exitCode !== null) return;
-    const { promise, resolve } = Promise.withResolvers<void>();
-    this.child.once("exit", () => resolve());
+    const { promise, resolve } = Promise.withResolvers<undefined>();
+    this.child.once("exit", () => { resolve(undefined); });
     await promise;
   }
 }
@@ -204,11 +212,14 @@ export async function loadNativeRunner(loaderPath: string, runnerPath: string, e
       getCommand: name => state.commandNames.includes(name) ? {} : undefined,
       hasHandlers: name => state.handlerNames.includes(name),
       emit: event => client.request("emit", [event]),
-      takeErrors: () => client.request("takeErrors", []) as Promise<Array<{ extensionPath: string; event: string; error: string }>>,
+      takeErrors: () => client.request("takeErrors", []) as Promise<{ extensionPath: string; event: string; error: string }[]>,
     },
     close: () => client.close(),
   };
 }
 
 
-if (process.argv[2] === "--child") await runChild(process.argv[3]!, process.argv[4]!, process.argv[5]!, process.argv[6]!);
+if (process.argv[2] === "--child") {
+  const [loaderPath, runnerPath, extensionPath, cwd] = process.argv.slice(3) as [string, string, string, string];
+  await runChild(loaderPath, runnerPath, extensionPath, cwd);
+}

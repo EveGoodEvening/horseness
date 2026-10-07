@@ -25,14 +25,14 @@ process.exitCode = await runCliV1(process.argv.slice(2), {
     scope: { workspaceId, adapterId: "horseness-cli", purpose: "coordinator" },
   },
   installer: {
-    async execute(command, invocation) {
+    execute(command, invocation) {
       const args: string[] = [command];
       for (const [name, value] of Object.entries(invocation.options)) { if (name === "json") continue; args.push(`--${name}`); if (typeof value === "string") args.push(value); }
       const child = spawnSync(bootstrapExecutable, args, { encoding: "utf8", env: process.env, windowsHide: true });
       const exitCode = child.status === 0 || child.status === 1 || child.status === 2 || child.status === 3 || child.status === 4 ? child.status : 1;
       let data: JsonValue;
       try { data = JSON.parse(child.stdout) as JsonValue; } catch { data = { code: "BOOTSTRAP_EXECUTION_FAILED", stderr: child.stderr.slice(0, 4096) }; }
-      return { exitCode, data };
+      return Promise.resolve({ exitCode, data });
     },
   },
 });

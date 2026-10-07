@@ -22,12 +22,12 @@ export const OMP_NATIVE_PACKAGE_METADATA = Object.freeze({
   contributions: Object.freeze([
     Object.freeze({ kind: "extension", name: "extensions/horseness-omp.mjs", digest: "sha256:847261999ac8ea58bcbe0ecba5626b019891670e8f11dca9b65beffd310fbfcb" }),
     Object.freeze({ kind: "manifest", name: "omp-package.json", digest: "sha256:072eb99066241d74146419ebdb6fe063286d480f262504b08b831ea42b56280b" }),
-  ]),
+  ] as const),
 }) satisfies NativePackageMetadataV1;
 
 export const OMP_INSTALL_CONTRIBUTIONS = Object.freeze([
-  parseInstallContributionV1({ schemaVersion: "1", kind: "plugin", contributionId: "horseness-omp-extension", relativePath: "extensions/horseness-omp.mjs", contentDigest: OMP_NATIVE_PACKAGE_METADATA.contributions[0]!.digest, sourceArtifactDigest: OMP_NATIVE_PACKAGE_METADATA.packageDigest, mode: "read-only", hostScope: OMP_HOST_ID }),
-  parseInstallContributionV1({ schemaVersion: "1", kind: "file", contributionId: "horseness-omp-manifest", relativePath: "omp-package.json", contentDigest: OMP_NATIVE_PACKAGE_METADATA.contributions[1]!.digest, sourceArtifactDigest: OMP_NATIVE_PACKAGE_METADATA.packageDigest, mode: "read-only", hostScope: OMP_HOST_ID }),
+  parseInstallContributionV1({ schemaVersion: "1", kind: "plugin", contributionId: "horseness-omp-extension", relativePath: "extensions/horseness-omp.mjs", contentDigest: OMP_NATIVE_PACKAGE_METADATA.contributions[0].digest, sourceArtifactDigest: OMP_NATIVE_PACKAGE_METADATA.packageDigest, mode: "read-only", hostScope: OMP_HOST_ID }),
+  parseInstallContributionV1({ schemaVersion: "1", kind: "file", contributionId: "horseness-omp-manifest", relativePath: "omp-package.json", contentDigest: OMP_NATIVE_PACKAGE_METADATA.contributions[1].digest, sourceArtifactDigest: OMP_NATIVE_PACKAGE_METADATA.packageDigest, mode: "read-only", hostScope: OMP_HOST_ID }),
 ]) satisfies readonly InstallContributionV1[];
 
 export interface OMPNativeAttemptV1 {
@@ -99,7 +99,7 @@ export function createOMPRetainedDeliveryAuthorityV1(stateDirectory: string): OM
     if (details.isSymbolicLink() || !details.isDirectory() || (details.mode & 0o077) !== 0 || dirname(realpathSync(directory)) !== root) throw new Error("OMP retained state path must be a private, non-symlink directory");
   }
   let closed = false;
-  type LockOwner = { readonly pid: number; readonly nonce: string; readonly incarnation: string };
+  interface LockOwner { readonly pid: number; readonly nonce: string; readonly incarnation: string }
   const held = new Map<string, LockOwner>();
   const assertOpen = () => { if (closed) throw new Error("OMP retained delivery authority is closed"); };
   const nameFor = (key: string) => createHash("sha256").update(key).digest("hex");
@@ -118,7 +118,7 @@ export function createOMPRetainedDeliveryAuthorityV1(stateDirectory: string): OM
   const syncDirectory = (path: string) => { const descriptor = openSync(path, "r"); try { fsyncSync(descriptor); } finally { closeSync(descriptor); } };
   const publish = (key: string, value: OMPRetainedDeliveryV1) => {
     const path = recordPath(key);
-    const temporary = join(records, `.${nameFor(key)}.${process.pid}.${randomUUID()}.tmp`);
+    const temporary = join(records, `.${nameFor(key)}.${String(process.pid)}.${randomUUID()}.tmp`);
     const descriptor = openSync(temporary, "wx", 0o600);
     try { writeFileSync(descriptor, JSON.stringify(value), "utf8"); fsyncSync(descriptor); } finally { closeSync(descriptor); }
     renameSync(temporary, path);
@@ -127,7 +127,7 @@ export function createOMPRetainedDeliveryAuthorityV1(stateDirectory: string): OM
   const linuxProcessIncarnation = (pid: number): string => {
     if (process.platform !== "linux") throw new Error("OMP retained delivery locks require verifiable process incarnation identity");
     let stat: string;
-    try { stat = readFileSync(`/proc/${pid}/stat`, "utf8"); }
+    try { stat = readFileSync(`/proc/${String(pid)}/stat`, "utf8"); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("OMP retained delivery lock owner process is absent");
       throw new Error("OMP retained delivery lock process incarnation could not be verified", { cause: error });
@@ -155,7 +155,7 @@ export function createOMPRetainedDeliveryAuthorityV1(stateDirectory: string): OM
     const path = lockPath(key);
     const owner = { pid: process.pid, nonce: randomUUID(), incarnation: linuxProcessIncarnation(process.pid) } satisfies LockOwner;
     const deadline = Date.now() + 10_000;
-    while (true) {
+    for (;;) {
       try {
         mkdirSync(path, { mode: 0o700 });
         writeFileSync(join(path, "owner.json"), JSON.stringify(owner), { encoding: "utf8", flag: "wx", mode: 0o600 });
@@ -167,17 +167,17 @@ export function createOMPRetainedDeliveryAuthorityV1(stateDirectory: string): OM
         if (details.isSymbolicLink() || !details.isDirectory() || (details.mode & 0o077) !== 0) throw new Error("OMP retained lock path must be a private, non-symlink directory");
         let existing: LockOwner;
         try { existing = readOwner(join(path, "owner.json")); }
-        catch (ownerError) {
+        catch {
           if (Date.now() - statSync(path).mtimeMs > 1_000) { rmSync(path, { recursive: true }); syncDirectory(locks); continue; }
           if (Date.now() >= deadline) throw new Error("OMP retained delivery lock acquisition timed out");
-          const { promise: wait, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, 10); await wait; continue;
+          const { promise: wait, resolve } = Promise.withResolvers<undefined>(); setTimeout(() => { resolve(undefined); }, 10); await wait; continue;
         }
         if (!ownerIsCurrent(existing)) {
           const reread = readOwner(join(path, "owner.json"));
           if (ownersMatch(reread, existing)) { rmSync(path, { recursive: true }); syncDirectory(locks); continue; }
         }
         if (Date.now() >= deadline) throw new Error("OMP retained delivery lock acquisition timed out");
-        const { promise: wait, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, 10); await wait;
+        const { promise: wait, resolve } = Promise.withResolvers<undefined>(); setTimeout(() => { resolve(undefined); }, 10); await wait;
       }
     }
   };
@@ -225,7 +225,7 @@ export interface OMPNativeContributionRuntimeV1 {
   shutdown(): Promise<void>;
 }
 function attemptKey(binding: BoundAdapterOperationV1): string {
-  return `${binding.workspaceId}:${binding.runId}:${binding.taskId}:${binding.attemptId}:${binding.generation}`;
+  return `${binding.workspaceId}:${binding.runId}:${binding.taskId}:${binding.attemptId}:${String(binding.generation)}`;
 }
 const DELIVERY_PHASES: readonly OMPRetainedDeliveryPhaseV1[] = ["prepared", "publication:0", "publication:1", "receipt", "proposal", "decision-resume", "decision"];
 const publicationPhase = (step: WorkerReturnDeliveryStepV1): OMPRetainedDeliveryPhaseV1 => {
@@ -238,7 +238,7 @@ class OMPRetainedWorkerReturnDeliveryV1 implements WorkerReturnDeliveryAuthority
   constructor(private readonly retained: OMPRetainedDeliveryAuthorityV1, private readonly key: string) {}
   async perform<T>(step: WorkerReturnDeliveryStepV1, operation: () => Promise<T>): Promise<T> {
     const record = this.record();
-    if (hasCompleted(record, step)) return this.completed<T>(record, step);
+    if (hasCompleted(record, step)) return this.completed(record, step) as T;
     const result = await operation();
     const next = { ...record, phase: completedPhase(step) };
     if (step === "receipt") next.receiptDigest = result as string;
@@ -262,12 +262,12 @@ class OMPRetainedWorkerReturnDeliveryV1 implements WorkerReturnDeliveryAuthority
     if (record === undefined) throw new Error("OMP retained worker return is unavailable");
     return record;
   }
-  private completed<T>(record: OMPRetainedDeliveryV1, step: WorkerReturnDeliveryStepV1): T {
-    if (step === "receipt") { if (record.receiptDigest === null) throw new Error("OMP retained receipt digest is unavailable"); return record.receiptDigest as T; }
-    if (step === "proposal") return { proposalId: record.workerReturn.proposal.proposalId, proposalDigest: record.workerReturn.proposal.proposalDigest } as T;
-    if (step === "decision-subscription") { if (record.resumeToken === null) throw new Error("OMP retained decision subscription is unavailable"); return { resumeToken: record.resumeToken } as T; }
-    if (step === "decision") { if (record.resumeToken === null || record.decision === null) throw new Error("OMP retained decision is unavailable"); return { resumeToken: record.resumeToken, decision: record.decision } as T; }
-    return undefined as T;
+  private completed(record: OMPRetainedDeliveryV1, step: WorkerReturnDeliveryStepV1): unknown {
+    if (step === "receipt") { if (record.receiptDigest === null) throw new Error("OMP retained receipt digest is unavailable"); return record.receiptDigest; }
+    if (step === "proposal") return { proposalId: record.workerReturn.proposal.proposalId, proposalDigest: record.workerReturn.proposal.proposalDigest };
+    if (step === "decision-subscription") { if (record.resumeToken === null) throw new Error("OMP retained decision subscription is unavailable"); return { resumeToken: record.resumeToken }; }
+    if (step === "decision") { if (record.resumeToken === null || record.decision === null) throw new Error("OMP retained decision is unavailable"); return { resumeToken: record.resumeToken, decision: record.decision }; }
+    return undefined;
   }
 }
 function assertCanonicalTuple(record: OMPRetainedDeliveryV1, receipt: AttemptReceiptEnvelopeV1, outputDigest: string, evidenceDigest: string): void {
@@ -275,7 +275,8 @@ function assertCanonicalTuple(record: OMPRetainedDeliveryV1, receipt: AttemptRec
   if (record.workerReturn.receipt.receiptDigest !== receipt.receiptDigest || publications.length !== 2 || publications[0]?.kind !== "artifact" || publications[0].digest !== outputDigest || publications[1]?.kind !== "evidence" || publications[1].digest !== evidenceDigest) throw new Error("replayed OMP worker return substituted the canonical output/evidence tuple");
 }
 export function createOMPNativeContributionRuntimeV1(registrations: readonly OMPWorkerReturnRegistrationV1[], options: OMPNativeContributionRuntimeOptionsV1): OMPNativeContributionRuntimeV1 {
-  if (options?.retained === undefined) throw new Error("OMP native contribution runtime requires a durable retained delivery authority");
+  const uncheckedOptions = options as unknown as { readonly retained?: OMPRetainedDeliveryAuthorityV1 } | undefined;
+  if (uncheckedOptions?.retained === undefined) throw new Error("OMP native contribution runtime requires a durable retained delivery authority");
   for (const registration of registrations) {
     const client = registration.authority.client as WorkerReturnClientV1 & Record<string, unknown>;
     if (typeof client.startDecisionSubscription !== "function" || typeof client.observeDecision !== "function") throw new Error("OMP native contribution runtime requires resumable startDecisionSubscription and observeDecision authority methods");
@@ -302,7 +303,7 @@ export function createOMPNativeContributionRuntimeV1(registrations: readonly OMP
       const key = attemptKey(registration.binding);
       return retained.runExclusive(key, async () => {
         const receipt = await registration.adapter.collectReceipt(registration.binding);
-        if (receipt.outputDigest !== output.digest || receipt.evidence.length !== 1 || receipt.evidence[0]?.digest !== evidence.digest || receipt.evidence[0]?.mediaType !== evidence.mediaType || receipt.evidence[0]?.size !== evidence.byteLength) throw new Error("provider output does not match the bound OMP attempt receipt");
+        if (receipt.outputDigest !== output.digest || receipt.evidence.length !== 1 || receipt.evidence[0]?.digest !== evidence.digest || receipt.evidence[0].mediaType !== evidence.mediaType || receipt.evidence[0].size !== evidence.byteLength) throw new Error("provider output does not match the bound OMP attempt receipt");
         let record = retained.load(key);
         if (record === undefined) {
           const proposal = await registration.authority.sealProposal(registration.binding, receipt);
@@ -316,8 +317,8 @@ export function createOMPNativeContributionRuntimeV1(registrations: readonly OMP
         return structuredClone({ workerReturn: record.workerReturn, delivery });
       });
     },
-    async state() { return { attemptKeys: registrations.map(registration => attemptKey(registration.binding)).filter(key => retained.load(key) !== undefined) }; },
-    async contextForAttempt() { if (revoked || selectedCapability === null) return null; const context = contexts.get(selectedCapability); return context === undefined ? null : structuredClone(context); },
+    async state() { return Promise.resolve({ attemptKeys: registrations.map(registration => attemptKey(registration.binding)).filter(key => retained.load(key) !== undefined) }); },
+    async contextForAttempt() { if (revoked || selectedCapability === null) return Promise.resolve(null); const context = contexts.get(selectedCapability); return Promise.resolve(context === undefined ? null : structuredClone(context)); },
     registerBranch(registration: OMPNativeBranchRegistrationV1) {
       if (revoked) throw new Error("OMP native contribution runtime is revoked");
       const { entryId, previousSessionFile, attemptCapabilityReference } = registration;
@@ -340,9 +341,10 @@ export function createOMPNativeContributionRuntimeV1(registrations: readonly OMP
       const branch = branchesByEntry.get(entryId);
       if (branch === undefined) throw new Error("unknown OMP branch entry id");
       pendingBranch = branch;
+      return Promise.resolve();
     },
     async activateSession(previousSessionFile: string | null) {
-      if (revoked) return null;
+      if (revoked) return Promise.resolve(null);
       if (previousSessionFile !== null) {
         const pending = pendingBranch;
         pendingBranch = null;
@@ -352,12 +354,12 @@ export function createOMPNativeContributionRuntimeV1(registrations: readonly OMP
         selectedCapability = mapped.attemptCapabilityReference;
       }
       const context = selectedCapability === null ? undefined : contexts.get(selectedCapability);
-      return context === undefined ? null : { forkPinDigest: context.binding.forkPinDigest };
+      return Promise.resolve(context === undefined ? null : { forkPinDigest: context.binding.forkPinDigest });
     },
     registerRevoker(next: () => Promise<void>) { if (revoker !== null) throw new Error("OMP native credential revoker is already registered"); revoker = next; },
     async revoke() { if (revoked) return; revoked = true; active.clear(); contexts.clear(); branchesByEntry.clear(); branchesBySession.clear(); selectedCapability = null; pendingBranch = null; const current = revoker; revoker = null; if (current !== null) await current(); else retained.close(); },
-    async sessionShutdown() { pendingBranch = null; },
-    async shutdown() { active.clear(); contexts.clear(); branchesByEntry.clear(); branchesBySession.clear(); selectedCapability = null; pendingBranch = null; retained.close(); },
+    async sessionShutdown() { pendingBranch = null; return Promise.resolve(); },
+    async shutdown() { active.clear(); contexts.clear(); branchesByEntry.clear(); branchesBySession.clear(); selectedCapability = null; pendingBranch = null; retained.close(); return Promise.resolve(); },
   });
 }
 
@@ -379,8 +381,8 @@ class OMPWorkerAdapterV1 implements WorkerAdapterV1 {
     this.#producerGrantDigest = options.producerGrantDigest;
   }
 
-  async detectCapabilities(): Promise<AdapterCapabilitiesV1> {
-    return { schemaVersion: "1", adapterId: OMP_ADAPTER_ID, providerId: OMP_PROVIDER_ID, launch: true, cancel: true, reconcile: "supported", reattach: "supported", nativeResume: "supported", contextInjection: "native", receiptCollection: true, maxContextBytes: 1_048_576, outputMediaTypes: ["text/plain", "application/json"], evidenceMediaTypes: ["application/json"] };
+  detectCapabilities(): Promise<AdapterCapabilitiesV1> {
+    return Promise.resolve<AdapterCapabilitiesV1>({ schemaVersion: "1", adapterId: OMP_ADAPTER_ID, providerId: OMP_PROVIDER_ID, launch: true, cancel: true, reconcile: "supported", reattach: "supported", nativeResume: "supported", contextInjection: "native", receiptCollection: true, maxContextBytes: 1_048_576, outputMediaTypes: ["text/plain", "application/json"], evidenceMediaTypes: ["application/json"] });
   }
 
   async launch(request: AdapterLaunchRequestV1): Promise<AdapterOperationResultV1> { this.#guard.assert(request); this.#attempt = await this.#runtime.launch(Object.freeze(structuredClone(request))); return result("accepted", this.#attempt, { host: OMP_HOST_ID, hostVersion: OMP_HOST_VERSION }); }
@@ -391,7 +393,7 @@ class OMPWorkerAdapterV1 implements WorkerAdapterV1 {
     this.#guard.assert(binding);
     const attempt = await this.#runtime.collect(this.#guard.binding) ?? this.#attempt;
     if (attempt === null) throw new Error("OMP native attempt receipt is unavailable");
-    return sealAttemptReceipt({ schemaVersion: "1", workspaceId: binding.workspaceId, runId: binding.runId, taskId: binding.taskId, attemptId: binding.attemptId, generation: binding.generation, attemptContextBindingDigest: binding.attemptContextBindingDigest, contextManifestCoreDigest: binding.contextManifestCoreDigest, forkPinDigest: binding.forkPinDigest, providerId: OMP_PROVIDER_ID, providerOperationId: attempt.providerOperationId, providerIdempotencyKeyDigest: binding.providerIdempotencyKeyDigest, producerPrincipalId: this.#producerPrincipalId, producerGrantDigest: this.#producerGrantDigest, adapterId: OMP_ADAPTER_ID, adapterVersion: OMP_ADAPTER_VERSION, hostId: OMP_HOST_ID, hostVersion: OMP_HOST_VERSION, outcome: attempt.outcome, startedAt: attempt.startedAt, finishedAt: attempt.finishedAt, outputDigest: attempt.outputDigest, evidence: attempt.evidence, provenance: attempt.provenance, nonce: `${binding.attemptId}:${binding.generation}:${attempt.providerOperationId}` });
+    return sealAttemptReceipt({ schemaVersion: "1", workspaceId: binding.workspaceId, runId: binding.runId, taskId: binding.taskId, attemptId: binding.attemptId, generation: binding.generation, attemptContextBindingDigest: binding.attemptContextBindingDigest, contextManifestCoreDigest: binding.contextManifestCoreDigest, forkPinDigest: binding.forkPinDigest, providerId: OMP_PROVIDER_ID, providerOperationId: attempt.providerOperationId, providerIdempotencyKeyDigest: binding.providerIdempotencyKeyDigest, producerPrincipalId: this.#producerPrincipalId, producerGrantDigest: this.#producerGrantDigest, adapterId: OMP_ADAPTER_ID, adapterVersion: OMP_ADAPTER_VERSION, hostId: OMP_HOST_ID, hostVersion: OMP_HOST_VERSION, outcome: attempt.outcome, startedAt: attempt.startedAt, finishedAt: attempt.finishedAt, outputDigest: attempt.outputDigest, evidence: attempt.evidence, provenance: attempt.provenance, nonce: `${binding.attemptId}:${String(binding.generation)}:${attempt.providerOperationId}` });
   }
 }
 

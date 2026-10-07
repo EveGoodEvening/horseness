@@ -98,7 +98,7 @@ async function assertTargetRoot(path: string): Promise<string> {
   return realpath(path);
 }
 function validateBundle(bundle: NeutralInstallBundleV1): void {
-  if (bundle.schema !== "horseness.neutral-install-bundle.v1" || !VERSION.test(bundle.releaseVersion) || !HEX.test(bundle.releaseManifestDigest) || !HEX.test(bundle.catalogDigest) || !/^[A-Za-z0-9._:-]{3,128}$/u.test(bundle.authenticatedManifestKeyId) || !Number.isSafeInteger(bundle.authenticatedManifestSequence) || bundle.authenticatedManifestSequence < 1) throw new InstallerOperationError("INVALID_NEUTRAL_BUNDLE");
+  if ((bundle.schema as unknown) !== "horseness.neutral-install-bundle.v1" || !VERSION.test(bundle.releaseVersion) || !HEX.test(bundle.releaseManifestDigest) || !HEX.test(bundle.catalogDigest) || !/^[A-Za-z0-9._:-]{3,128}$/u.test(bundle.authenticatedManifestKeyId) || !Number.isSafeInteger(bundle.authenticatedManifestSequence) || bundle.authenticatedManifestSequence < 1) throw new InstallerOperationError("INVALID_NEUTRAL_BUNDLE");
   if (neutralCatalogDigestV1(bundle) !== bundle.catalogDigest) throw new InstallerOperationError("NEUTRAL_CATALOG_DIGEST_MISMATCH");
   const ids = bundle.contributions.map((entry) => entry.hostId);
   if (ids.length !== 4 || ids.some((id, index) => id !== INSTALL_HOST_IDS_V1[index])) throw new InstallerOperationError("NEUTRAL_CATALOG_NOT_CLOSED_SORTED");
@@ -113,7 +113,7 @@ function validateBundle(bundle: NeutralInstallBundleV1): void {
 }
 interface OwnerMarkerV1 { readonly schema: "horseness.install-owner.v1"; readonly scope: InstallScopeV1; readonly workspaceId: string; readonly accountId: string; readonly hostId: InstallHostIdV1; readonly releaseManifestDigest: string; readonly packageDigest: string; readonly sourceArtifactDigest: string; readonly target: string; readonly operationId: string; readonly grantDigest: string; }
 async function writeAtomic(path: string, bytes: Uint8Array | string, mode = 0o600): Promise<void> {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 }); const temp = `${path}.stage-${process.pid}-${randomUUID()}`; const handle = await open(temp, "wx", mode);
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 }); const temp = `${path}.stage-${String(process.pid)}-${randomUUID()}`; const handle = await open(temp, "wx", mode);
   try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
   await rename(temp, path); const parent = await open(dirname(path), "r"); try { await parent.sync(); } finally { await parent.close(); }
 }
@@ -141,6 +141,11 @@ async function stageManagedContribution(input: { entry: NeutralHostContributionV
   await writeAtomic(markerPath, `${canonical(marker)}\n`); await writeAtomic(join(input.dataRoot, "versions", `${input.bundle.releaseManifestDigest}.txt`), `${input.bundle.releaseVersion}\n`); input.crash?.(`after-marker:${input.entry.hostId}`);
 }
 function requestedHosts(input: InstallRequestV1): readonly InstallHostIdV1[] { const hosts = input.hosts === "all" ? INSTALL_HOST_IDS_V1 : [...new Set(input.hosts)]; if (hosts.length === 0 || hosts.some((host) => !INSTALL_HOST_IDS_V1.includes(host))) throw new InstallerOperationError("INVALID_HOST_SELECTION"); return hosts; }
+function requiredContribution(bundle: NeutralInstallBundleV1, hostId: InstallHostIdV1): NeutralHostContributionV1 {
+  const entry = bundle.contributions.find((candidate) => candidate.hostId === hostId);
+  if (entry === undefined) throw new InstallerOperationError("NEUTRAL_CATALOG_NOT_CLOSED_SORTED");
+  return entry;
+}
 export async function installNeutralBundleV1(request: InstallRequestV1): Promise<InstallOperationResultV1> {
   validateBundle(request.bundle); const hosts = requestedHosts(request);
   if (!isAbsolute(request.workspacePath)) throw new InstallerOperationError("WORKSPACE_PATH_REQUIRED_ABSOLUTE");
@@ -152,7 +157,7 @@ export async function installNeutralBundleV1(request: InstallRequestV1): Promise
   const workspace = await request.daemon.ensureWorkspace({ workspacePath: request.workspacePath, create: request.createWorkspace }); await request.daemon.ensureRunning({ workspaceId: workspace.workspaceId, workspacePath: request.workspacePath });
   const results: HostInstallResultV1[] = []; const installed: { entry: NeutralHostContributionV1; root: string; grantDigest: string }[] = [];
   for (const hostId of hosts) {
-    const entry = request.bundle.contributions.find((candidate) => candidate.hostId === hostId)!;
+    const entry = requiredContribution(request.bundle, hostId);
     try {
       const root = await assertTargetRoot(request.roots.discoveryRoots[hostId]); const detection = await detect(entry, request.platform ?? process.platform, request.arch ?? process.arch, root);
       if (detection === "unsupported" || detection === "managed-blocked" || detection === "failed") { results.push({ hostId, detection, installed: false, code: detection.toUpperCase() }); if (request.atomicHosts) throw new InstallerOperationError(detection.toUpperCase()); continue; }
@@ -173,7 +178,7 @@ export async function disableAndRemoveContributionV1(input: { entry: NeutralHost
   await rm(disabled, { recursive: true, force: true }); await rm(markerPath, { force: true }); await rm(killSwitch, { force: true });
 }
 interface LifecycleStateV1 { readonly schema: "horseness.install-lifecycle.v1"; readonly hostId: InstallHostIdV1; readonly transactionId: string; readonly operation: "upgrade" | "downgrade" | "rollback" | "retry-install"; readonly phase: "staging" | "staged" | "prior-retained" | "activated" | "healthy" | "compensating"; readonly requestedDigest: string; readonly requestedVersion: string; readonly priorDigest: string; readonly priorVersion: string; readonly target: string; readonly staged: string; readonly retained: string; }
-function compareVersions(left: string, right: string): number { const parse = (value: string) => value.split("-", 1)[0]!.split(".").map(Number); const a = parse(left), b = parse(right); for (let index = 0; index < 3; index += 1) { const difference = (a[index] ?? 0) - (b[index] ?? 0); if (difference !== 0) return difference; } return left.localeCompare(right); }
+function compareVersions(left: string, right: string): number { const parse = (value: string) => (value.split("-", 1)[0] ?? "").split(".").map(Number); const a = parse(left), b = parse(right); for (let index = 0; index < 3; index += 1) { const difference = (a[index] ?? 0) - (b[index] ?? 0); if (difference !== 0) return difference; } return left.localeCompare(right); }
 async function pathExists(path: string): Promise<boolean> { try { await stat(path); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; } }
 async function readLifecycle(path: string): Promise<LifecycleStateV1 | undefined> { try { return JSON.parse(await readFile(path, "utf8")) as LifecycleStateV1; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; } }
 async function verifyContributionBytes(entry: NeutralHostContributionV1, target: string): Promise<void> { for (const file of entry.files) if (installerSha256(await readFile(confined(target, file.path))) !== file.contentDigest) throw new InstallerOperationError("ACTIVATED_HEALTH_CHECK_FAILED"); }
@@ -190,7 +195,8 @@ async function operateHostLifecycle(operation: "upgrade" | "downgrade" | "rollba
     const transactionId = randomUUID(); const staged = confined(dataRoot, `generations/${entry.hostId}/${request.bundle.releaseManifestDigest}.staged-${transactionId}`); const retained = confined(dataRoot, `generations/${entry.hostId}/${existing.releaseManifestDigest}`);
     state = { schema: "horseness.install-lifecycle.v1", hostId: entry.hostId, transactionId, operation, phase: "staging", requestedDigest: request.bundle.releaseManifestDigest, requestedVersion: request.bundle.releaseVersion, priorDigest: existing.releaseManifestDigest, priorVersion: (await readFile(join(request.roots.dataRoot, "versions", `${existing.releaseManifestDigest}.txt`), "utf8").catch(() => "0.0.0")).trim(), target, staged, retained }; await writeAtomic(statePath, `${canonical(state)}\n`); await journal.append({ operation: "migration-begun", transactionId, releaseVersion: request.bundle.releaseVersion, detailDigest: request.bundle.releaseManifestDigest });
   }
-  const persist = async (phase: LifecycleStateV1["phase"]): Promise<void> => { state = { ...state!, phase }; await writeAtomic(statePath, `${canonical(state)}\n`); };
+  const lifecycleCore = state;
+  const persist = async (phase: LifecycleStateV1["phase"]): Promise<void> => { state = { ...lifecycleCore, phase }; await writeAtomic(statePath, `${canonical(state)}\n`); };
   try {
     if (state.phase === "staging") { await stageGeneration(entry, state.staged); await persist("staged"); await journal.append({ operation: "staged", transactionId: state.transactionId, releaseVersion: state.requestedVersion, detailDigest: state.requestedDigest }); request.crash?.(`lifecycle-after-stage:${entry.hostId}`); }
     if (state.phase === "staged") { if (await pathExists(state.retained)) await rm(state.retained, { recursive: true, force: true }); await mkdir(dirname(state.retained), { recursive: true, mode: 0o700 }); await rename(state.target, state.retained); await persist("prior-retained"); await journal.append({ operation: "backup-created", transactionId: state.transactionId, releaseVersion: state.priorVersion, detailDigest: state.priorDigest }); request.crash?.(`lifecycle-after-retain:${entry.hostId}`); }
@@ -203,7 +209,7 @@ async function operateHostLifecycle(operation: "upgrade" | "downgrade" | "rollba
 }
 export async function operateNeutralBundleV1(operation: "upgrade" | "downgrade" | "rollback" | "retry-install", request: InstallRequestV1): Promise<InstallOperationResultV1> {
   validateBundle(request.bundle); const hosts = requestedHosts(request); const stateRoot = await ensurePrivateRoot(request.roots.stateRoot); const dataRoot = await ensurePrivateRoot(request.roots.dataRoot); const journal = await InstallerJournal.open(join(stateRoot, "journal")); const workspace = await request.daemon.ensureWorkspace({ workspacePath: request.workspacePath, create: request.createWorkspace }); await request.daemon.ensureRunning({ workspaceId: workspace.workspaceId, workspacePath: request.workspacePath }); const results: HostInstallResultV1[] = [];
-  for (const hostId of hosts) { const entry = request.bundle.contributions.find((candidate) => candidate.hostId === hostId)!; try { const root = await assertTargetRoot(request.roots.discoveryRoots[hostId]); const detection = await detect(entry, request.platform ?? process.platform, request.arch ?? process.arch, root); if (detection === "unsupported") { results.push({ hostId, detection, installed: false, code: "UNSUPPORTED" }); continue; } await operateHostLifecycle(operation, request, entry, root, dataRoot, workspace.workspaceId, journal); results.push({ hostId, detection: "present-supported", installed: true }); } catch (error) { results.push({ hostId, detection: "failed", installed: false, code: error instanceof InstallerOperationError ? error.code : "LIFECYCLE_HOST_FAILED" }); } }
+  for (const hostId of hosts) { const entry = requiredContribution(request.bundle, hostId); try { const root = await assertTargetRoot(request.roots.discoveryRoots[hostId]); const detection = await detect(entry, request.platform ?? process.platform, request.arch ?? process.arch, root); if (detection === "unsupported") { results.push({ hostId, detection, installed: false, code: "UNSUPPORTED" }); continue; } await operateHostLifecycle(operation, request, entry, root, dataRoot, workspace.workspaceId, journal); results.push({ hostId, detection: "present-supported", installed: true }); } catch (error) { results.push({ hostId, detection: "failed", installed: false, code: error instanceof InstallerOperationError ? error.code : "LIFECYCLE_HOST_FAILED" }); } }
   const failed = results.filter((result) => !result.installed).length; return { schema: "horseness.install-operation-result.v1", operation, exitCode: failed === 0 ? 0 : failed < results.length ? 3 : 1, releaseManifestDigest: request.bundle.releaseManifestDigest, workspaceId: workspace.workspaceId, hosts: Object.freeze(results) };
 }
 export function defaultInstallRootsV1(input: { readonly scope: InstallScopeV1; readonly workspacePath: string; readonly home: string; readonly platform?: NodeJS.Platform; readonly env?: NodeJS.ProcessEnv }): InstallRootsV1 {

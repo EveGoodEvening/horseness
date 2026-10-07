@@ -23,7 +23,7 @@ export class ArtifactStore {
       cursor=parent;
     }
     if(missing.length===0){this.syncDirectory(dirname(path));return;}
-    for(let index=missing.length-1;index>=0;index--){const directory=missing[index]!;mkdirSync(directory);this.syncDirectory(dirname(directory));}
+    for(let index=missing.length-1;index>=0;index--){const directory=missing[index];if(directory===undefined)throw new ArtifactIntegrityError("missing artifact directory hierarchy entry");mkdirSync(directory);this.syncDirectory(dirname(directory));}
   }
   private pathFor(digest:string):string { if(!/^[a-f0-9]{64}$/.test(digest)) throw new ArtifactIntegrityError("invalid artifact digest"); return join(this.objects,digest.slice(0,2),digest.slice(2)); }
   private ensureWithin(path:string):void { const rel=relative(this.root,path); if(rel.startsWith(`..${sep}`)||rel==="..") throw new ArtifactIntegrityError("artifact path escape"); }

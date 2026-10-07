@@ -131,7 +131,7 @@ export async function verifyReleaseV1(input: {
   if (!Array.isArray(signed.manifest.artifacts) || !Array.isArray(trustRoot.delegations) || !Array.isArray(trustRoot.revokedKeyIds)) throw new InstallerTrustError("INVALID_TRUST_ROOT");
   const delegations = trustRoot.delegations.map((candidate) => parseDelegation(candidate));
   if (trustRoot.revokedKeyIds.some((keyId) => typeof keyId !== "string")) throw new InstallerTrustError("INVALID_TRUST_ROOT");
-  if (signed.schema !== "horseness.signed-release-manifest.v1" || signed.manifest.schema !== "horseness.release-manifest.v1" || trustRoot.schema !== "horseness.project-trust-root.v1") throw new InstallerTrustError("UNKNOWN_TRUST_SCHEMA");
+  if ((signed.schema as unknown) !== "horseness.signed-release-manifest.v1" || (signed.manifest.schema as unknown) !== "horseness.release-manifest.v1" || (trustRoot.schema as unknown) !== "horseness.project-trust-root.v1") throw new InstallerTrustError("UNKNOWN_TRUST_SCHEMA");
   if (!Number.isSafeInteger(signed.manifest.sequence) || signed.manifest.sequence < 1 || !HEX.test(signed.manifestDigest) || !HEX.test(signed.manifest.dependencyGraphDigest)) throw new InstallerTrustError("INVALID_RELEASE_MANIFEST");
   const calculatedManifestDigest = sha256Hex(`horseness.release-manifest.v1\0${canonicalJson(signed.manifest)}`);
   if (calculatedManifestDigest !== signed.manifestDigest) throw new InstallerTrustError("MANIFEST_DIGEST_MISMATCH");

@@ -65,6 +65,8 @@ export class TaskExecutionServiceV1 {
     private readonly grants: ExecutionGrantAuthorityV1, private readonly hosts: ExecutionHostDriverV1,
     private readonly clock: () => string) {}
 
+  private isStopping(): boolean { return this.stopping; }
+
   private view(runId: string): ExecutionView {
     const workspaceEvents = this.authority.replay(this.workspaceId, "workspace", this.workspaceId);
     const runEvents = this.authority.replay(this.workspaceId, "run", runId);
@@ -93,7 +95,7 @@ export class TaskExecutionServiceV1 {
       const event = sealEventEnvelope({ schemaVersion: "1", streamKind: "run", workspaceId: this.workspaceId, streamId: view.cursor.runId,
         sequence: view.cursor.runSequence + index + 1, priorEnvelopeHash: prior,
         eventId: domainDigest("horseness.execution-event-id.v1", { commandId, index }), eventType: payload.eventType,
-        principalId, causationId: commandId, correlationId: commandId, idempotencyKey: `${commandId}:${index}`, payload });
+        principalId, causationId: commandId, correlationId: commandId, idempotencyKey: `${commandId}:${String(index)}`, payload });
       prior = event.envelopeHash; return event;
     });
     const last = events.at(-1);
@@ -124,8 +126,9 @@ export class TaskExecutionServiceV1 {
     if (view.workspace.activePolicyDigest === NO_POLICY_DIGEST) return NO_POLICY_V1;
     const snapshot = this.authority.latestSnapshot(this.workspaceId, "run", view.cursor.runId, "admission-current", "1");
     const owner = snapshot && view.runEvents.find(event => event.envelope.sequence === snapshot.sequence && event.envelopeHash === snapshot.envelopeHash);
-    if (!owner || !snapshot || !snapshot.state || typeof snapshot.state !== "object" || Array.isArray(snapshot.state)) throw new DomainError("POLICY_AUTHORITY_UNAVAILABLE");
-    const policy = parsePolicySlotV1(snapshot.state.currentPolicy);
+    const snapshotState: unknown = snapshot?.state;
+    if (!snapshot || !owner || !snapshotState || typeof snapshotState !== "object" || Array.isArray(snapshotState)) throw new DomainError("POLICY_AUTHORITY_UNAVAILABLE");
+    const policy = parsePolicySlotV1((snapshotState as Record<string, unknown>).currentPolicy);
     if (policySlotDigest(policy) !== view.workspace.activePolicyDigest) throw new DomainError("POLICY_AUTHORITY_UNAVAILABLE");
     return policy;
   }
@@ -162,7 +165,7 @@ export class TaskExecutionServiceV1 {
   }
 
   private taskAttempts(view: ExecutionView, taskId: string) {
-    return Object.entries(view.state.prepared).filter(([, prepared]) => prepared.taskId === taskId).map(([key, prepared]) => ({ key, prepared, state: view.state.attempts[key]!, receipt: view.state.receipts[key] }));
+    return Object.entries(view.state.prepared).filter(([, prepared]) => prepared.taskId === taskId).map(([key, prepared]) => ({ key, prepared, state: (view.state.attempts[key] as TaskExecutionProjectionV1["attempts"][string]), receipt: view.state.receipts[key] }));
   }
 
   private taskDescription(view: ExecutionView, taskId: string, actor: ExecutionActorV1, details: boolean): JsonValue {
@@ -171,7 +174,7 @@ export class TaskExecutionServiceV1 {
     const attempts = this.taskAttempts(view, taskId), deps = this.dependencies(view, taskId);
     let allowed = true;
     try { this.authorize(actor, runId, taskId, "task.dispatch.v1"); this.checkPolicy(view, taskId, taskContractDigestV2(task)); this.assertWorkspaceAvailable(attempts.at(-1)?.key); } catch(error) { if(!(error instanceof DomainError))throw error;allowed = false; }
-    const schedulability = deriveSchedulability({ lifecycle: view.state.lifecycles[taskId]!, contractValid: true, dependenciesSatisfied: deps.satisfied, hasUnknownDependency: deps.unknown, cancellationPropagated: deps.cancelled, authorizationAllowed: allowed, quotaAllowed: allowed, liveAttempt: attempts.some(item => !terminal(item.state.state) && item.state.state !== "unknown_outcome"), unknownOutcome: attempts.some(item => item.state.state === "unknown_outcome") });
+    const schedulability = deriveSchedulability({ lifecycle: (view.state.lifecycles[taskId] as TaskExecutionProjectionV1["lifecycles"][string]), contractValid: true, dependenciesSatisfied: deps.satisfied, hasUnknownDependency: deps.unknown, cancellationPropagated: deps.cancelled, authorizationAllowed: allowed, quotaAllowed: allowed, liveAttempt: attempts.some(item => !terminal(item.state.state) && item.state.state !== "unknown_outcome"), unknownOutcome: attempts.some(item => item.state.state === "unknown_outcome") });
     const winner = view.state.resolutions[taskId]?.winningGeneration;
     const receipt = attempts.find(item => item.receipt?.generation === winner)?.receipt ?? attempts.at(-1)?.receipt;
     const output = details && receipt?.outputDigest ? Buffer.from(this.authority.artifacts.readReferenced(receipt.outputDigest)).toString("utf8") : null;
@@ -179,7 +182,7 @@ export class TaskExecutionServiceV1 {
     let workflow:TaskExecutionProjectionV1["workflows"][string]|undefined,planningWorkflow:TaskExecutionProjectionV1["workflows"][string]|undefined;
     for(const candidate of Object.values(view.state.workflows)){if(candidate.authorization.targetTaskId===taskId)workflow=candidate;else if(candidate.authorization.planningSource?.taskId===taskId)planningWorkflow=candidate;}
     workflow??=planningWorkflow;
-    return { taskId, title: task.title, lifecycle: view.state.lifecycles[taskId]!, schedulability, kind: task.kind,
+    return { taskId, title: task.title, lifecycle: (view.state.lifecycles[taskId] as TaskExecutionProjectionV1["lifecycles"][string]), schedulability, kind: task.kind,
       dependencies: view.state.edges.filter(edge => edge.dependentTaskId === taskId).map(edge => edge.sourceTaskId).sort(),
       attempts: attempts.map(item => ({ attemptId: item.prepared.attemptId, generation: item.prepared.generation, adapterId: item.prepared.profile.adapterId, model: item.prepared.profile.modelId, state: item.state.state, providerOperationId: item.receipt?.providerOperationId ?? item.state.providerHandle, receiptDigest: item.receipt?.receiptDigest ?? null, outputDigest: item.receipt?.outputDigest ?? null, failureCode: item.state.findingCodes.at(-1) ?? null })), output,
       plan: details && plan ? { ...plan, adoptedTaskIds: view.state.adopted[plan.planDigest] ?? [] } : null,
@@ -200,14 +203,14 @@ export class TaskExecutionServiceV1 {
 
   dispatchState(runId:string,taskId:string,attemptId:string,generation:number,actor:ExecutionActorV1):JsonValue {
     this.authorize(actor,runId,taskId,"dispatch.get.v1");
-    const view=this.view(runId),key=`${attemptId}:${generation}`,prepared=view.state.prepared[key];
+    const view=this.view(runId),key=`${attemptId}:${String(generation)}`,prepared=view.state.prepared[key];
     if(!prepared||prepared.taskId!==taskId)throw new DomainError("TASK_NOT_FOUND");
-    return {attemptId,generation,taskId,profileDigest:prepared.profileDigest,adapterId:prepared.profile.adapterId,modelId:prepared.profile.modelId,state:view.state.attempts[key]!.state,providerOperationId:view.state.receipts[key]?.providerOperationId??view.state.attempts[key]!.providerHandle,receiptDigest:view.state.receipts[key]?.receiptDigest??null};
+    return {attemptId,generation,taskId,profileDigest:prepared.profileDigest,adapterId:prepared.profile.adapterId,modelId:prepared.profile.modelId,state:(view.state.attempts[key] as TaskExecutionProjectionV1["attempts"][string]).state,providerOperationId:view.state.receipts[key]?.providerOperationId??(view.state.attempts[key] as TaskExecutionProjectionV1["attempts"][string]).providerHandle,receiptDigest:view.state.receipts[key]?.receiptDigest??null};
   }
 
   async dispatchExisting(input:{runId:string;taskId:string;attemptId:string;generation:number;operationId:string;requestDigest:string;observationCursor:CompositeCursorV1;actor:ExecutionActorV1;action:"launch"|"reconcile";adapterId?:string;bindingDigest?:string}):Promise<Record<string,JsonValue>> {
     const observed=this.authorize(input.actor,input.runId,input.taskId,input.action==="launch"?"dispatch.launch.v1":"dispatch.reconcile.v1");
-    const key=`${input.attemptId}:${input.generation}`,view=this.view(input.runId),prepared=view.state.prepared[key];
+    const key=`${input.attemptId}:${String(input.generation)}`,view=this.view(input.runId),prepared=view.state.prepared[key];
     if(!prepared||prepared.taskId!==input.taskId||!prepared.workflowId)throw new DomainError("TASK_NOT_FOUND");
     if(input.action==="launch"&&(input.adapterId!==BRIDGE_ADAPTER[prepared.profile.adapterId]||input.bindingDigest!==attemptContextBindingDigest(prepared.binding)))throw new DomainError("EXECUTION_PROFILE_MISMATCH");
     const command={workspaceId:this.workspaceId,runId:input.runId,commandId:domainDigest("horseness.execution-rpc-command.v1",{principalId:input.actor.principalId,operationId:input.operationId,action:input.action}),requestDigest:input.requestDigest};
@@ -215,9 +218,9 @@ export class TaskExecutionServiceV1 {
     if(previous)return previous as Record<string,JsonValue>;
     if(this.sessions.has(key))throw new DomainError("TASK_NOT_READY");
     this.authority.recordAuthorityConsumption({workspaceId:this.workspaceId,runId:input.runId,principalId:input.actor.principalId,authorityKey:`dispatch.${input.action}:${input.operationId}`,commandId:input.requestDigest,observationCursor:input.observationCursor,authorityStateExpectations:[observed.expectation]});
-    if(input.action==="reconcile"&&view.state.attempts[key]!.state==="planned")throw new DomainError("TASK_NOT_READY");
-    await this.runAttempt(input.runId,prepared,view.state.workflows[prepared.workflowId]!.authorization);
-    const current=this.view(input.runId),state=current.state.attempts[key]!,receipt=current.state.receipts[key];
+    if(input.action==="reconcile"&&(view.state.attempts[key] as TaskExecutionProjectionV1["attempts"][string]).state==="planned")throw new DomainError("TASK_NOT_READY");
+    await this.runAttempt(input.runId,prepared,(view.state.workflows[prepared.workflowId] as TaskExecutionProjectionV1["workflows"][string]).authorization);
+    const current=this.view(input.runId),state=(current.state.attempts[key] as TaskExecutionProjectionV1["attempts"][string]),receipt=current.state.receipts[key];
     let result:Record<string,JsonValue>;
     if(input.action==="launch"){
       const handle=receipt?.providerOperationId??state.providerHandle;
@@ -239,7 +242,7 @@ export class TaskExecutionServiceV1 {
     const common={outcomeId:event.envelope.causationId,status:"accepted",observationCursor:cursor as unknown as JsonValue};
     if(authorization.operationKind==="breakdown")return {...common,taskId,plannerTaskId:authorization.targetTaskId};
     if(authorization.operationKind==="execute")return {...common,taskId,workflowId:authorization.workflowId};
-    return {...common,task:{taskId:authorization.targetTaskId,title:view.state.contracts[authorization.targetTaskId]!.title,lifecycle:"active",workflowId:authorization.workflowId}};
+    return {...common,task:{taskId:authorization.targetTaskId,title:(view.state.contracts[authorization.targetTaskId] as TaskExecutionProjectionV1["contracts"][string]).title,lifecycle:"active",workflowId:authorization.workflowId}};
   }
 
   start(input:StartTaskWorkflowV1):Promise<Record<string,JsonValue>> {
@@ -262,7 +265,7 @@ export class TaskExecutionServiceV1 {
     this.assertCursor(view, input.observationCursor);
     const source = view.state.contracts[input.taskId];
     if (!source) throw new DomainError("TASK_NOT_FOUND");
-    if (terminal(view.state.lifecycles[input.taskId]!)) throw new DomainError("EXECUTION_ALREADY_STARTED");
+    if (terminal((view.state.lifecycles[input.taskId] as TaskExecutionProjectionV1["lifecycles"][string]))) throw new DomainError("EXECUTION_ALREADY_STARTED");
     if (Object.values(view.state.workflows).some(item => item.state === "running" && (item.authorization.targetTaskId === input.taskId || item.authorization.planningSource?.taskId === input.taskId))) throw new DomainError("WORKFLOW_ALREADY_RUNNING");
     if ((input.operationKind === "breakdown" || input.autoPlan) && (view.state.lifecycles[input.taskId] !== "draft" || this.taskAttempts(view, input.taskId).length)) throw new DomainError("TASK_NOT_DRAFT");
     let profile: TaskExecutionProfileV1, plannerProfile: TaskExecutionProfileV1 | null = null;
@@ -270,7 +273,7 @@ export class TaskExecutionServiceV1 {
       profile = await this.hosts.resolve(input.adapterId, input.model, input.operationKind === "breakdown" ? "planner" : "work");
       if (input.autoPlan) { const plannerAdapterId=input.plannerAdapterId??input.adapterId;plannerProfile = await this.hosts.resolve(plannerAdapterId, input.plannerModel ?? (plannerAdapterId===input.adapterId?input.model:null), "planner"); }
     } catch (error) { throw new DomainError(failureCode(error) === "MODEL_REQUIRED" ? "MODEL_REQUIRED" : "EXECUTION_PREFLIGHT_FAILED", error instanceof Error ? error.message : "native preflight failed"); }
-    if(this.stopping)throw new DomainError("WORKFLOW_STOPPED");
+    if(this.isStopping())throw new DomainError("WORKFLOW_STOPPED");
     view = this.view(view.cursor.runId); this.assertCursor(view, input.observationCursor);
     const observed = this.authorize(input.actor, view.cursor.runId, input.taskId, WORKFLOW_METHOD[input.operationKind]);
     const payloads: RunEventPayloadV1[] = [], common = { workspaceId: this.workspaceId, runId: view.cursor.runId };
@@ -300,13 +303,14 @@ export class TaskExecutionServiceV1 {
     const recovered=this.recoveredMutationCursor(input);
     const plan = view.state.plans[input.planDigest];
     if (!plan || plan.sourceTaskId !== input.taskId) throw new DomainError("PLAN_NOT_FOUND");
-    if(recovered)return {outcomeId:input.operationId,status:"completed",taskId:input.taskId,taskIds:view.state.adopted[input.planDigest]!,planDigest:input.planDigest,observationCursor:recovered as unknown as JsonValue};
+    if(recovered)return {outcomeId:input.operationId,status:"completed",taskId:input.taskId,taskIds:(view.state.adopted[input.planDigest] as TaskExecutionProjectionV1["adopted"][string]),planDigest:input.planDigest,observationCursor:recovered as unknown as JsonValue};
     this.assertCursor(view, input.observationCursor);
-    if(view.state.adopted[input.planDigest]){const cursor=this.commitNoop(view,input.operationId,input.requestDigest,observed.expectation);return {outcomeId:input.operationId,status:"completed",taskId:input.taskId,taskIds:view.state.adopted[input.planDigest]!,planDigest:input.planDigest,observationCursor:cursor as unknown as JsonValue};}
+    const adopted = view.state.adopted[input.planDigest];
+    if(adopted){const cursor=this.commitNoop(view,input.operationId,input.requestDigest,observed.expectation);return {outcomeId:input.operationId,status:"completed",taskId:input.taskId,taskIds:adopted,planDigest:input.planDigest,observationCursor:cursor as unknown as JsonValue};}
     if (Object.values(view.state.workflows).some(item => item.state === "running" && item.authorization.targetTaskId === input.taskId)) throw new DomainError("WORKFLOW_ALREADY_RUNNING");
     this.checkPolicy(view, input.taskId, plan.planDigest);
     const resultCursor = this.append(view, [{ eventType: "TaskPlanAdoptedV1", workspaceId: this.workspaceId, runId: input.runId, taskId: input.taskId, planDigest: input.planDigest }], input.operationId, input.actor.principalId, observed.expectation,[],input.requestDigest);
-    return { outcomeId: input.operationId, status: "completed", taskId: input.taskId, taskIds: this.view(input.runId).state.adopted[input.planDigest]!, planDigest: input.planDigest, observationCursor: resultCursor as unknown as JsonValue };
+    return { outcomeId: input.operationId, status: "completed", taskId: input.taskId, taskIds: (this.view(input.runId).state.adopted[input.planDigest] as TaskExecutionProjectionV1["adopted"][string]), planDigest: input.planDigest, observationCursor: resultCursor as unknown as JsonValue };
   }
 
   private workflowAuthority(view: ExecutionView, authorization: TaskWorkflowAuthorizationV1): ExecutionGrantObservationV1 {
@@ -333,7 +337,7 @@ export class TaskExecutionServiceV1 {
   private startAutomaticPlanner(view: ExecutionView, parent: TaskWorkflowAuthorizationV1): string {
     const workflowId = `${parent.workflowId}:planner`;
     if (view.state.workflows[workflowId]) return workflowId;
-    const observed = this.workflowAuthority(view, parent), source = view.state.contracts[parent.targetTaskId]!;
+    const observed = this.workflowAuthority(view, parent), source = (view.state.contracts[parent.targetTaskId] as TaskExecutionProjectionV1["contracts"][string]);
     if (!parent.plannerProfile || !parent.planningSource) throw new DomainError("EXECUTION_INVALID");
     const task: TaskContractV2 = { schemaVersion: "2", taskId: `planner:${parent.workflowId}`, title: `Plan: ${source.title}`, instructions: `${PLANNER_INSTRUCTIONS}\nObjective: ${source.instructions}`, acceptanceCriteria: ["Return a complete validated JSON task graph; do not execute or edit project files."], kind: "planner", sourceTaskId: source.taskId, completionPolicy: { schemaVersion: "1", kind: "predicate", predicate: { kind: "receipt-only" } } };
     const authorization: TaskWorkflowAuthorizationV1 = { ...parent, workflowId, operationKind: "breakdown", requestDigest: domainDigest("horseness.automatic-planner-request.v1", { workflowId, parentRequestDigest: parent.requestDigest }), parentWorkflowId: parent.workflowId, targetTaskId: task.taskId, targetContractDigest: taskContractDigestV2(task), executionProfile: parent.plannerProfile, plannerProfile: null, autoPlan: false, graphDigest: taskWorkflowGraphDigestV1([task], []), planDigest: null };
@@ -342,7 +346,7 @@ export class TaskExecutionServiceV1 {
   }
 
   private adoptAutomaticPlan(runId: string, workflowId: string): void {
-    const view = this.view(runId), authorization = view.state.workflows[workflowId]!.authorization;
+    const view = this.view(runId), authorization = (view.state.workflows[workflowId] as TaskExecutionProjectionV1["workflows"][string]).authorization;
     const observed = this.workflowAuthority(view, authorization);
     const plannerTaskId=view.state.workflows[`${workflowId}:planner`]?.authorization.targetTaskId;
     const digest=plannerTaskId?view.state.plansByPlanner[plannerTaskId]:undefined,plan=digest?view.state.plans[digest]:undefined;
@@ -364,8 +368,8 @@ export class TaskExecutionServiceV1 {
       view = this.view(runId); observed = this.workflowAuthority(view, authorization);
     }
     const existing = this.taskAttempts(view, taskId);
-    if (existing.length) {
-      const retained=existing.at(-1)!;
+    const retained = existing.at(-1);
+    if (retained) {
       if(retained.prepared.profileDigest!==taskExecutionProfileDigest(authorization.executionProfile))throw new DomainError("EXECUTION_PROFILE_MISMATCH");
       if(retained.state.state==="planned"&&(retained.prepared.workflowId!==authorization.workflowId||retained.prepared.forkPin.core.createdByPrincipalId!==authorization.issuerPrincipalId||retained.prepared.forkPin.core.createdByGrantDigest!==authorization.issuerGrantDigest))throw new DomainError("AUTHORIZATION_DENIED");
       return retained.prepared;
@@ -376,13 +380,13 @@ export class TaskExecutionServiceV1 {
     const profile = authorization.executionProfile, profileDigest = taskExecutionProfileDigest(profile);
     const producer = this.grants.producer({ actor: { principalId: authorization.issuerPrincipalId, grantDigest: authorization.issuerGrantDigest }, runId, taskId, attemptId, generation, adapterId: BRIDGE_ADAPTER[profile.adapterId], expiresAt: authorization.expiresAt });
     observed = this.workflowAuthority(view, authorization);
-    const selectedPolicy = this.checkPolicy(view, taskId, profileDigest), task = view.state.contracts[taskId]!;
+    const selectedPolicy = this.checkPolicy(view, taskId, profileDigest), task = (view.state.contracts[taskId] as TaskExecutionProjectionV1["contracts"][string]);
     const join = sealDependencyJoinSnapshot({ schemaVersion: "1", runId, taskId, taskContractDigest: taskContractDigestV2(task), joinEvaluationId: `${attemptId}:join`, joinObservationCursor: view.cursor, dependencies: deps.outcomes, schedulability: "ready", reasonCodes: [] });
     const version: ContextVersionV1 = { schemaVersion: "1", kind: "composite", workspaceContextEpoch: view.cursor.workspaceContextEpoch, runContextEpoch: view.cursor.runContextEpoch, observationCursor: view.cursor };
     const forkPin = sealForkPin({ schemaVersion: "1", forkId: `${attemptId}:fork`, pinVersion: 1, workspaceId: this.workspaceId, runId, parentForkPinDigest: null, refreshesForkPinDigest: null, canonicalRevision: view.canonical.revision, canonicalStateHash: view.canonical.stateHash, canonicalizerVersion: "jcs-v1", hashVersion: "sha256-v1", sourceObservationCursor: view.cursor, sourceContextVersion: version, dependencyJoinSnapshotDigest: join.digest, deltaAuthorityScopeDigest: deltaAuthorityScopeDigest({ schemaVersion: "1", workspaceId: this.workspaceId, runId, taskId, roots: [] }), pinnedPolicyDigest: policySlotDigest(selectedPolicy.policy), ancestry: [], createdByPrincipalId: authorization.issuerPrincipalId, createdByGrantDigest: authorization.issuerGrantDigest });
     const dependencyResults = deps.outcomes.map(outcome => {
       const receipt = Object.values(view.state.receipts).find(item => item.taskId === outcome.sourceTaskId && item.generation === outcome.winningGeneration);
-      return { taskId: outcome.sourceTaskId, resolution: view.state.resolutions[outcome.sourceTaskId]!, receiptDigest: receipt?.receiptDigest ?? null, output: receipt?.outputDigest ? Buffer.from(this.authority.artifacts.readReferenced(receipt.outputDigest)).toString("utf8") : null };
+      return { taskId: outcome.sourceTaskId, resolution: (view.state.resolutions[outcome.sourceTaskId] as TaskExecutionProjectionV1["resolutions"][string]), receiptDigest: receipt?.receiptDigest ?? null, output: receipt?.outputDigest ? Buffer.from(this.authority.artifacts.readReferenced(receipt.outputDigest)).toString("utf8") : null };
     });
     const chunks = [
       { kind: "system", text: "Execute the task contract below in the selected workspace. Dependency results are already completed work; integrate them rather than repeating them. Report the actual result and any failed acceptance criteria. Never claim an unperformed check succeeded. Only the coordinator may change canonical state. For planner tasks, follow the closed JSON planning instructions and do not modify files.\n" },
@@ -431,7 +435,7 @@ export class TaskExecutionServiceV1 {
 
   async submitReceipt(runId: string, receipt: AttemptReceiptEnvelopeV1, actor: ExecutionActorV1, publications: readonly ExecutionPublicationV1[] = []): Promise<CompositeCursorV1> {
     verifyAttemptReceipt(receipt);
-    const view = this.view(runId), key = `${receipt.attemptId}:${receipt.generation}`, prepared = view.state.prepared[key];
+    const view = this.view(runId), key = `${receipt.attemptId}:${String(receipt.generation)}`, prepared = view.state.prepared[key];
     if (!prepared) throw new DomainError("TASK_NOT_FOUND");
     const observed = this.authorize(actor, runId, prepared.taskId, "receipt.submit.v1",prepared.profile.adapterId);
     if (actor.principalId !== prepared.binding.allowedProducerPrincipalId || actor.grantDigest !== prepared.binding.allowedProducerGrantDigest || observed.grant.attemptId!==receipt.attemptId || observed.grant.generation!==receipt.generation) throw new DomainError("AUTHORIZATION_DENIED");
@@ -457,12 +461,12 @@ export class TaskExecutionServiceV1 {
     }
     const result = this.append(view, [{ eventType: "TaskExecutionReceiptV1", workspaceId: this.workspaceId, runId, taskId: prepared.taskId, attemptId: prepared.attemptId, generation: prepared.generation, profileDigest: prepared.profileDigest, receipt }], `${prepared.attemptId}:receipt:${receipt.receiptDigest}`, actor.principalId, observed.expectation, objects);
     this.resolveTaskResult(runId, prepared.taskId);
-    return result;
+    return await Promise.resolve(result);
   }
 
   private async runAttempt(runId: string, prepared: TaskExecutionPreparedDataV1, authorization: TaskWorkflowAuthorizationV1): Promise<void> {
-    const key = `${prepared.attemptId}:${prepared.generation}`;
-    let view = this.view(runId), state = view.state.attempts[key]!;
+    const key = `${prepared.attemptId}:${String(prepared.generation)}`;
+    let view = this.view(runId), state = (view.state.attempts[key] as TaskExecutionProjectionV1["attempts"][string]);
     if (terminal(state.state)) { this.resolveTaskResult(runId, prepared.taskId); return; }
     this.assertWorkspaceAvailable(key);
     const original = this.authority.artifacts.readReferenced(createHash("sha256").update(prepared.renderedContext).digest("hex"));
@@ -487,10 +491,10 @@ export class TaskExecutionServiceV1 {
       if (state.state === "planned") {
         view=this.view(runId);
         this.workflowAuthority(view,authorization);
-        if(view.state.workflows[authorization.workflowId]?.state!=="running"||view.state.attempts[key]!.state!=="launch_intent_committed")throw new DomainError("UNKNOWN_OUTCOME");
+        if((view.state.workflows[authorization.workflowId] as TaskExecutionProjectionV1["workflows"][string])?.state!=="running"||(view.state.attempts[key] as TaskExecutionProjectionV1["attempts"][string]).state!=="launch_intent_committed")throw new DomainError("UNKNOWN_OUTCOME");
         const launched = await session.adapter.launch({ ...this.boundOperation(prepared), operation: "launch", renderedContextDigest: prepared.manifest.renderedOutputDigest, providerOptions: { profileDigest: prepared.profileDigest } });
         if (!launched.providerOperationId || launched.status !== "accepted" && launched.status !== "found") throw new DomainError("UNKNOWN_OUTCOME");
-        view = this.view(runId); state = view.state.attempts[key]!;
+        view = this.view(runId); state = (view.state.attempts[key] as TaskExecutionProjectionV1["attempts"][string]);
         if (!terminal(state.state)) this.transition(runId, prepared, { type: "record-handle", handle: launched.providerOperationId }, "handle");
       } else {
         const found = await session.adapter.reconcile({ ...this.boundOperation(prepared), operation: "reconcile", providerOperationId: state.providerHandle });
@@ -502,7 +506,7 @@ export class TaskExecutionServiceV1 {
       for (const digest of digests) publications.push(await session.publication(digest));
       await this.submitReceipt(runId, receipt, { principalId: receipt.producerPrincipalId, grantDigest: receipt.producerGrantDigest }, publications);
     } catch (error) {
-      view = this.view(runId); state = view.state.attempts[key]!;
+      view = this.view(runId); state = (view.state.attempts[key] as TaskExecutionProjectionV1["attempts"][string]);
       if (!terminal(state.state) && state.state !== "unknown_outcome") {
         if (state.state !== "reconciliation_required") this.transition(runId, prepared, { type: "require-reconciliation" }, "reconcile");
         this.transition(runId, prepared, { type: "reconcile-ambiguous" }, "unknown");
@@ -533,7 +537,8 @@ export class TaskExecutionServiceV1 {
 
   private async driveWorkflow(runId: string, workflowId: string): Promise<void> {
     while (!this.stopping) {
-      let view = this.view(runId), workflow = view.state.workflows[workflowId];
+      let view = this.view(runId);
+      const workflow = view.state.workflows[workflowId];
       if (!workflow || workflow.state !== "running") return;
       const a = workflow.authorization;
       try {
@@ -541,24 +546,24 @@ export class TaskExecutionServiceV1 {
         if (a.autoPlan && a.graphDigest === null) {
           const plannerId = this.startAutomaticPlanner(view, a);
           await this.driveWorkflow(runId, plannerId);
-          if (this.stopping) return;
+          if (this.isStopping()) return;
           view = this.view(runId);
           if (view.state.workflows[plannerId]?.state !== "succeeded") throw new DomainError(view.state.workflows[plannerId]?.reasonCode??"PLAN_NOT_READY");
           this.adoptAutomaticPlan(runId, workflowId); continue;
         }
-        const lifecycle = view.state.lifecycles[a.targetTaskId]!;
+        const lifecycle = (view.state.lifecycles[a.targetTaskId] as TaskExecutionProjectionV1["lifecycles"][string]);
         if (terminal(lifecycle)) {
           if (lifecycle === "succeeded" && a.operationKind === "breakdown") this.finishPlan(runId, a);
           this.stopWorkflow(runId, workflowId, lifecycle === "succeeded" ? "succeeded" : lifecycle === "cancelled" ? "cancelled" : "stopped", lifecycle === "succeeded" ? "COMPLETED" : "TASK_FAILED"); return;
         }
-        const closure = a.operationKind === "execute" ? taskDependencyClosureV1(view.state, a.targetTaskId).contracts : [view.state.contracts[a.targetTaskId]!];
+        const closure = a.operationKind === "execute" ? taskDependencyClosureV1(view.state, a.targetTaskId).contracts : [(view.state.contracts[a.targetTaskId] as TaskExecutionProjectionV1["contracts"][string])];
         if (closure.some(task => view.state.lifecycles[task.taskId] === "failed" || view.state.lifecycles[task.taskId] === "cancelled")) throw new DomainError("TASK_NOT_READY");
         const task = closure.find(candidate => view.state.lifecycles[candidate.taskId] !== "succeeded" && this.dependencies(view, candidate.taskId).satisfied);
         if (!task) throw new DomainError("TASK_NOT_READY");
         const prepared = this.prepare(runId, a, task.taskId);
         await this.runAttempt(runId, prepared, a);
       } catch (error) {
-        if (this.stopping) return;
+        if (this.isStopping()) return;
         const code = failureCode(error);
         if(code==="EXECUTION_WORKSPACE_BUSY"||code==="TASK_NOT_READY"&&this.sessions.size>0)return;
         const reasonCode=code==="UNKNOWN_OUTCOME"&&error instanceof DomainError&&/^[A-Z_]+$/.test(error.message)?error.message:code;
@@ -578,12 +583,12 @@ export class TaskExecutionServiceV1 {
           const snapshot=this.view(runId);
           for(const [taskId,lifecycle] of Object.entries(snapshot.state.lifecycles))if(lifecycle==="active"&&!snapshot.state.resolutions[taskId]){const attempts=this.taskAttempts(snapshot,taskId);if(attempts.length&&attempts.every(item=>terminal(item.state.state)))this.resolveTaskResult(runId,taskId);}
           const workflows = Object.values(this.view(runId).state.workflows).filter(item => item.state === "running" && item.authorization.parentWorkflowId === null);
-          for (const workflow of workflows) { if (this.stopping) return; await this.driveWorkflow(runId, workflow.authorization.workflowId); }
+          for (const workflow of workflows) { if (this.isStopping()) return; await this.driveWorkflow(runId, workflow.authorization.workflowId); }
         }
       }
     }).finally(() => { this.pumping = null; if (this.requested && !this.stopping) this.wake(); });
     // Errors outside an individual workflow indicate corrupt authority; leave durable progress untouched.
-    void this.pumping.catch(error => { this.requested = false;this.stopping=true;process.stderr.write(`Task execution authority failed: ${failureCode(error)}\n`); });
+    void this.pumping.catch((error: unknown) => { this.requested = false;this.stopping=true;process.stderr.write(`Task execution authority failed: ${failureCode(error)}\n`); });
   }
 
   async cancel(input: { runId: string; taskId: string; actor: ExecutionActorV1; observationCursor: CompositeCursorV1; operationId: string; requestDigest:string }): Promise<CompositeCursorV1> {
@@ -592,7 +597,7 @@ export class TaskExecutionServiceV1 {
     const recovered=this.recoveredMutationCursor(input);if(recovered)return recovered;
     this.assertCursor(view, input.observationCursor);
     if (!view.state.contracts[input.taskId]) throw new DomainError("TASK_NOT_FOUND");
-    if(terminal(view.state.lifecycles[input.taskId]!))return this.commitNoop(view,input.operationId,input.requestDigest,observed.expectation);
+    if(terminal((view.state.lifecycles[input.taskId] as TaskExecutionProjectionV1["lifecycles"][string])))return this.commitNoop(view,input.operationId,input.requestDigest,observed.expectation);
     const workflows = Object.values(view.state.workflows).filter(item => item.state === "running" && (item.authorization.targetTaskId === input.taskId || item.authorization.planningSource?.taskId === input.taskId));
     const payloads:TaskExecutionEventV1[] = workflows.map(item => ({ eventType: "TaskWorkflowStoppedV1", workspaceId: this.workspaceId, runId: input.runId, workflowId: item.authorization.workflowId, state: "cancelled", reasonCode: "OPERATOR_CANCELLED" }));
     const evaluationClock={schemaVersion:"1" as const,authorityTime:this.clock(),observationCursor:view.cursor};
@@ -604,7 +609,7 @@ export class TaskExecutionServiceV1 {
     }
     let projected=view.state;
     for(const [index,event] of payloads.entries())projected=reduceTaskExecutionV1(projected,event,view.cursor.runSequence+index+1);
-    const generations=Object.entries(projected.prepared).filter(([,prepared])=>prepared.taskId===input.taskId).map(([key])=>projected.attempts[key]!);
+    const generations=Object.entries(projected.prepared).filter(([,prepared])=>prepared.taskId===input.taskId).map(([key])=>(projected.attempts[key] as TaskExecutionProjectionV1["attempts"][string]));
     const resolution=resolveTask({taskId:input.taskId,generations,retryPolicyDigest:NO_RETRY_DIGEST,retryPermitted:false,cancellationRequested:true,observationCursor:view.cursor});
     if(resolution)payloads.push({eventType:"TaskResolvedV2",workspaceId:this.workspaceId,runId:input.runId,resolution,evaluationClock});
     const resultCursor=payloads.length?this.append(view,payloads,input.operationId,input.actor.principalId,observed.expectation,[],input.requestDigest):this.commitNoop(view,input.operationId,input.requestDigest,observed.expectation);

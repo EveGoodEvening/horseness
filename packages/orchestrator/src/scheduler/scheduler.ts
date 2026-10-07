@@ -8,7 +8,7 @@ const decisions=new WeakSet<object>();
 const compare=(a:SchedulerCandidateV1,b:SchedulerCandidateV1):number=>b.priority-a.priority||a.createdSequence-b.createdSequence||Buffer.compare(Buffer.from(a.taskId),Buffer.from(b.taskId));
 const same=(a:unknown,b:unknown)=>canonicalJson(a as JsonValue)===canonicalJson(b as JsonValue);
 function seal(core:Omit<SchedulerDecisionV1,"decisionDigest">):SchedulerDecisionV1{const value=Object.freeze({...core,decisionDigest:domainDigest("horseness.scheduler-decision.v1",core as unknown as JsonValue)});decisions.add(value);return value;}
-export function isTrustedSchedulerDecision(value:SchedulerDecisionV1):boolean{return decisions.has(value)&&value.decisionDigest===domainDigest("horseness.scheduler-decision.v1",(({decisionDigest:_,...core})=>core)(value) as unknown as JsonValue);}
+export function isTrustedSchedulerDecision(value:SchedulerDecisionV1):boolean{if(!decisions.has(value))return false;const{decisionDigest,...core}=value;return decisionDigest===domainDigest("horseness.scheduler-decision.v1",core as unknown as JsonValue);}
 export function selectReadyTasks(candidates:readonly SchedulerCandidateV1[],alreadyAuthorized:ReadonlySet<string>=new Set()):readonly SchedulerDecisionV1[]{
  const ids=new Set<string>(),out:SchedulerDecisionV1[]=[];
  for(const candidate of [...candidates].sort(compare)){

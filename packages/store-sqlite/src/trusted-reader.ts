@@ -59,7 +59,7 @@ export class TrustedAuthorityReader {
     const snapshot = this.authority.latestSnapshot(workspaceId, "run", runId, projectionName, projectionVersion);
     if (!snapshot) throw new StoreIntegrityError(`trusted projection is missing: ${projectionName}`);
     if (snapshot.sequence !== view.cursor.runSequence || snapshot.envelopeHash !== view.cursor.runEnvelopeHash) throw new StoreConflictError(`trusted projection is stale: ${projectionName}`);
-    const copy = Object.freeze({ ...snapshot, state: structuredClone(snapshot.state) as JsonValue });
+    const copy = Object.freeze({ ...snapshot, state: structuredClone(snapshot.state) });
     validateKnownProjection(copy);
     return copy;
   }
@@ -73,7 +73,7 @@ export class TrustedAuthorityReader {
     const row = this.authority.db.prepare("SELECT envelope_hash,state_json FROM snapshots WHERE workspace_id=? AND stream_kind='run' AND stream_id=? AND sequence=? AND projection_name=? AND projection_version=?").get(workspaceId, runId, sequence, projectionName, projectionVersion) as { envelope_hash: string; state_json: string } | undefined;
     const snapshot: SnapshotRecord | undefined = row === undefined ? undefined : { workspaceId, streamKind: "run", streamId: runId, sequence, envelopeHash: row.envelope_hash, projectionName, projectionVersion, state: JSON.parse(row.state_json) as JsonValue };
     if (!snapshot || snapshot.envelopeHash !== envelopeHash) throw new StoreConflictError(`trusted projection is missing or stale: ${projectionName}`);
-    const copy = Object.freeze({ ...snapshot, state: structuredClone(snapshot.state) as JsonValue });
+    const copy = Object.freeze({ ...snapshot, state: structuredClone(snapshot.state) });
     validateKnownProjection(copy);
     return copy;
   }

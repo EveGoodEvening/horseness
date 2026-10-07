@@ -119,7 +119,7 @@ export function createBackup(db:Database,artifactRoot:string,destination:string,
     writeExclusive(join(destination,"manifest.json"),Buffer.from(`${JSON.stringify(manifest,null,2)}\n`,"utf8"));syncTree(destination);syncDirectory(parent.path);
     const verified=verifyBackup(destination);assertPinnedDirectory(parent,"backup destination parent");assertPinnedDirectory(reserved,"backup destination");inject("backup.final.verified",destination);
     return verified;
-  } catch(error) {try{const current=lstatSync(destination,{bigint:true});if(!current.isSymbolicLink()&&current.isDirectory()&&current.dev===reserved.device&&current.ino===reserved.inode)rmSync(destination,{recursive:true,force:true});}catch{}throw error;}
+  } catch(error) {try{const current=lstatSync(destination,{bigint:true});if(!current.isSymbolicLink()&&current.isDirectory()&&current.dev===reserved.device&&current.ino===reserved.inode)rmSync(destination,{recursive:true,force:true});}catch{/* Cleanup is best effort; preserve the original backup failure. */}throw error;}
 }
 
 export function readBackupManifest(root:string):BackupManifestV1 {const pinned=resolveBackupRoot(root);return parseBackupManifest(JSON.parse(readRegularNoFollow(join(pinned,"manifest.json")).toString("utf8")) as unknown);}

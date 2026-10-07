@@ -18,7 +18,7 @@ interface SmokeOutput {
   };
 }
 
-test("daily commands discover the project, isolate runs, and retain tasks across daemon restart", { timeout: 60_000 }, () => {
+void test("daily commands discover the project, isolate runs, and retain tasks across daemon restart", { timeout: 60_000 }, () => {
   const root = mkdtempSync(join(tmpdir(), "horseness-daily-"));
   const child = join(root, "src");
   mkdirSync(child);

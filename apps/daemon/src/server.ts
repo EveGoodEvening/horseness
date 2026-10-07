@@ -30,8 +30,8 @@ export class DaemonServer {
         const observation=this.grants.observe(input.actor.grantDigest),issuer=observation?.grant;
         if(!observation||!issuer||issuer.principalId!==input.actor.principalId||issuer.workspaceId!==config.workspaceId||Date.parse(input.expiresAt)>Date.parse(issuer.expiresAt)||issuer.adapterId!==null&&issuer.adapterId!==input.adapterId||issuer.runId!==null&&issuer.runId!==input.runId)throw new DomainError("AUTHORIZATION_DENIED");
         if(issuer.taskId!==null&&issuer.taskId!==input.taskId){const task=deterministicReplay(this.authority.replay(config.workspaceId,"run",input.runId)).operational.execution.contracts[input.taskId];if(task?.sourceTaskId!==issuer.taskId)throw new DomainError("AUTHORIZATION_DENIED");}
-        const principalId=`adapter:${input.attemptId}:${input.generation}`;
-        const grant=this.grants.issue({peerIdentity:issuer.peerIdentity,principalId,principalRole:"adapter",workspaceId:config.workspaceId,runId:input.runId,taskId:input.taskId,attemptId:input.attemptId,generation:input.generation,adapterId:input.adapterId,allowedMethods:["receipt.submit.v1","task.get.v1"],expiresAt:input.expiresAt},input.actor.grantDigest,{id:`producer:${input.attemptId}:${input.generation}`,requestDigest:domainDigest("horseness.task-producer-grant.v1",input as unknown as JsonValue)},observation);
+        const principalId=`adapter:${input.attemptId}:${String(input.generation)}`;
+        const grant=this.grants.issue({peerIdentity:issuer.peerIdentity,principalId,principalRole:"adapter",workspaceId:config.workspaceId,runId:input.runId,taskId:input.taskId,attemptId:input.attemptId,generation:input.generation,adapterId:input.adapterId,allowedMethods:["receipt.submit.v1","task.get.v1"],expiresAt:input.expiresAt},input.actor.grantDigest,{id:`producer:${input.attemptId}:${String(input.generation)}`,requestDigest:domainDigest("horseness.task-producer-grant.v1",input as unknown as JsonValue)},observation);
         return {principalId,grantDigest:grant.grant.grantDigest,capability:grant.grantReference};
       },
     },config.hostDriver??createTaskHostDriverV1(config.workspacePath,config.stateRoot),config.authorityTime);
@@ -72,7 +72,7 @@ export class DaemonServer {
       return { data: { schemaVersion: "1", resultType: "RunQueryResultV1", observationCursor: cursor, state: run as unknown as JsonValue }, resultCursor: cursor as unknown as JsonValue };
     });
     this.register("run.create.v1", (request, body, context) => {
-      if (body.runId === undefined || typeof body.input.value !== "object" || body.input.value === null || !("commandId" in body.input.value) || typeof body.input.value.commandId !== "string" || !("initialDocument" in body.input.value)) throw protocolError("INVALID_PARAMS");
+      if (body.runId === undefined || typeof body.input.value !== "object" || (body.input.value as unknown) === null || !("commandId" in body.input.value) || typeof body.input.value.commandId !== "string" || !("initialDocument" in body.input.value)) throw protocolError("INVALID_PARAMS");
       const commandId = body.input.value.commandId;
       const value=body.input.value;
       const cursor=request.params.observationCursor;
@@ -92,8 +92,9 @@ export class DaemonServer {
       const ids=this.authority.listRunIds(body.workspaceId);
       if(offset>ids.length)throw protocolError("INVALID_PARAMS");
       const runs=ids.slice(offset,offset+limit).map(runId=>{
-        const events=this.authority.replay(body.workspaceId,"run",runId),last=events.at(-1)!;
-        const genesis=events[0]!.envelope.payload as unknown as {initialDocument:JsonValue};
+        const events=this.authority.replay(body.workspaceId,"run",runId),last=events.at(-1),first=events[0];
+        if(last===undefined||first===undefined)throw protocolError("INVALID_PARAMS");
+        const genesis=first.envelope.payload as unknown as {initialDocument:JsonValue};
         const document=genesis.initialDocument;
         const title=typeof document==="object"&&document!==null&&!Array.isArray(document)&&typeof document.title==="string"?document.title:runId;
         return {runId,title,observationCursor:composite(body.workspaceId,runId,workspace,last)};
@@ -119,7 +120,7 @@ export class DaemonServer {
     this.register("task.list.v1",(_request,body,context)=>{
       if(!body.runId)throw protocolError("INVALID_PARAMS");
       const value=body.input.value as Record<string,unknown>,states=value.states;
-      if(!Array.isArray(states)||states.some(state=>!["draft","active","succeeded","failed","cancelled"].includes(state))||new Set(states).size!==states.length)throw protocolError("INVALID_PARAMS");
+      if(!Array.isArray(states)||states.some((state:unknown)=>typeof state!=="string"||!["draft","active","succeeded","failed","cancelled"].includes(state))||new Set(states).size!==states.length)throw protocolError("INVALID_PARAMS");
       const {offset,limit}=page(value);
       const workspace=this.authority.replay(body.workspaceId,"workspace",body.workspaceId).at(-1),events=this.authority.replay(body.workspaceId,"run",body.runId),last=events.at(-1);
       if(!workspace||!last)throw protocolError("INVALID_PARAMS");
@@ -216,7 +217,7 @@ export class DaemonServer {
       if(reference===null||!this.grants.revoke(reference,authorization))throw protocolError("GRANT_INVALID");
       return {data:{outcomeId:value.operationId,status:"completed",grantDigest:value.grantDigest,revokedAt:value.effectiveAt,observationCursor:requestCursor(body.workspaceId,this.authority)}};
     });
-    this.register("grant.list.v1",(_request,body,context)=>{const value=body.input.value;if(typeof value!=="object"||value===null||!("operationId" in value)||typeof value.operationId!=="string"||!("principalId" in value)||typeof value.principalId!=="string"||!("includeRevoked" in value)||typeof value.includeRevoked!=="boolean")throw new Error("grant list input invalid");if(context.principalRole!=="authority")throw new Error("grant list authority required");const grants=this.grants.list(value.principalId).filter(grant=>value.includeRevoked||!grant.revoked).map(grant=>({...grant,current:grant.grantDigest===context.grantDigest}));return{data:{outcomeId:value.operationId,status:"completed",grants:grants as unknown as JsonValue,observationCursor:requestCursor(body.workspaceId,this.authority)}};});
+    this.register("grant.list.v1",(_request,body,context)=>{const value:unknown=body.input.value;if(typeof value!=="object"||value===null||!("operationId" in value)||typeof value.operationId!=="string"||!("principalId" in value)||typeof value.principalId!=="string"||!("includeRevoked" in value)||typeof value.includeRevoked!=="boolean")throw new Error("grant list input invalid");if(context.principalRole!=="authority")throw new Error("grant list authority required");const grants=this.grants.list(value.principalId).filter(grant=>value.includeRevoked?true:!grant.revoked).map(grant=>({...grant,current:grant.grantDigest===context.grantDigest}));return{data:{outcomeId:value.operationId,status:"completed",grants:grants as unknown as JsonValue,observationCursor:requestCursor(body.workspaceId,this.authority)}};});
   }
 }
 

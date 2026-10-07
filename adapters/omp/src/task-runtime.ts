@@ -22,7 +22,7 @@ export async function resolveOMPTaskProfileV1(options:NativeTaskProfileOptionsV1
   await writeFile(extensionPath,`import {writeFileSync} from "node:fs"; export default function(api){api.on("session_start",(_event,ctx)=>{writeFileSync(new URL("./identity.json",import.meta.url),JSON.stringify({providerId:ctx.model?.provider??null,modelId:ctx.model?.id??null}),{mode:0o600,flag:"wx"});process.exit(0);});}`,{mode:0o600,flag:"wx"});
   const probe=await runNativeProcessV1({executablePath,args:["--mode","rpc","--no-session","--no-tools","--no-extensions","--no-skills","--no-rules","--no-title","--no-prewalk","--no-lsp","--no-pty","--extension",extensionPath,"--provider",options.model.slice(0,slash),"--model",options.model.slice(slash+1),"--thinking","off"],cwd:options.workspacePath,timeoutMs:10000,maxOutputBytes:65536});
   if(probe.exitCode!==0)throw new AdapterKitError("MODEL_UNAVAILABLE","Native host did not provide nonsecret model identity");
-  const identityBytes=await readFile(metadataPath,"utf8").catch(error=>{if((error as NodeJS.ErrnoException).code==="ENOENT")throw new AdapterKitError("MODEL_UNAVAILABLE","Native identity event was absent");throw error;});
+  const identityBytes=await readFile(metadataPath,"utf8").catch((error:unknown)=>{if((error as NodeJS.ErrnoException).code==="ENOENT")throw new AdapterKitError("MODEL_UNAVAILABLE","Native identity event was absent");throw error;});
   const identity=JSON.parse(identityBytes) as {providerId:unknown;modelId:unknown};
   if(identity.providerId!==options.model.slice(0,slash)||identity.modelId!==options.model.slice(slash+1))throw new AdapterKitError("MODEL_REQUIRED","Native host selected a fallback; specify the exact provider/model identity");
  }finally{await rm(metadataDirectory,{recursive:true,force:true});}
@@ -31,7 +31,7 @@ export async function resolveOMPTaskProfileV1(options:NativeTaskProfileOptionsV1
 }
 export async function createOMPTaskAdapterV1(options:NativeTaskAdapterOptionsV1):Promise<NativeTaskAdapterSessionV1>{
  options={...structuredClone(options),renderedContext:options.renderedContext.normalize("NFC")};const profile=Object.freeze(options.profile);
- if(profile.adapterId!=="omp"||profile.hostId!=="omp"||profile.hostVersion!==OMP_HOST_VERSION||profile.purpose!==options.purpose||profile.lookup!=="local-terminal-record"||profile.idempotentLaunch!==false)throw new Error("NATIVE_PROFILE_MISMATCH");
+ if(profile.adapterId!=="omp"||profile.hostId!=="omp"||profile.hostVersion!==OMP_HOST_VERSION||profile.purpose!==options.purpose||profile.lookup!=="local-terminal-record"||(profile.idempotentLaunch as unknown)!==false)throw new Error("NATIVE_PROFILE_MISMATCH");
  const spool=await createNativeTaskSpoolV1(options);let verified:TaskExecutionProfileV1=profile;
  if(!await spool.handedOff()){
   if(await nativeExecutableDigestV1(profile.nativeExecutablePath)!==profile.nativeExecutableDigest)throw new Error("NATIVE_PROFILE_MISMATCH");
@@ -65,20 +65,20 @@ export async function createOMPTaskAdapterV1(options:NativeTaskAdapterOptionsV1)
  for(const nativeMessage of end.messages as Record<string,unknown>[]){if(nativeMessage.role!=="assistant")continue;if(nativeMessage.provider!==profile.providerId||nativeMessage.model!==profile.modelId)throw new Error("NATIVE_MODEL_MISMATCH");message=nativeMessage;}
  if(!message)throw new Error("NATIVE_MODEL_UNOBSERVABLE");
  const content=message.content;if(!Array.isArray(content))throw new Error("NATIVE_OUTPUT_UNOBSERVABLE");let output="";
- for(const part of content){if(part.type!=="text")continue;if(typeof part.text!=="string")throw new Error("NATIVE_OUTPUT_UNOBSERVABLE");output+=(output.length===0?"":"\n")+part.text;}
+ for(const part of content as Record<string,unknown>[]){if(part.type!=="text")continue;if(typeof part.text!=="string")throw new Error("NATIVE_OUTPUT_UNOBSERVABLE");output+=(output.length===0?"":"\n")+part.text;}
  const outcome=result.exitCode===0&&message.stopReason==="stop"?"succeeded":"failed";
  if(outcome==="succeeded"&&output.length===0)throw new Error("NATIVE_OUTPUT_UNOBSERVABLE");
  const outputDigest=outcome==="succeeded"?await spool.publish(Buffer.from(output),"text/plain"):null;
  const provenance={profileDigest:taskExecutionProfileDigest(profile),observedHostId:profile.hostId,observedHostVersion:verified.hostVersion,observedProviderId:message.provider as string,observedModelId:message.model as string,nativeSessionId:header.id,exitCode:result.exitCode};
  const evidenceBytes=Buffer.from(JSON.stringify({provenance,stderr:result.stderr,sessionHeader:header,message:{role:message.role,provider:message.provider,model:message.model,stopReason:message.stopReason,content:message.content,errorMessage:message.errorMessage}}));const evidenceDigest=await spool.publish(evidenceBytes,"application/json");const record:NativeTaskTerminalV1={providerOperationId:header.id,nativeSessionId:header.id,startedAt,finishedAt:new Date().toISOString(),outcome,outputDigest,evidence:[{digest:evidenceDigest,mediaType:"application/json",size:evidenceBytes.byteLength}],provenance};await spool.save(record);return record;
- })();return active;},async cancel(){controller.abort();return collect();},async reconcile(){return collect();},async resume(){throw new Error("NATIVE_RESUME_UNSUPPORTED");},async collect(){return collect();}}});
+ })();return active;},async cancel(){controller.abort();return collect();},async reconcile(){return collect();},resume(){return Promise.reject(new Error("NATIVE_RESUME_UNSUPPORTED"));},async collect(){return collect();}}});
  const adapter:WorkerAdapterV1={
   async detectCapabilities(){const capabilities=await secure.detectCapabilities();return {...capabilities,cancel:false,reattach:"unsupported",nativeResume:"unsupported",contextInjection:"bytes",outputMediaTypes:["text/plain"]};},
   async launch(request:AdapterLaunchRequestV1){guard.assert(request);if(request.renderedContextDigest!==nativeRenderedContextDigestV1(options.renderedContext))throw new Error("NATIVE_CONTEXT_MISMATCH");return secure.launch(request);},
-  async cancel(request:AdapterCancelRequestV1){guard.assert(request);throw new Error("NATIVE_CANCEL_UNSUPPORTED");},
+  async cancel(request:AdapterCancelRequestV1){guard.assert(request);return Promise.reject(new Error("NATIVE_CANCEL_UNSUPPORTED"));},
   async reconcile(request:AdapterReconcileRequestV1){guard.assert(request);const record=await collect();if(record===null)throw new Error("UNKNOWN_OUTCOME");return secure.reconcile(request);},
-  async resume(request:AdapterResumeRequestV1){guard.assert(request);throw new Error("NATIVE_RESUME_UNSUPPORTED");},
+  async resume(request:AdapterResumeRequestV1){guard.assert(request);return Promise.reject(new Error("NATIVE_RESUME_UNSUPPORTED"));},
   collectReceipt:secure.collectReceipt.bind(secure),
  };
- return {adapter,publication:spool.publication,async close(){controller.abort();if(active)await active.catch(()=>{});await spool.close();}};
+ return {adapter,publication:spool.publication.bind(spool),async close(){controller.abort();if(active)await active.catch(()=>undefined);await spool.close();}};
 }

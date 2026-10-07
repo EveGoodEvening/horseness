@@ -13,7 +13,7 @@ function parseState(record:AuthorityStateRecordV1):GrantAuthorityStateV1 {
   const value=record.state;
   if(typeof value!=="object"||value===null||Array.isArray(value)||value.schemaVersion!=="1"||!Array.isArray(value.grants))throw new Error("grant authority state invalid");
   const references=new Set<string>();const digests=new Set<string>();
-  for(const item of value.grants){if(typeof item!=="object"||item===null||Array.isArray(item)||typeof item.grantReference!=="string"||typeof item.grantDigest!=="string"||typeof item.peerIdentity!=="string"||typeof item.principalId!=="string"||typeof item.expiresAt!=="string"||typeof item.workspaceId!=="string"||!Array.isArray(item.allowedMethods)||references.has(item.grantReference)||digests.has(item.grantDigest))throw new Error("grant authority entry invalid");const {grantReference:_reference,parentGrantDigest:_parent,grantDigest,revoked:_revoked,...core}=item as unknown as StoredGrantV1;if(domainDigest("horseness.daemon-grant.v1",core as unknown as JsonValue)!==grantDigest)throw new Error("grant digest authentication failed");references.add(item.grantReference);digests.add(item.grantDigest);}
+  for(const item of value.grants){if(typeof item!=="object"||item===null||Array.isArray(item)||typeof item.grantReference!=="string"||typeof item.grantDigest!=="string"||typeof item.peerIdentity!=="string"||typeof item.principalId!=="string"||typeof item.expiresAt!=="string"||typeof item.workspaceId!=="string"||!Array.isArray(item.allowedMethods)||references.has(item.grantReference)||digests.has(item.grantDigest))throw new Error("grant authority entry invalid");const {grantReference:_reference,parentGrantDigest:_parent,grantDigest,revoked:_revoked,...core}=item as unknown as StoredGrantV1;void _reference;void _parent;void _revoked;if(domainDigest("horseness.daemon-grant.v1",core as unknown as JsonValue)!==grantDigest)throw new Error("grant digest authentication failed");references.add(item.grantReference);digests.add(item.grantDigest);}
   if(value.issuances!==undefined){
     if(value.issuances===null||typeof value.issuances!=="object"||Array.isArray(value.issuances))throw new Error("grant issuance state invalid");
     for(const entry of Object.values(value.issuances))if(entry===null||typeof entry!=="object"||Array.isArray(entry)||typeof entry.requestDigest!=="string"||typeof entry.grantDigest!=="string"||!digests.has(entry.grantDigest)||typeof entry.issuedAt!=="string"||!Number.isFinite(Date.parse(entry.issuedAt)))throw new Error("grant issuance record invalid");
@@ -57,7 +57,7 @@ export class GrantStore implements GrantLookupV1 {
         if(prior.requestDigest!==operation.requestDigest)throw protocolError("INVALID_PARAMS");
         const stored=state.grants.find(item=>item.grantDigest===prior.grantDigest);
         if(!stored)throw new Error("grant issuance target is missing");
-        const {grantReference,parentGrantDigest:_parent,...grant}=stored;
+        const {grantReference,parentGrantDigest:_parent,...grant}=stored; void _parent;
         return Object.freeze({grantReference,grant:Object.freeze(grant),issuedAt:prior.issuedAt});
       }
     }
@@ -82,10 +82,10 @@ export class GrantStore implements GrantLookupV1 {
     const {record,state}=this.current();
     const stored=state.grants.find(item=>item.grantDigest===grantDigest);
     if(!stored||!this.activeInLineage(state,stored))return null;
-    const {grantReference:_reference,parentGrantDigest:_parent,...grant}=stored;
+    const {grantReference:_reference,parentGrantDigest:_parent,...grant}=stored; void _reference; void _parent;
     return Object.freeze({grant:Object.freeze(grant),expectation:{stateKind:record.stateKind,revision:record.revision,stateDigest:record.stateDigest}});
   }
   activeByDigest(grantDigest:string):AuthenticatedGrantV1|null{return this.observe(grantDigest)?.grant??null;}
-  async lookupActiveGrant(peerIdentity:string,grantReference:string):Promise<AuthenticatedGrantV1|null>{const {state}=this.current();const grant=state.grants.find(item=>item.grantReference===grantReference&&item.peerIdentity===peerIdentity);if(!grant||!this.activeInLineage(state,grant))return null;const {grantReference:_reference,parentGrantDigest:_parent,...authenticated}=grant;return Object.freeze(authenticated);}
-  list(principalId?:string):readonly AuthenticatedGrantV1[]{return this.current().state.grants.filter(grant=>principalId===undefined||grant.principalId===principalId).map(({grantReference:_reference,parentGrantDigest:_parent,...grant})=>Object.freeze(grant));}
+  async lookupActiveGrant(peerIdentity:string,grantReference:string):Promise<AuthenticatedGrantV1|null>{const {state}=this.current();const grant=state.grants.find(item=>item.grantReference===grantReference&&item.peerIdentity===peerIdentity);if(!grant||!this.activeInLineage(state,grant))return null;const {grantReference:_reference,parentGrantDigest:_parent,...authenticated}=grant;void _reference;void _parent;return await Promise.resolve(Object.freeze(authenticated));}
+  list(principalId?:string):readonly AuthenticatedGrantV1[]{return this.current().state.grants.filter(grant=>principalId===undefined||grant.principalId===principalId).map(({grantReference:_reference,parentGrantDigest:_parent,...grant})=>{void _reference;void _parent;return Object.freeze(grant);});}
 }

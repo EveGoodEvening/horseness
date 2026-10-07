@@ -43,7 +43,7 @@ const redactedReason = (value: unknown) => {
   return "CLAUDE_NATIVE_HOST_FAILED";
 };
 const nativeFailureReason = (messages: Record<string, unknown>[], init: Record<string, unknown>, result: Record<string, unknown>, stderr: string): string | undefined => {
-  const nativeErrors = messages.filter(message => message.type === "system" && /error|failed|auth|login/i.test(String(message.subtype ?? "")));
+  const nativeErrors = messages.filter(message => { const subtype: unknown = message.subtype ?? ""; return message.type === "system" && /error|failed|auth|login/i.test(String(subtype)); });
   const failedResult = result.is_error === true ? result : {
     is_error: result.is_error,
     subtype: result.subtype,
@@ -59,7 +59,7 @@ const nativeFailureReason = (messages: Record<string, unknown>[], init: Record<s
 };
 
 
-type StreamObservation = { sessionId: string; init: Record<string, unknown>; toolUses: number; toolResults: number; hookContext: boolean; workerToolAdvertised: boolean; result: Record<string, unknown>; batchResult: ClaudeNativeWorkerReturnBatchResultV1 | null };
+interface StreamObservation { sessionId: string; init: Record<string, unknown>; toolUses: number; toolResults: number; hookContext: boolean; workerToolAdvertised: boolean; result: Record<string, unknown>; batchResult: ClaudeNativeWorkerReturnBatchResultV1 | null }
 function countWireNodes(value: unknown, predicate: (node: Record<string, unknown>) => boolean): number {
   if (Array.isArray(value)) {
     let total = 0;
@@ -93,61 +93,64 @@ async function runClaude(binary: string, cwd: string, tempRoot: string, contextF
   const child = spawn(binary, args, { cwd, env: { ...nativeEnvironment, TMPDIR: tempRoot, TMP: tempRoot, TEMP: tempRoot, HORSENESS_CLAUDE_CONTEXT_FILE: contextFile, HORSENESS_CLAUDE_RUNTIME_SOCKET: socket, HORSENESS_CLAUDE_RUNTIME_NONCE: nonce, HORSENESS_CLAUDE_PREVIOUS_SESSION_ID: session?.resume, HORSENESS_CLAUDE_BRANCH_ENTRY_ID: session?.branchEntryId }, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = ""; let stderr = "";
   child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
-  child.stdout.on("data", chunk => { stdout += chunk; if (Buffer.byteLength(stdout) > MAX_STREAM_BYTES) child.kill("SIGKILL"); });
-  child.stderr.on("data", chunk => { stderr += chunk; if (Buffer.byteLength(stderr) > MAX_STREAM_BYTES) child.kill("SIGKILL"); });
+  child.stdout.on("data", (chunk: string) => { stdout += chunk; if (Buffer.byteLength(stdout) > MAX_STREAM_BYTES) child.kill("SIGKILL"); });
+  child.stderr.on("data", (chunk: string) => { stderr += chunk; if (Buffer.byteLength(stderr) > MAX_STREAM_BYTES) child.kill("SIGKILL"); });
   const timer = setTimeout(() => child.kill("SIGKILL"), MAX_WALL_MS);
-  const status = await new Promise<{ code: number | null; signal: NodeJS.Signals | null; error?: Error }>(resolveStatus => { child.once("error", error => resolveStatus({ code: null, signal: null, error })); child.once("close", (code, signal) => resolveStatus({ code, signal })); });
+  const status = await new Promise<{ code: number | null; signal: NodeJS.Signals | null; error?: Error }>(resolveStatus => { child.once("error", error => { resolveStatus({ code: null, signal: null, error }); }); child.once("close", (code, signal) => { resolveStatus({ code, signal }); }); });
   clearTimeout(timer);
   if (status.error !== undefined) throw new Error(redactedReason(status.error));
   if (status.signal !== null) throw new Error(`CLAUDE_NATIVE_SIGNAL_${status.signal}`);
   let messages: Record<string, unknown>[];
   try { messages = stdout.split("\n").filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>); }
   catch {
-    if (status.code !== 0) throw new Error(`${redactedReason(stderr)}_EXIT_${status.code ?? "NONE"}`);
+    if (status.code !== 0) throw new Error(`${redactedReason(stderr)}_EXIT_${String(status.code ?? "NONE")}`);
     throw new Error("CLAUDE_STREAM_JSON_INVALID");
   }
   const init = messages.find(message => message.type === "system" && message.subtype === "init");
   const result = messages.findLast(message => message.type === "result");
   if (init === undefined || result === undefined) throw new Error("CLAUDE_STREAM_CONTRACT_INVALID");
   const serialized = JSON.stringify(messages);
-  const stableToolFailure = serialized.match(/(?:CLAUDE|HORSENESS|INVALID|UNKNOWN)_[A-Z0-9_]+/)?.[0];
+  const stableToolFailure = /(?:CLAUDE|HORSENESS|INVALID|UNKNOWN)_[A-Z0-9_]+/.exec(serialized)?.[0];
   if (stableToolFailure !== undefined) throw new Error(stableToolFailure);
   const nativeFailure = nativeFailureReason(messages, init, result, stderr);
   if (nativeFailure !== undefined) throw new Error(nativeFailure);
   if (status.code !== 0) {
     const subtype = typeof result.subtype === "string" ? result.subtype.replace(/[^A-Za-z0-9]+/g, "_").toUpperCase() : "MISSING";
-    throw new Error(`CLAUDE_RESULT_${subtype}_EXIT_${status.code ?? "NONE"}`);
+    throw new Error(`CLAUDE_RESULT_${subtype}_EXIT_${String(status.code ?? "NONE")}`);
   }
   const toolUses = countWireNodes(messages, node => node.type === "tool_use" && node.name === tool);
   if (countWireNodes(messages, node => node.type === "tool_result" && node.is_error === true) > 0) throw new Error("CLAUDE_NATIVE_TOOL_RESULT_ERROR");
   const toolResults = countWireNodes(messages, node => node.type === "tool_result");
-  const sessionId = String(result.session_id ?? init.session_id ?? "");
+  const sessionIdValue: unknown = result.session_id ?? init.session_id ?? "";
+  const sessionId = String(sessionIdValue);
   if (sessionId.length === 0) throw new Error("CLAUDE_SESSION_ID_MISSING");
   const nativeToolResults = findWireNodes(messages, node => node.type === "tool_result" && node.is_error !== true);
   let batchResult: ClaudeNativeWorkerReturnBatchResultV1 | null = null;
   if (nativeToolResults.length === 1) {
-    const content = nativeToolResults[0]!.content;
+    const nativeToolResult = nativeToolResults[0];
+    assert.ok(nativeToolResult);
+    const content = nativeToolResult.content;
     const text = typeof content === "string" ? content : Array.isArray(content) ? (content.find(item => item !== null && typeof item === "object" && (item as Record<string, unknown>).type === "text") as Record<string, unknown> | undefined)?.text : undefined;
     if (typeof text === "string") batchResult = JSON.parse(text) as ClaudeNativeWorkerReturnBatchResultV1;
   }
   return { sessionId, init, toolUses, toolResults, hookContext: serialized.includes("horseness-context-v1"), workerToolAdvertised: serialized.includes(tool), result, batchResult };
 }
 function assertHorsenessInventoryAbsent(observation: StreamObservation, boundary: string): void {
-  const plugins = Array.isArray(observation.init.plugins) ? observation.init.plugins.map(plugin => plugin !== null && typeof plugin === "object" ? { name: (plugin as Record<string, unknown>).name, source: (plugin as Record<string, unknown>).source } : plugin) : observation.init.plugins;
-  const mcpServers = Array.isArray(observation.init.mcp_servers) ? observation.init.mcp_servers.map(server => server !== null && typeof server === "object" ? (server as Record<string, unknown>).name : server) : observation.init.mcp_servers;
+  const plugins = Array.isArray(observation.init.plugins) ? observation.init.plugins.map((plugin: unknown) => plugin !== null && typeof plugin === "object" ? { name: (plugin as Record<string, unknown>).name, source: (plugin as Record<string, unknown>).source } : plugin) : observation.init.plugins;
+  const mcpServers = Array.isArray(observation.init.mcp_servers) ? observation.init.mcp_servers.map((server: unknown) => server !== null && typeof server === "object" ? (server as Record<string, unknown>).name : server) : observation.init.mcp_servers;
   const inventory = JSON.stringify({ tools: observation.init.tools, mcpServers, plugins });
   if (/horseness-claude|plugin_horseness|horseness_worker/i.test(inventory)) throw new Error(`CLAUDE_UNINSTALL_${boundary}_INIT_INVENTORY_REMAINS`);
   if (observation.workerToolAdvertised) throw new Error(`CLAUDE_UNINSTALL_${boundary}_TOOL_REMAINS`);
 }
 
 
-const jsonWireValue = <T>(value: T) => value as unknown as JsonValue;
-type AuthorityScenario = {
+const jsonWireValue = (value: unknown) => value as JsonValue;
+interface AuthorityScenario {
   authority: SQLiteAuthority;
   binding: BoundAdapterOperationV1;
   client: WorkerReturnClientV1;
   seal(receipt: WorkerReturnV1["receipt"]): WorkerReturnV1["proposal"];
-};
+}
 function createAuthorityScenario(root: string, desired: "accepted" | "rejected" | "conflicted" | "quarantined" | "approval_required") {
   const authority = new SQLiteAuthority(join(root, "authority.sqlite"), join(root, "artifacts"));
   const workspaceId = `claude-${desired}`, runId = "run", taskId = "task", attemptId = "attempt";
@@ -167,13 +170,13 @@ function createAuthorityScenario(root: string, desired: "accepted" | "rejected" 
   let deliveredDecision: typeof desired | null = null; let authorityCursor: CompositeCursorV1 | null = null;
   const proposalCore: ProposalEnvelopeCoreV1 = { schemaVersion: "1", workspaceId, runId, authorPrincipalId: "worker", authorGrantDigest: "grant", attemptId, receiptDigests: [], forkPinDigest: fork.forkPinDigest, deltaAuthorityScopeDigest: deltaAuthorityScopeDigest(scope), baseRevision: fork.core.canonicalRevision, baseStateHash: fork.core.canonicalStateHash, canonicalizerVersion: "jcs-v1", hashVersion: "sha256-v1", proposalSealingObservationCursor: cursor, proposalSealingContextVersion: fork.core.sourceContextVersion, operations: [{ op: "replace", path: "/value", expectedValueDigest: jsonValueDigest(1), value: 2 }], evidenceClaims: [], pinnedPolicyDigest: policyDigest, currentPolicyDigest: policyDigest, nonce: `nonce-${desired}`, predecessorProposalDigest: null, predecessorReason: null };
   const client: WorkerReturnClientV1 = {
-    async publishObject(digest, kind) { const content = kind === "evidence" ? EVIDENCE_CLAIM : OUTPUT_TEXT; assert.equal(authority.artifacts.publishAndRegister(content, kind === "evidence" ? "application/json" : "text/plain").digest, digest); },
-    async submitReceipt(receipt) { return receipt.receiptDigest; },
-    async submitProposal(proposal) { assert.ok(authorityCursor); const result = new AdmissionService(authority).evaluateAndApply({ schemaVersion: "1", commandId: `admit-${desired}`, proposal, scopeDigest: proposal.core.deltaAuthorityScopeDigest, forkPinDigest: proposal.core.forkPinDigest, receiptDigests: proposal.core.receiptDigests, evidenceIds: [], policyDigest, quotaId: "quota", evaluationClock: { schemaVersion: "1", authorityTime: "2026-08-14T00:00:02Z", observationCursor: authorityCursor }, approval: null, authorization: { capabilityId: "capability" }, action: "apply-delta", version: "1" } satisfies AdmissionRequestV1); deliveredDecision = result.state; return { proposalId: proposal.proposalId, proposalDigest: proposal.proposalDigest }; },
-    async startDecisionSubscription(input) { assert.equal(input.resumeToken, null); return { resumeToken: `authority-resume-${desired}` }; },
-    async observeDecision(input) { assert.equal(deliveredDecision, desired); return { resumeToken: input.resumeToken, decision: deliveredDecision! }; },
+    async publishObject(digest, kind) { const content = kind === "evidence" ? EVIDENCE_CLAIM : OUTPUT_TEXT; assert.equal((await Promise.resolve(authority.artifacts.publishAndRegister(content, kind === "evidence" ? "application/json" : "text/plain"))).digest, digest); },
+    async submitReceipt(receipt) { return await Promise.resolve(receipt.receiptDigest); },
+    async submitProposal(proposal) { assert.ok(authorityCursor); const result = new AdmissionService(authority).evaluateAndApply({ schemaVersion: "1", commandId: `admit-${desired}`, proposal, scopeDigest: proposal.core.deltaAuthorityScopeDigest, forkPinDigest: proposal.core.forkPinDigest, receiptDigests: proposal.core.receiptDigests, evidenceIds: [], policyDigest, quotaId: "quota", evaluationClock: { schemaVersion: "1", authorityTime: "2026-08-14T00:00:02Z", observationCursor: authorityCursor }, approval: null, authorization: { capabilityId: "capability" }, action: "apply-delta", version: "1" } satisfies AdmissionRequestV1); deliveredDecision = result.state; return await Promise.resolve({ proposalId: proposal.proposalId, proposalDigest: proposal.proposalDigest }); },
+    async startDecisionSubscription(input) { assert.equal(input.resumeToken, null); return await Promise.resolve({ resumeToken: `authority-resume-${desired}` }); },
+    async observeDecision(input) { assert.equal(deliveredDecision, desired); return await Promise.resolve({ resumeToken: input.resumeToken, decision: deliveredDecision }); },
   };
-  const seal = (receipt: WorkerReturnV1["receipt"]) => { const head = authority.replay(workspaceId, "run", runId).at(-1)!; const payload = { eventType: "AttemptReceiptRecordedV1", workspaceId, runId, receiptId: receipt.receiptId, receiptDigest: receipt.receiptDigest, outcome: receipt.outcome } as const; const event = sealEventEnvelope({ schemaVersion: "1", streamKind: "run", workspaceId, streamId: runId, sequence: head.envelope.sequence + 1, priorEnvelopeHash: head.envelopeHash, eventId: `receipt-${desired}`, eventType: payload.eventType, payload, principalId: "worker", causationId: `receipt-${desired}`, correlationId: `receipt-${desired}`, idempotencyKey: `receipt-${desired}` }); authorityCursor = { ...cursor, runSequence: event.envelope.sequence, runEnvelopeHash: event.envelopeHash, runContextEpoch: event.envelope.sequence - 1 }; const capability: CapabilityV1 = { schemaVersion: "1", workspaceId, runId, commands: ["submit-proposal"], issuer: "authority", delegatee: "worker", issuedObservationSequence: 1, expiresObservationSequence: 100, nonce: `cap-${desired}`, revocationSequence: null }; const current: AdmissionCurrentAuthorityV1 = { schemaVersion: "1", evaluationObservationCursor: authorityCursor, currentPolicy: policy, authorization: { role: "worker", capabilityId: "capability", capability, grantDigest: "grant", revoked: false }, quota: { id: "quota", digest: "quota-digest", available: desired !== "quarantined" }, authenticatedApproverPrincipalId: "approver", authorityTime: "2026-08-14T00:00:02Z" }; authority.publishAndAppendAtomic({ commandId: `receipt-${desired}`, run: { streamKind: "run", workspaceId, streamId: runId, expectedSequence: head.envelope.sequence, expectedEnvelopeHash: head.envelopeHash, events: [event] }, artifacts: [], snapshots: [{ workspaceId, streamKind: "run", streamId: runId, sequence: authorityCursor.runSequence, envelopeHash: authorityCursor.runEnvelopeHash, projectionName: "admission-sealing", projectionVersion: "1", state: jsonWireValue({ schemaVersion: "1", observationCursor: authorityCursor, fork, scope, receipts: [receipt], pinnedPolicy: policy, evidence: [] }) }, { workspaceId, streamKind: "run", streamId: runId, sequence: authorityCursor.runSequence, envelopeHash: authorityCursor.runEnvelopeHash, projectionName: "admission-current", projectionVersion: "1", state: jsonWireValue(current) }] }); return sealProposal({ ...proposalCore, receiptDigests: [receipt.receiptDigest], proposalSealingObservationCursor: authorityCursor, proposalSealingContextVersion: { schemaVersion: "1", kind: "composite", workspaceContextEpoch: authorityCursor.workspaceContextEpoch, runContextEpoch: authorityCursor.runContextEpoch, observationCursor: authorityCursor } }); };
+  const seal = (receipt: WorkerReturnV1["receipt"]) => { const head = authority.replay(workspaceId, "run", runId).at(-1); assert.ok(head); const payload = { eventType: "AttemptReceiptRecordedV1", workspaceId, runId, receiptId: receipt.receiptId, receiptDigest: receipt.receiptDigest, outcome: receipt.outcome } as const; const event = sealEventEnvelope({ schemaVersion: "1", streamKind: "run", workspaceId, streamId: runId, sequence: head.envelope.sequence + 1, priorEnvelopeHash: head.envelopeHash, eventId: `receipt-${desired}`, eventType: payload.eventType, payload, principalId: "worker", causationId: `receipt-${desired}`, correlationId: `receipt-${desired}`, idempotencyKey: `receipt-${desired}` }); authorityCursor = { ...cursor, runSequence: event.envelope.sequence, runEnvelopeHash: event.envelopeHash, runContextEpoch: event.envelope.sequence - 1 }; const capability: CapabilityV1 = { schemaVersion: "1", workspaceId, runId, commands: ["submit-proposal"], issuer: "authority", delegatee: "worker", issuedObservationSequence: 1, expiresObservationSequence: 100, nonce: `cap-${desired}`, revocationSequence: null }; const current: AdmissionCurrentAuthorityV1 = { schemaVersion: "1", evaluationObservationCursor: authorityCursor, currentPolicy: policy, authorization: { role: "worker", capabilityId: "capability", capability, grantDigest: "grant", revoked: false }, quota: { id: "quota", digest: "quota-digest", available: desired !== "quarantined" }, authenticatedApproverPrincipalId: "approver", authorityTime: "2026-08-14T00:00:02Z" }; authority.publishAndAppendAtomic({ commandId: `receipt-${desired}`, run: { streamKind: "run", workspaceId, streamId: runId, expectedSequence: head.envelope.sequence, expectedEnvelopeHash: head.envelopeHash, events: [event] }, artifacts: [], snapshots: [{ workspaceId, streamKind: "run", streamId: runId, sequence: authorityCursor.runSequence, envelopeHash: authorityCursor.runEnvelopeHash, projectionName: "admission-sealing", projectionVersion: "1", state: jsonWireValue({ schemaVersion: "1", observationCursor: authorityCursor, fork, scope, receipts: [receipt], pinnedPolicy: policy, evidence: [] }) }, { workspaceId, streamKind: "run", streamId: runId, sequence: authorityCursor.runSequence, envelopeHash: authorityCursor.runEnvelopeHash, projectionName: "admission-current", projectionVersion: "1", state: jsonWireValue(current) }] }); return sealProposal({ ...proposalCore, receiptDigests: [receipt.receiptDigest], proposalSealingObservationCursor: authorityCursor, proposalSealingContextVersion: { schemaVersion: "1", kind: "composite", workspaceContextEpoch: authorityCursor.workspaceContextEpoch, runContextEpoch: authorityCursor.runContextEpoch, observationCursor: authorityCursor } }); };
   return { authority, binding, client, seal };
 }
 async function runtimeServer(path: string, nonce: string, runtimes: Map<string, ReturnType<typeof createClaudeNativeContributionRuntimeV1>>): Promise<Server> {
@@ -181,23 +184,27 @@ async function runtimeServer(path: string, nonce: string, runtimes: Map<string, 
   const server = createServer({ allowHalfOpen: true }, socket => {
     socket.setEncoding("utf8"); let wire = "";
     socket.on("error", () => undefined);
-    socket.on("data", chunk => { wire += chunk; if (Buffer.byteLength(wire) > 64 * 1024) socket.destroy(); });
-    socket.on("end", async () => {
+    socket.on("data", (chunk: string) => { wire += chunk; if (Buffer.byteLength(wire) > 64 * 1024) socket.destroy(); });
+    socket.on("end", () => { void (async () => {
       try {
         const request = JSON.parse(wire) as ({ schemaVersion: "HorsenessClaudeSessionStartRequestV1"; nonce: string; start: { sessionId: string; source: "startup" | "resume" | "fork" | "clear" | "compact"; previousSessionId?: string; branchEntryId?: string } } | { schemaVersion: "HorsenessClaudeRuntimeRequestV1"; nonce: string; sessionId?: string | null; input: { scenarios: readonly { attemptCapabilityReference: string; output: { digest: string; mediaType: string; byteLength: number }; evidence: { digest: string; mediaType: string; byteLength: number } }[] } });
         if (request.nonce !== nonce) throw new Error("HORSENESS_RUNTIME_AUTHORITY_REJECTED");
         if (request.schemaVersion === "HorsenessClaudeSessionStartRequestV1") {
           const candidates = [...new Set(runtimes.values())]; if (candidates.length !== 1) throw new Error("HORSENESS_SESSION_RUNTIME_AMBIGUOUS");
-          const context = await candidates[0]!.registerSessionStart(request.start);
+          const candidate = candidates[0];
+          if (candidate === undefined) throw new Error("HORSENESS_SESSION_RUNTIME_AMBIGUOUS");
+          const context = await candidate.registerSessionStart(request.start);
           socket.end(`${JSON.stringify({ schemaVersion: "HorsenessClaudeRuntimeResponseV1", ok: true, context: { schemaVersion: "HorsenessClaudeAttemptContextV1", ...context } })}\n`); return;
         }
         if (request.input.scenarios.length !== 5) throw new Error("INVALID_EXACT_SCENARIO_BATCH");
-        const runtime = runtimes.get(request.input.scenarios[0]!.attemptCapabilityReference);
+        const firstScenario = request.input.scenarios[0];
+        if (firstScenario === undefined) throw new Error("INVALID_EXACT_SCENARIO_BATCH");
+        const runtime = runtimes.get(firstScenario.attemptCapabilityReference);
         if (runtime === undefined || request.input.scenarios.some(item => runtimes.get(item.attemptCapabilityReference) !== runtime)) throw new Error("HORSENESS_ATTEMPT_GRANT_REVOKED");
         const result = await runtime.deliverBatch(request.input.scenarios, request.sessionId ?? undefined);
         socket.end(`${JSON.stringify({ schemaVersion: "HorsenessClaudeRuntimeResponseV1", ok: true, result })}\n`);
       } catch (error) { socket.end(`${JSON.stringify({ schemaVersion: "HorsenessClaudeRuntimeResponseV1", ok: false, reason: redactedReason(error) })}\n`); }
-    });
+    })(); });
   });
   await new Promise<void>((resolveListen, reject) => server.once("error", reject).listen(path, resolveListen));
   return server;
@@ -223,7 +230,7 @@ try {
   const doctor = claudeDoctorV1({ nativePackageVersion: fixture.artifact.version, loaderDigest: fixture.artifact.executable.sha256, contributions: observedContributions.map(({ name, digest }) => ({ name, digest })) });
   if (doctor.checks.some(check => check.status !== "ok") || observedPackageDigest !== CLAUDE_NATIVE_PACKAGE_METADATA.packageDigest) throw new Error("CLAUDE_NATIVE_PACKAGE_PROVENANCE_MISMATCH");
   const validation = spawn(binary, ["plugin", "validate", plugin], { stdio: ["ignore", "ignore", "pipe"] });
-  let validationError = ""; validation.stderr.setEncoding("utf8"); validation.stderr.on("data", chunk => validationError += chunk);
+  let validationError = ""; validation.stderr.setEncoding("utf8"); validation.stderr.on("data", (chunk: string) => { validationError += chunk; });
   const validationCode = await new Promise<number | null>(resolveCode => validation.once("close", resolveCode));
   assert.equal(validationCode, 0, redactedReason(validationError));
   const nativeTemp = join(root, "tmp"); await mkdir(nativeTemp, { recursive: true, mode: 0o700 });
@@ -239,18 +246,19 @@ try {
     const authorityScenario = createAuthorityScenario(scenario, outcome); scenarioAuthorities.push(authorityScenario);
     const binding = authorityScenario.binding;
     const attempt: ClaudeNativeAttemptV1 = { providerOperationId: `claude-operation-${outcome}`, nativeSessionId: `pending-${outcome}`, startedAt: "2026-08-14T00:00:00Z", finishedAt: "2026-08-14T00:00:01Z", outcome: "succeeded", outputDigest, evidence: [{ digest: evidenceDigest, mediaType: "application/json", size: Buffer.byteLength(EVIDENCE_CLAIM) }], provenance: { authMode: "existing-user-subscription-session", host: "claude", version: "2.1.228" } };
-    const provider: ClaudeNativeRuntimeV1 = { async launch() { return attempt; }, async cancel() { return attempt; }, async reconcile() { return attempt; }, async resume() { return attempt; }, async collect() { return attempt; } };
+    const provider: ClaudeNativeRuntimeV1 = { async launch() { return await Promise.resolve(attempt); }, async cancel() { return await Promise.resolve(attempt); }, async reconcile() { return await Promise.resolve(attempt); }, async resume() { return await Promise.resolve(attempt); }, async collect() { return await Promise.resolve(attempt); } };
     const adapter = createClaudeAdapterV1({ binding, credential: { schemaVersion: "1", kind: "host-reference", reference: `horseness.grant.${outcome}`, scope: { workspaceId: binding.workspaceId, adapterId: CLAUDE_ADAPTER_ID, purpose: "horseness-attempt-grant" } }, runtime: provider, producerPrincipalId: "worker", producerGrantDigest: "grant" });
     await adapter.launch({ ...binding, operation: "launch", renderedContextDigest: sha(`context-${outcome}`), providerOptions: {} });
     if (outcome === "accepted") { acceptedAdapter = adapter; acceptedAttempt = attempt; }
-    registrations.push({ capabilityReference: binding.attemptCapability, binding, adapter, authority: { client: authorityScenario.client, async sealProposal(_binding, receipt) { return authorityScenario.seal(receipt); }, async canonicalAcceptedAdvance() { const revision = loadRevision(authorityScenario.authority, binding.workspaceId, binding.runId); return { workspaceId: binding.workspaceId, runId: binding.runId, revision: revision.revision, stateHash: revision.stateHash }; } }, subscriptionId: `subscription-${outcome}` });
+    registrations.push({ capabilityReference: binding.attemptCapability, binding, adapter, authority: { client: authorityScenario.client, async sealProposal(_binding, receipt) { return await Promise.resolve(authorityScenario.seal(receipt)); }, async canonicalAcceptedAdvance() { const revision = loadRevision(authorityScenario.authority, binding.workspaceId, binding.runId); return await Promise.resolve({ workspaceId: binding.workspaceId, runId: binding.runId, revision: revision.revision, stateHash: revision.stateHash }); } }, subscriptionId: `subscription-${outcome}` });
   }
-  const acceptedRegistration = registrations[0]!;
+  const acceptedRegistration = registrations[0];
+  assert.ok(acceptedRegistration);
   const forkBinding: BoundAdapterOperationV1 = { ...acceptedRegistration.binding, attemptId: "attempt-fork", forkPinDigest: sha("accepted-fork-pin"), attemptContextBindingDigest: sha("accepted-fork-binding"), providerIdempotencyKeyDigest: sha("accepted-fork-key"), attemptCapability: "claude-attempt-accepted-fork" };
   if (acceptedAdapter === null || acceptedAttempt === null) throw new Error("CLAUDE_ACCEPTED_LIFECYCLE_MISSING");
   const acceptedProvider = acceptedAdapter;
   const acceptedProviderAttempt = acceptedAttempt;
-  const forkProvider: ClaudeNativeRuntimeV1 = { async launch() { return acceptedProviderAttempt; }, async cancel() { return acceptedProviderAttempt; }, async reconcile() { return acceptedProviderAttempt; }, async resume() { return acceptedProviderAttempt; }, async collect() { return acceptedProviderAttempt; } };
+  const forkProvider: ClaudeNativeRuntimeV1 = { async launch() { return await Promise.resolve(acceptedProviderAttempt); }, async cancel() { return await Promise.resolve(acceptedProviderAttempt); }, async reconcile() { return await Promise.resolve(acceptedProviderAttempt); }, async resume() { return await Promise.resolve(acceptedProviderAttempt); }, async collect() { return await Promise.resolve(acceptedProviderAttempt); } };
   const forkAdapter = createClaudeAdapterV1({ binding: forkBinding, credential: { schemaVersion: "1", kind: "host-reference", reference: "horseness.grant.accepted.fork", scope: { workspaceId: forkBinding.workspaceId, adapterId: CLAUDE_ADAPTER_ID, purpose: "horseness-attempt-grant" } }, runtime: forkProvider, producerPrincipalId: "worker", producerGrantDigest: "grant" });
   await forkAdapter.launch({ ...forkBinding, operation: "launch", renderedContextDigest: sha("context-accepted-fork"), providerOptions: {} });
   registrations.push({ ...acceptedRegistration, capabilityReference: forkBinding.attemptCapability, binding: forkBinding, adapter: forkAdapter });
@@ -258,29 +266,29 @@ try {
   const runtimes = new Map(registrations.map(item => [item.capabilityReference, runtime]));
   const socket = join(root, "runtime.sock"); const nonce = randomBytes(32).toString("hex"); server = await runtimeServer(socket, nonce, runtimes);
   const contextFile = join(root, "context.json"); await writeFile(contextFile, JSON.stringify({ schemaVersion: "HorsenessClaudeContextV1", renderedContext: `attemptCapabilityReference=${acceptedRegistration.capabilityReference}; forkPinDigest=${acceptedRegistration.binding.forkPinDigest}` }), { mode: 0o600 });
-  const scenarioInputs = decisions.map((_outcome, index) => ({ attemptCapabilityReference: registrations[index]!.capabilityReference, outputText: OUTPUT_TEXT, evidenceClaim: EVIDENCE_CLAIM }));
+  const scenarioInputs = decisions.map((_outcome, index) => { const registration = registrations[index]; assert.ok(registration); return { attemptCapabilityReference: registration.capabilityReference, outputText: OUTPUT_TEXT, evidenceClaim: EVIDENCE_CLAIM }; });
   const prompt = `Invoke the Horseness MCP worker tool exactly once with this exact batch and no substitutions: ${JSON.stringify({ scenarios: scenarioInputs })}. Do not use any other tool. Return the tool result.`;
   smokeStage = "decision-batch-invoke";
   const invocation = await runClaude(binary, root, nativeTemp, contextFile, socket, nonce, prompt, plugin);
   assert.equal(invocation.toolUses, 1); assert.equal(invocation.toolResults, 1); assert.equal(invocation.hookContext, true);
   acceptedSession = invocation.sessionId;
   const batchResult = invocation.batchResult;
-  if (batchResult === null || batchResult.schemaVersion !== "HorsenessClaudeWorkerReturnBatchResultV1" || batchResult.sessionId !== acceptedSession || batchResult.results.length !== 5) throw new Error("CLAUDE_NATIVE_BATCH_RESULT_INVALID");
+  if (batchResult === null || !Object.is(batchResult.schemaVersion, "HorsenessClaudeWorkerReturnBatchResultV1") || batchResult.sessionId !== acceptedSession || batchResult.results.length !== 5) throw new Error("CLAUDE_NATIVE_BATCH_RESULT_INVALID");
   const observed: string[] = [];
   for (const [index, outcome] of decisions.entries()) {
-    const binding = registrations[index]!.binding;
-    const record = retained.load(`${binding.workspaceId}:${binding.runId}:${binding.taskId}:${binding.attemptId}:${binding.generation}`);
+    const registration = registrations[index]; assert.ok(registration); const binding = registration.binding;
+    const record = retained.load(`${binding.workspaceId}:${binding.runId}:${binding.taskId}:${binding.attemptId}:${String(binding.generation)}`);
     if (record === undefined || record.decision !== outcome || record.resumeToken !== `authority-resume-${outcome}`) throw new Error("CLAUDE_RETAINED_BATCH_MISMATCH");
     const batchEvidence: ClaudeNativeWorkerReturnBatchEvidenceV1 | undefined = batchResult.results[index];
     if (batchEvidence === undefined || batchEvidence.workspaceId !== binding.workspaceId || batchEvidence.runId !== binding.runId || batchEvidence.taskId !== binding.taskId || batchEvidence.attemptId !== binding.attemptId || batchEvidence.generation !== binding.generation || batchEvidence.decision !== outcome || batchEvidence.receiptDigest !== record.workerReturn.receipt.receiptDigest || batchEvidence.proposalDigest !== record.workerReturn.proposal.proposalDigest || batchEvidence.outputDigest !== record.workerReturn.receipt.outputDigest || JSON.stringify(batchEvidence.evidenceDigests) !== JSON.stringify(record.workerReturn.receipt.evidence.map(item => item.digest))) throw new Error("CLAUDE_NATIVE_BATCH_EVIDENCE_MISMATCH");
     observed.push(record.decision); liveBindings.push({ workspaceId: binding.workspaceId, runId: binding.runId, taskId: binding.taskId, attemptId: binding.attemptId, generation: binding.generation, forkPinDigest: binding.forkPinDigest, contextManifestCoreDigest: binding.contextManifestCoreDigest, attemptContextBindingDigest: binding.attemptContextBindingDigest, receiptDigest: batchEvidence.receiptDigest, proposalDigest: batchEvidence.proposalDigest, outputDigest: batchEvidence.outputDigest, evidenceDigests: batchEvidence.evidenceDigests });
-    if (outcome === "accepted") { acceptedReceipt = batchEvidence.receiptDigest; const canonical = loadRevision(scenarioAuthorities[index]!.authority, binding.workspaceId, binding.runId); acceptedRevision = canonical.revision; acceptedDocument = canonical.document; assert.deepEqual(batchResult.canonicalAcceptedAdvance, { workspaceId: binding.workspaceId, runId: binding.runId, revision: canonical.revision, stateHash: canonical.stateHash }); }
+    if (outcome === "accepted") { acceptedReceipt = batchEvidence.receiptDigest; const scenarioAuthority = scenarioAuthorities[index]; assert.ok(scenarioAuthority); const canonical = loadRevision(scenarioAuthority.authority, binding.workspaceId, binding.runId); acceptedRevision = canonical.revision; acceptedDocument = canonical.document; assert.deepEqual(batchResult.canonicalAcceptedAdvance, { workspaceId: binding.workspaceId, runId: binding.runId, revision: canonical.revision, stateHash: canonical.stateHash }); }
   }
   smokeStage = "session-resume-marker";
   const resumed = await runClaude(binary, root, nativeTemp, contextFile, socket, nonce, "Reply with exactly RESUME_OK. Do not call tools.", plugin, { resume: acceptedSession }, 1);
   assert.equal(resumed.sessionId, acceptedSession); assert.equal(resumed.toolUses, 0); assert.equal(resumed.hookContext, true); assert.ok(JSON.stringify(resumed.result).includes("RESUME_OK"));
   runtime.registerBranch({ entryId: "accepted-fork", previousSessionFile: acceptedSession, attemptCapabilityReference: forkBinding.attemptCapability });
-  assert.throws(() => runtime.registerBranch({ entryId: "accepted-fork", previousSessionFile: acceptedSession, attemptCapabilityReference: acceptedRegistration.capabilityReference }), /cannot overwrite or substitute/);
+  assert.throws(() => { runtime.registerBranch({ entryId: "accepted-fork", previousSessionFile: acceptedSession, attemptCapabilityReference: acceptedRegistration.capabilityReference }); }, /cannot overwrite or substitute/);
   smokeStage = "session-fork-marker";
   const forked = await runClaude(binary, root, nativeTemp, contextFile, socket, nonce, "Reply with exactly FORK_OK. Do not call tools.", plugin, { resume: acceptedSession, fork: true, branchEntryId: "accepted-fork" }, 1);
   assert.notEqual(forked.sessionId, acceptedSession); assert.equal(forked.toolUses, 0); assert.equal(forked.hookContext, true); assert.ok(JSON.stringify(forked.result).includes("FORK_OK")); forkSession = forked.sessionId;
@@ -288,14 +296,15 @@ try {
   await acceptedProvider.resume({ ...acceptedRegistration.binding, operation: "reattach", providerOperationId: acceptedProviderAttempt.providerOperationId, nativeSessionId: acceptedSession });
   await acceptedProvider.resume({ ...acceptedRegistration.binding, operation: "resume", providerOperationId: acceptedProviderAttempt.providerOperationId, nativeSessionId: acceptedSession });
   assert.deepEqual(observed, decisions); assert.equal(acceptedRevision, 1); assert.deepEqual(acceptedDocument, { value: 2 });
-  await new Promise<void>((resolveClose, reject) => server!.close(error => error ? reject(error) : resolveClose())); server = undefined;
+  const activeServer = server;
+  await new Promise<void>((resolveClose, reject) => { activeServer.close(error => { if (error) reject(error); else resolveClose(); }); }); server = undefined;
   for (const scenario of scenarioAuthorities) scenario.authority.close();
   revokedAcceptedRuntime = runtime;
   const uninstallState = join(root, "horseness-uninstall.json");
   const sentinelBytes = JSON.stringify({ name: "uninstalled", version: "0.0.0", description: "Inert uninstall discovery sentinel" });
   type UninstallPhase = "kill_switch_written" | "discovery_disabled" | "authority_revoked" | "complete";
   type DiscoveryCrashPoint = "after_rename" | "after_sentinel_fsync";
-  type UninstallState = { readonly schemaVersion: "ClaudeUninstallStateV1"; readonly state: UninstallPhase; readonly killSwitch: true; readonly capability: "revoked"; readonly discoveryPath: string };
+  interface UninstallState { readonly schemaVersion: "ClaudeUninstallStateV1"; readonly state: UninstallPhase; readonly killSwitch: true; readonly capability: "revoked"; readonly discoveryPath: string }
   const syncDirectory = async (path: string) => { const handle = await open(path, "r"); try { await handle.sync(); } finally { await handle.close(); } };
   const syncRoot = async () => syncDirectory(root);
   const readUninstall = async (): Promise<UninstallState | null> => {
@@ -362,7 +371,7 @@ try {
     }
     if (activeMetadata === null && disabledMetadata === null) throw new Error("CLAUDE_UNINSTALL_DISCOVERY_EVIDENCE_MISSING");
     if (disabledMetadata === null) {
-      if (!activeMetadata!.isDirectory()) throw new Error("CLAUDE_UNINSTALL_ACTIVE_INVALID");
+      if (activeMetadata === null || !activeMetadata.isDirectory()) throw new Error("CLAUDE_UNINSTALL_ACTIVE_INVALID");
       await assertDisabledContribution(discoveryPath);
       await rename(discoveryPath, disabledPath);
       await syncRoot();
@@ -418,8 +427,8 @@ try {
   assert.equal((await readUninstall())?.state, "authority_revoked");
   await nativeInventoryAfterCrash("AUTHORITY_REVOKED");
   await resumeUninstall();
-  if (revokedAcceptedRuntime === null) throw new Error("CLAUDE_UNINSTALL_RUNTIME_MISSING");
-  await assert.rejects(() => revokedAcceptedRuntime!.deliver("claude-attempt-accepted", { digest: sha(OUTPUT_TEXT), mediaType: "text/plain", byteLength: Buffer.byteLength(OUTPUT_TEXT) }, { digest: sha(EVIDENCE_CLAIM), mediaType: "application/json", byteLength: Buffer.byteLength(EVIDENCE_CLAIM) }), /unknown or revoked/);
+  if (Object.is(revokedAcceptedRuntime, null)) throw new Error("CLAUDE_UNINSTALL_RUNTIME_MISSING");
+  await assert.rejects(() => revokedAcceptedRuntime.deliver("claude-attempt-accepted", { digest: sha(OUTPUT_TEXT), mediaType: "text/plain", byteLength: Buffer.byteLength(OUTPUT_TEXT) }, { digest: sha(EVIDENCE_CLAIM), mediaType: "application/json", byteLength: Buffer.byteLength(EVIDENCE_CLAIM) }), /unknown or revoked/);
   await nativeInventoryAfterCrash("RECOVERED");
   const completed = await readUninstall();
   if (completed === null) throw new Error("CLAUDE_UNINSTALL_STATE_MISSING");
@@ -429,13 +438,14 @@ try {
   const gitTree = spawnSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: resolve(fileURLToPath(new URL("../../..", import.meta.url))), encoding: "utf8", timeout: 5_000, maxBuffer: 4096 });
   if (gitHead.status !== 0 || gitTree.status !== 0) throw new Error("CLAUDE_CANDIDATE_PROVENANCE_UNAVAILABLE");
   const finishedAtMs = Date.now();
-  const receipt = validateClaudeSubscriptionLiveReceiptV1({ schemaVersion: "ClaudeSubscriptionLiveReceiptV1", host: "claude", authMode: "existing-user-subscription-session", hostVersion: fixture.artifact.version, observedModel: String(invocation.init.model ?? invocation.result.model ?? ""), candidate: { head: gitHead.stdout.trim(), tree: gitTree.stdout.trim() }, command: { argv: commandArgv, digest: sha(JSON.stringify(commandArgv)), scenarioSetDigest: sha(JSON.stringify({ schemaVersion: "HorsenessClaudeExactScenarioBatchV1", capabilityReferences: scenarioInputs.map(item => item.attemptCapabilityReference) })), batchResponseDigest: sha(JSON.stringify(batchResult)) }, provenance: { archiveDigest: fixture.artifact.archiveSha256, archiveIdentity: fixture.artifact.identity, memberPath: fixture.artifact.executable.path, executableDigest: fixture.artifact.executable.sha256, packageDigest: observedPackageDigest, contributions: observedContributions.map(({ name, digest }) => ({ name, digest })) }, bindings: liveBindings, redactionAudit: { passed: true, prohibitedFields: ["account", "email", "subscriptionId", "credential", "authorization", "token", "cookie", "authPath", "tokenFingerprint"] }, timing: { startedAt: new Date(smokeStartedAtMs).toISOString(), finishedAt: new Date(finishedAtMs).toISOString(), durationMs: finishedAtMs - smokeStartedAtMs }, terminal: { result: "succeeded", reason: "CLAUDE_LIVE_SMOKE_SUCCEEDED" } });
+  const observedModel: unknown = invocation.init.model ?? invocation.result.model ?? "";
+  const receipt = validateClaudeSubscriptionLiveReceiptV1({ schemaVersion: "ClaudeSubscriptionLiveReceiptV1", host: "claude", authMode: "existing-user-subscription-session", hostVersion: fixture.artifact.version, observedModel: String(observedModel), candidate: { head: gitHead.stdout.trim(), tree: gitTree.stdout.trim() }, command: { argv: commandArgv, digest: sha(JSON.stringify(commandArgv)), scenarioSetDigest: sha(JSON.stringify({ schemaVersion: "HorsenessClaudeExactScenarioBatchV1", capabilityReferences: scenarioInputs.map(item => item.attemptCapabilityReference) })), batchResponseDigest: sha(JSON.stringify(batchResult)) }, provenance: { archiveDigest: fixture.artifact.archiveSha256, archiveIdentity: fixture.artifact.identity, memberPath: fixture.artifact.executable.path, executableDigest: fixture.artifact.executable.sha256, packageDigest: observedPackageDigest, contributions: observedContributions.map(({ name, digest }) => ({ name, digest })) }, bindings: liveBindings, redactionAudit: { passed: true, prohibitedFields: ["account", "email", "subscriptionId", "credential", "authorization", "token", "cookie", "authPath", "tokenFingerprint"] }, timing: { startedAt: new Date(smokeStartedAtMs).toISOString(), finishedAt: new Date(finishedAtMs).toISOString(), durationMs: finishedAtMs - smokeStartedAtMs }, terminal: { result: "succeeded", reason: "CLAUDE_LIVE_SMOKE_SUCCEEDED" } });
   process.stdout.write(`${JSON.stringify(receipt)}\n`);
   process.stdout.write(`${JSON.stringify({ schemaVersion: "ClaudeHostSmokeResultV1", host: "claude", version: fixture.artifact.version, authMode: "existing-user-subscription-session", executableDigest: fixture.artifact.executable.sha256, packageDigest: observedPackageDigest, receiptDigest: acceptedReceipt, decisions: observed, canonicalRevision: acceptedRevision, canonicalDocument: acceptedDocument, sessions: { resumed: acceptedSession, forked: forkSession }, bounds: { scenarios: 5, providerInvocations: 6, workerToolCalls: 1, maxToolCallsPerInvocation: 1, maxTurns: 3, maxContextBytes: 4096, maxOutputBytes: 1024, maxEvidenceBytes: 1024, wallClockMs: MAX_WALL_MS }, lifecycle: { resume: "same-session-marker-no-worker-tool", fork: "new-session-second-fork-pin-marker-no-worker-tool", uninstallDiscovery: "same-path-native-init-after-discovery-disable-authority-revoke-and-recovery", horsenessGrant: "revoked", claudeLogout: "not-performed" } })}\n`);
 } catch (error) {
   process.stderr.write(`${redactedReason(error)}:${smokeStage}\n`);
   process.exitCode = 1;
 } finally {
-  if (server !== undefined) await new Promise<void>(resolveClose => server!.close(() => resolveClose()));
+  if (server !== undefined) { const activeServer = server; await new Promise<void>(resolveClose => { activeServer.close(() => { resolveClose(); }); }); }
   await rm(root, { recursive: true, force: true });
 }

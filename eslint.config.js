@@ -2,9 +2,9 @@ import eslint from "@eslint/js";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 const typescriptWorkspaceFiles = [
-  "packages/*/src/**/*.ts",
-  "apps/*/src/**/*.ts",
-  "adapters/*/src/**/*.ts"
+  "packages/*/{src,test}/**/*.ts",
+  "apps/*/{src,test}/**/*.ts",
+  "adapters/*/{src,test}/**/*.ts"
 ];
 
 const typeCheckedConfigs = [
@@ -20,7 +20,7 @@ export default tseslint.config(
   {
     files: typescriptWorkspaceFiles,
     languageOptions: {
-      parserOptions: { project: "./tsconfig.base.json", tsconfigRootDir: import.meta.dirname }
+      parserOptions: { project: "./tsconfig.eslint.json", tsconfigRootDir: import.meta.dirname }
     },
     rules: {
       "@typescript-eslint/consistent-type-imports": "error",

@@ -13,7 +13,7 @@ export const CODEX_HOST_ID = "codex" as const;
 export const CODEX_HOST_VERSION = "0.144.1-linux-x64" as const;
 export const CODEX_PROVIDER_ID = "codex-native-provider-v1" as const;
 
-export type CodexNativeContributionDigestV1 = { readonly kind: string; readonly name: string; readonly digest: string };
+export interface CodexNativeContributionDigestV1 { readonly kind: string; readonly name: string; readonly digest: string }
 export function codexNativePackageDigestV1(contributions: readonly CodexNativeContributionDigestV1[]): string {
   return `sha256:${createHash("sha256").update(JSON.stringify({ schemaVersion: "CodexNativePackageDigestV1", contributions })).digest("hex")}`;
 }
@@ -39,7 +39,7 @@ export const CODEX_NATIVE_PACKAGE_METADATA = Object.freeze({
 }) satisfies NativePackageMetadataV1;
 
 export const CODEX_INSTALL_CONTRIBUTIONS = Object.freeze(CODEX_NATIVE_PACKAGE_METADATA.contributions.map((item, index) =>
-  parseInstallContributionV1({ schemaVersion: "1", kind: index === 0 ? "plugin" : "file", contributionId: `horseness-codex-${index}`, relativePath: item.name, contentDigest: item.digest, sourceArtifactDigest: CODEX_NATIVE_PACKAGE_METADATA.packageDigest, mode: "read-only", hostScope: CODEX_HOST_ID }),
+  parseInstallContributionV1({ schemaVersion: "1", kind: index === 0 ? "plugin" : "file", contributionId: `horseness-codex-${String(index)}`, relativePath: item.name, contentDigest: item.digest, sourceArtifactDigest: CODEX_NATIVE_PACKAGE_METADATA.packageDigest, mode: "read-only", hostScope: CODEX_HOST_ID }),
 )) satisfies readonly InstallContributionV1[];
 
 export interface CodexSubscriptionLiveReceiptV1 {
@@ -57,8 +57,9 @@ export interface CodexSubscriptionLiveReceiptV1 {
   readonly terminal: { readonly result: "succeeded" | "failed"; readonly reason: string };
 }
 export function validateCodexSubscriptionLiveReceiptV1(value: CodexSubscriptionLiveReceiptV1): CodexSubscriptionLiveReceiptV1 {
-  const bindingIdentities = value.bindings.map(item => `${item.workspaceId}:${item.runId}:${item.taskId}:${item.attemptId}:${item.generation}`);
-  if (value.schemaVersion !== "CodexSubscriptionLiveReceiptV1" || value.host !== "codex" || value.authMode !== "existing-user-subscription-session" || value.observedModel.length === 0 || value.candidate.head.length === 0 || value.candidate.tree.length === 0 || value.command.argv.length === 0 || value.bindings.length !== 5 || new Set(bindingIdentities).size !== 5 || value.provenance.contributions.length === 0 || value.provenance.nativePlugin.observedPluginId.length === 0 || value.provenance.nativePlugin.nativeItemPluginId !== value.provenance.nativePlugin.observedPluginId || !/^0\.1\.0\+horseness\.[a-f0-9]{16}$/.test(value.provenance.nativePlugin.installedVersion) || value.timing.durationMs < 0 || value.timing.durationMs > 120_000 || Date.parse(value.timing.finishedAt) - Date.parse(value.timing.startedAt) !== value.timing.durationMs || value.terminal.result !== "succeeded" || value.redactionAudit.passed !== true) throw new Error("CODEX_LIVE_RECEIPT_INVALID");
+  const header: { schemaVersion: unknown; host: unknown; authMode: unknown; redactionAudit: { passed: unknown } } = value;
+  const bindingIdentities = value.bindings.map(item => `${item.workspaceId}:${item.runId}:${item.taskId}:${item.attemptId}:${String(item.generation)}`);
+  if (header.schemaVersion !== "CodexSubscriptionLiveReceiptV1" || header.host !== "codex" || header.authMode !== "existing-user-subscription-session" || value.observedModel.length === 0 || value.candidate.head.length === 0 || value.candidate.tree.length === 0 || value.command.argv.length === 0 || value.bindings.length !== 5 || new Set(bindingIdentities).size !== 5 || value.provenance.contributions.length === 0 || value.provenance.nativePlugin.observedPluginId.length === 0 || value.provenance.nativePlugin.nativeItemPluginId !== value.provenance.nativePlugin.observedPluginId || !/^0\.1\.0\+horseness\.[a-f0-9]{16}$/.test(value.provenance.nativePlugin.installedVersion) || value.timing.durationMs < 0 || value.timing.durationMs > 120_000 || Date.parse(value.timing.finishedAt) - Date.parse(value.timing.startedAt) !== value.timing.durationMs || value.terminal.result !== "succeeded" || header.redactionAudit.passed !== true) throw new Error("CODEX_LIVE_RECEIPT_INVALID");
   const digests = [value.command.digest, value.command.scenarioSetDigest, value.command.batchResponseDigest, value.provenance.archiveDigest, value.provenance.executableDigest, value.provenance.packageDigest, value.provenance.nativePlugin.installedPackageDigest, value.provenance.nativePlugin.resolvedDeclarationDigest, ...value.provenance.contributions.map(item => item.digest), ...value.provenance.nativePlugin.installedContributions.map(item => item.digest), ...value.bindings.flatMap(item => [item.forkPinDigest, item.contextManifestCoreDigest, item.attemptContextBindingDigest, item.receiptDigest, item.proposalDigest, item.outputDigest, ...item.evidenceDigests])];
   if (digests.some(digest => !/^(?:sha256:)?[a-f0-9]{64}$/.test(digest))) throw new Error("CODEX_LIVE_RECEIPT_DIGEST_INVALID");
   const observedContributions = value.provenance.contributions.map(observedCodexContribution);
@@ -67,7 +68,7 @@ export function validateCodexSubscriptionLiveReceiptV1(value: CodexSubscriptionL
     return shipped !== undefined && item.name === shipped.name && item.kind === shipped.kind && (item.name === "plugin/.codex-plugin/plugin.json" || item.digest === shipped.digest);
   });
   if (observedContributions.some(item => item === null) || JSON.stringify(value.provenance.contributions) !== JSON.stringify(CODEX_NATIVE_CONTRIBUTIONS.map(({ name, digest }) => ({ name, digest }))) || value.provenance.packageDigest !== codexNativePackageDigestV1(observedContributions as CodexNativeContributionDigestV1[]) || value.provenance.packageDigest !== CODEX_NATIVE_PACKAGE_METADATA.packageDigest || value.provenance.nativePlugin.installedVersion !== `0.1.0+horseness.${value.provenance.packageDigest.slice("sha256:".length, "sha256:".length + 16)}` || value.provenance.nativePlugin.installedContributions.length !== CODEX_NATIVE_CONTRIBUTIONS.length || !installedIdentityMatches || value.provenance.nativePlugin.installedPackageDigest !== codexNativePackageDigestV1(value.provenance.nativePlugin.installedContributions)) throw new Error("CODEX_LIVE_RECEIPT_PROVENANCE_MISMATCH");
-  if (JSON.stringify(value).match(/"(?:account|email|subscriptionId|credential|authorization|token|cookie|authPath|tokenFingerprint)"\s*:/i)) throw new Error("CODEX_LIVE_RECEIPT_REDACTION_FAILED");
+  if (/"(?:account|email|subscriptionId|credential|authorization|token|cookie|authPath|tokenFingerprint)"\s*:/i.exec(JSON.stringify(value))) throw new Error("CODEX_LIVE_RECEIPT_REDACTION_FAILED");
   return Object.freeze(structuredClone(value));
 }
 export interface CodexNativeAttemptV1 {
@@ -141,7 +142,7 @@ export function createCodexRetainedDeliveryAuthorityV1(stateDirectory: string): 
     if (details.isSymbolicLink() || !details.isDirectory() || (details.mode & 0o077) !== 0 || dirname(realpathSync(directory)) !== root) throw new Error("Codex retained state path must be a private, non-symlink directory");
   }
   let closed = false;
-  type LockOwner = { readonly pid: number; readonly nonce: string; readonly incarnation: string };
+  interface LockOwner { readonly pid: number; readonly nonce: string; readonly incarnation: string }
   const held = new Map<string, LockOwner>();
   const assertOpen = () => { if (closed) throw new Error("Codex retained delivery authority is closed"); };
   const nameFor = (key: string) => createHash("sha256").update(key).digest("hex");
@@ -160,7 +161,7 @@ export function createCodexRetainedDeliveryAuthorityV1(stateDirectory: string): 
   const syncDirectory = (path: string) => { const descriptor = openSync(path, "r"); try { fsyncSync(descriptor); } finally { closeSync(descriptor); } };
   const publish = (key: string, value: CodexRetainedDeliveryV1) => {
     const path = recordPath(key);
-    const temporary = join(records, `.${nameFor(key)}.${process.pid}.${randomUUID()}.tmp`);
+    const temporary = join(records, `.${nameFor(key)}.${String(process.pid)}.${randomUUID()}.tmp`);
     const descriptor = openSync(temporary, "wx", 0o600);
     try { writeFileSync(descriptor, JSON.stringify(value), "utf8"); fsyncSync(descriptor); } finally { closeSync(descriptor); }
     renameSync(temporary, path);
@@ -169,7 +170,7 @@ export function createCodexRetainedDeliveryAuthorityV1(stateDirectory: string): 
   const linuxProcessIncarnation = (pid: number): string => {
     if (process.platform !== "linux") throw new Error("Codex retained delivery locks require verifiable process incarnation identity");
     let stat: string;
-    try { stat = readFileSync(`/proc/${pid}/stat`, "utf8"); }
+    try { stat = readFileSync(`/proc/${String(pid)}/stat`, "utf8"); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("Codex retained delivery lock owner process is absent");
       throw new Error("Codex retained delivery lock process incarnation could not be verified", { cause: error });
@@ -197,7 +198,7 @@ export function createCodexRetainedDeliveryAuthorityV1(stateDirectory: string): 
     const path = lockPath(key);
     const owner = { pid: process.pid, nonce: randomUUID(), incarnation: linuxProcessIncarnation(process.pid) } satisfies LockOwner;
     const deadline = Date.now() + 10_000;
-    while (true) {
+    for (;;) {
       try {
         mkdirSync(path, { mode: 0o700 });
         writeFileSync(join(path, "owner.json"), JSON.stringify(owner), { encoding: "utf8", flag: "wx", mode: 0o600 });
@@ -209,17 +210,17 @@ export function createCodexRetainedDeliveryAuthorityV1(stateDirectory: string): 
         if (details.isSymbolicLink() || !details.isDirectory() || (details.mode & 0o077) !== 0) throw new Error("Codex retained lock path must be a private, non-symlink directory");
         let existing: LockOwner;
         try { existing = readOwner(join(path, "owner.json")); }
-        catch (ownerError) {
+        catch {
           if (Date.now() - statSync(path).mtimeMs > 1_000) { rmSync(path, { recursive: true }); syncDirectory(locks); continue; }
           if (Date.now() >= deadline) throw new Error("Codex retained delivery lock acquisition timed out");
-          const { promise: wait, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, 10); await wait; continue;
+          const { promise: wait, resolve } = Promise.withResolvers<undefined>(); setTimeout(resolve, 10); await wait; continue;
         }
         if (!ownerIsCurrent(existing)) {
           const reread = readOwner(join(path, "owner.json"));
           if (ownersMatch(reread, existing)) { rmSync(path, { recursive: true }); syncDirectory(locks); continue; }
         }
         if (Date.now() >= deadline) throw new Error("Codex retained delivery lock acquisition timed out");
-        const { promise: wait, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, 10); await wait;
+        const { promise: wait, resolve } = Promise.withResolvers<undefined>(); setTimeout(resolve, 10); await wait;
       }
     }
   };
@@ -310,7 +311,7 @@ export interface CodexNativeContributionRuntimeV1 {
   shutdown(): Promise<void>;
 }
 function attemptKey(binding: BoundAdapterOperationV1): string {
-  return `${binding.workspaceId}:${binding.runId}:${binding.taskId}:${binding.attemptId}:${binding.generation}`;
+  return `${binding.workspaceId}:${binding.runId}:${binding.taskId}:${binding.attemptId}:${String(binding.generation)}`;
 }
 const DELIVERY_PHASES: readonly CodexRetainedDeliveryPhaseV1[] = ["prepared", "publication:0", "publication:1", "receipt", "proposal", "decision-resume", "decision"];
 const publicationPhase = (step: WorkerReturnDeliveryStepV1): CodexRetainedDeliveryPhaseV1 => {
@@ -327,7 +328,7 @@ class CodexRetainedWorkerReturnDeliveryV1 implements WorkerReturnDeliveryAuthori
   constructor(private readonly retained: CodexRetainedDeliveryAuthorityV1, private readonly key: string) {}
   async perform<T>(step: WorkerReturnDeliveryStepV1, operation: () => Promise<T>): Promise<T> {
     const record = this.record();
-    if (hasCompleted(record, step)) return this.completed<T>(record, step);
+    if (hasCompleted(record, step)) return this.completed(record, step) as T;
     const result = await operation();
     const next = { ...record, phase: completedPhase(step) };
     if (step === "receipt") next.receiptDigest = result as string;
@@ -351,25 +352,25 @@ class CodexRetainedWorkerReturnDeliveryV1 implements WorkerReturnDeliveryAuthori
     if (record === undefined) throw new Error("Codex retained worker return is unavailable");
     return record;
   }
-  private completed<T>(record: CodexRetainedDeliveryV1, step: WorkerReturnDeliveryStepV1): T {
-    if (step === "receipt") { if (record.receiptDigest === null) throw new Error("Codex retained receipt digest is unavailable"); return record.receiptDigest as T; }
-    if (step === "proposal") return { proposalId: record.workerReturn.proposal.proposalId, proposalDigest: record.workerReturn.proposal.proposalDigest } as T;
-    if (step === "decision-subscription") { if (record.resumeToken === null) throw new Error("Codex retained decision subscription is unavailable"); return { resumeToken: record.resumeToken } as T; }
-    if (step === "decision") { if (record.resumeToken === null || record.decision === null) throw new Error("Codex retained decision is unavailable"); return { resumeToken: record.resumeToken, decision: record.decision } as T; }
-    return undefined as T;
+  private completed(record: CodexRetainedDeliveryV1, step: WorkerReturnDeliveryStepV1): unknown {
+    if (step === "receipt") { if (record.receiptDigest === null) throw new Error("Codex retained receipt digest is unavailable"); return record.receiptDigest; }
+    if (step === "proposal") return { proposalId: record.workerReturn.proposal.proposalId, proposalDigest: record.workerReturn.proposal.proposalDigest };
+    if (step === "decision-subscription") { if (record.resumeToken === null) throw new Error("Codex retained decision subscription is unavailable"); return { resumeToken: record.resumeToken }; }
+    if (step === "decision") { if (record.resumeToken === null || record.decision === null) throw new Error("Codex retained decision is unavailable"); return { resumeToken: record.resumeToken, decision: record.decision }; }
+    return undefined;
   }
 }
 function assertCanonicalTuple(record: CodexRetainedDeliveryV1, receipt: AttemptReceiptEnvelopeV1, outputDigest: string, evidenceDigest: string): void {
   const publications = record.workerReturn.publications;
   if (record.workerReturn.receipt.receiptDigest !== receipt.receiptDigest || publications.length !== 2 || publications[0]?.kind !== "artifact" || publications[0].digest !== outputDigest || publications[1]?.kind !== "evidence" || publications[1].digest !== evidenceDigest) throw new Error("replayed Codex worker return substituted the canonical output/evidence tuple");
 }
-type CodexThreadClaimStateV1 = { readonly attemptCapabilityReferences: readonly string[]; readonly primaryAttemptCapabilityReference: string; readonly sessionId: string | null };
-type CodexSessionBindingStateV1 = {
+interface CodexThreadClaimStateV1 { readonly attemptCapabilityReferences: readonly string[]; readonly primaryAttemptCapabilityReference: string; readonly sessionId: string | null }
+interface CodexSessionBindingStateV1 {
   readonly schemaVersion: "CodexSessionBindingStateV1";
   readonly sessions: Readonly<Record<string, string>>;
   readonly branches: Readonly<Record<string, CodexNativeBranchRegistrationV1>>;
   readonly claims: Readonly<Record<string, CodexThreadClaimStateV1>>;
-};
+}
 function createSessionBindingStore(directory: string | undefined) {
   if (directory === undefined || !isAbsolute(directory)) throw new Error("Codex session binding state directory must be absolute");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -379,7 +380,7 @@ function createSessionBindingStore(directory: string | undefined) {
     try {
       const details = lstatSync(path);
       if (details.isSymbolicLink() || !details.isFile() || (details.mode & 0o077) !== 0) throw new Error("Codex session binding state must be a private regular file");
-      const parsed = JSON.parse(readFileSync(path, "utf8")) as CodexSessionBindingStateV1;
+      const parsed = JSON.parse(readFileSync(path, "utf8")) as Omit<CodexSessionBindingStateV1, "schemaVersion" | "sessions" | "branches" | "claims"> & { schemaVersion: unknown; sessions: CodexSessionBindingStateV1["sessions"] | null; branches: CodexSessionBindingStateV1["branches"] | null; claims?: CodexSessionBindingStateV1["claims"] };
       if (parsed.schemaVersion !== "CodexSessionBindingStateV1" || parsed.sessions === null || parsed.branches === null) throw new Error("Codex session binding state is invalid");
       return { ...parsed, claims: parsed.claims ?? {} };
     } catch (error) {
@@ -388,7 +389,7 @@ function createSessionBindingStore(directory: string | undefined) {
     }
   };
   const publish = (state: CodexSessionBindingStateV1) => {
-    const temporary = join(root, `.session-bindings.${process.pid}.${randomUUID()}.tmp`);
+    const temporary = join(root, `.session-bindings.${String(process.pid)}.${randomUUID()}.tmp`);
     const descriptor = openSync(temporary, "wx", 0o600);
     try { writeFileSync(descriptor, JSON.stringify(state), "utf8"); fsyncSync(descriptor); } finally { closeSync(descriptor); }
     renameSync(temporary, path);
@@ -414,7 +415,8 @@ function readActiveCodexKillSwitch(path: string): boolean {
 }
 
 export function createCodexNativeContributionRuntimeV1(registrations: readonly CodexWorkerReturnRegistrationV1[], options: CodexNativeContributionRuntimeOptionsV1): CodexNativeContributionRuntimeV1 {
-  if (options?.retained === undefined) throw new Error("Codex native contribution runtime requires a durable retained delivery authority");
+  const suppliedOptions = options as Partial<CodexNativeContributionRuntimeOptionsV1> | undefined;
+  if (suppliedOptions?.retained === undefined) throw new Error("Codex native contribution runtime requires a durable retained delivery authority");
   for (const registration of registrations) {
     const client = registration.authority.client as WorkerReturnClientV1 & Record<string, unknown>;
     if (typeof client.startDecisionSubscription !== "function" || typeof client.observeDecision !== "function") throw new Error("Codex native contribution runtime requires resumable startDecisionSubscription and observeDecision authority methods");
@@ -437,7 +439,7 @@ export function createCodexNativeContributionRuntimeV1(registrations: readonly C
     if (options.killSwitchPath === undefined) return;
     if (readActiveCodexKillSwitch(options.killSwitchPath)) throw new Error("Codex native contribution kill switch is active");
   };
-  const persistSessions = () => sessionStore.publish({ schemaVersion: "CodexSessionBindingStateV1", sessions: Object.fromEntries(sessions), branches: Object.fromEntries(branchesByEntry), claims: Object.fromEntries(claims) });
+  const persistSessions = () => { sessionStore.publish({ schemaVersion: "CodexSessionBindingStateV1", sessions: Object.fromEntries(sessions), branches: Object.fromEntries(branchesByEntry), claims: Object.fromEntries(claims) }); };
   for (const registration of registrations) {
     const reference = parseCredentialReferenceV1({ schemaVersion: "1", kind: "host-reference", reference: registration.capabilityReference, scope: { workspaceId: registration.binding.workspaceId, adapterId: CODEX_ADAPTER_ID, purpose: "codex-attempt-return" } });
     if (reference.reference !== registration.binding.attemptCapability) throw new Error("Codex attempt capability reference does not match immutable binding");
@@ -456,7 +458,7 @@ export function createCodexNativeContributionRuntimeV1(registrations: readonly C
         const receipt = await registration.adapter.collectReceipt(registration.binding);
         if (receipt.outputDigest !== output.digest) throw new Error("Codex provider output digest does not match the bound attempt receipt");
         if (receipt.evidence.length !== 1 || receipt.evidence[0]?.digest !== evidence.digest) throw new Error("Codex provider evidence digest does not match the bound attempt receipt");
-        if (receipt.evidence[0]?.mediaType !== evidence.mediaType || receipt.evidence[0]?.size !== evidence.byteLength) throw new Error("Codex provider evidence descriptor does not match the bound attempt receipt");
+        if (receipt.evidence[0].mediaType !== evidence.mediaType || receipt.evidence[0].size !== evidence.byteLength) throw new Error("Codex provider evidence descriptor does not match the bound attempt receipt");
         let record = retained.load(key);
         if (record === undefined) {
           const proposal = await registration.authority.sealProposal(registration.binding, receipt);
@@ -485,7 +487,7 @@ export function createCodexNativeContributionRuntimeV1(registrations: readonly C
         sessions.set(sessionId, input.attemptCapabilityReference);
         const delivered = await this.deliver(input.attemptCapabilityReference, input.output, input.evidence, sessionId);
         const { binding, receipt, proposal } = delivered.workerReturn;
-        results.push({ workspaceId: binding.workspaceId, runId: binding.runId, taskId: binding.taskId, attemptId: binding.attemptId, generation: binding.generation, decision: delivered.delivery.decision, receiptDigest: receipt.receiptDigest, proposalDigest: proposal.proposalDigest, outputDigest: receipt.outputDigest!, evidenceDigests: receipt.evidence.map(item => item.digest) });
+        results.push({ workspaceId: binding.workspaceId, runId: binding.runId, taskId: binding.taskId, attemptId: binding.attemptId, generation: binding.generation, decision: delivered.delivery.decision, receiptDigest: receipt.receiptDigest, proposalDigest: proposal.proposalDigest, outputDigest: input.output.digest, evidenceDigests: receipt.evidence.map(item => item.digest) });
         if (delivered.delivery.decision === "accepted") {
           const authority = active.get(input.attemptCapabilityReference)?.authority;
           if (canonicalAcceptedAdvance !== null || authority?.canonicalAcceptedAdvance === undefined) throw new Error("Codex native worker return batch lacks one authoritative accepted canonical advance");
@@ -512,15 +514,15 @@ export function createCodexNativeContributionRuntimeV1(registrations: readonly C
       return context;
     },
     sessionForThreadClaim(claim: string) { assertEnabled(); const value = claims.get(claim); if (value?.sessionId === null || value === undefined) throw new Error("Codex thread claim is unknown or unbound"); return value.sessionId; },
-    async state() { return { attemptKeys: registrations.map(registration => attemptKey(registration.binding)).filter(key => retained.load(key) !== undefined) }; },
-    async contextForAttempt() { if (revoked || selectedCapability === null) return null; const context = contexts.get(selectedCapability); return context === undefined ? null : structuredClone(context); },
+    async state() { return Promise.resolve({ attemptKeys: registrations.map(registration => attemptKey(registration.binding)).filter(key => retained.load(key) !== undefined) }); },
+    async contextForAttempt() { if (revoked || selectedCapability === null) return Promise.resolve(null); const context = contexts.get(selectedCapability); return Promise.resolve(context === undefined ? null : structuredClone(context)); },
     async registerSessionStart(start: CodexNativeSessionStartV1) {
       assertEnabled();
       if (start.sessionId.length === 0) throw new Error("invalid Codex session start");
       const existing = sessions.get(start.sessionId);
       if (existing !== undefined) {
         if (start.source === "startup" || (start.previousSessionId !== undefined && sessions.get(start.previousSessionId) !== existing)) throw new Error("Codex session binding substitution rejected");
-        const context = contexts.get(existing); if (context === undefined) throw new Error("Codex session references an unknown attempt capability"); return structuredClone(context);
+        const context = contexts.get(existing); if (context === undefined) throw new Error("Codex session references an unknown attempt capability"); return Promise.resolve(structuredClone(context));
       }
       let capability: string | undefined;
       if (start.source === "startup") capability = selectedCapability ?? undefined;
@@ -534,9 +536,10 @@ export function createCodexNativeContributionRuntimeV1(registrations: readonly C
         if (start.branchEntryId !== undefined) throw new Error("Codex branch entry id is only valid for a fork session");
         if (start.previousSessionId !== undefined) capability = sessions.get(start.previousSessionId);
       }
-      if (capability === undefined || !active.has(capability) || !contexts.has(capability)) throw new Error("Codex session source is unknown or unbound");
+      const context = capability === undefined ? undefined : contexts.get(capability);
+      if (capability === undefined || !active.has(capability) || context === undefined) throw new Error("Codex session source is unknown or unbound");
       sessions.set(start.sessionId, capability); selectedCapability = capability; persistSessions();
-      return structuredClone(contexts.get(capability)!);
+      return Promise.resolve(structuredClone(context));
     },
     registerBranch(registration: CodexNativeBranchRegistrationV1) {
       assertEnabled();
@@ -562,6 +565,7 @@ export function createCodexNativeContributionRuntimeV1(registrations: readonly C
       const branch = branchesByEntry.get(entryId);
       if (branch === undefined) throw new Error("unknown Codex branch entry id");
       pendingBranch = branch;
+      return Promise.resolve();
     },
     async activateSession(previousSessionFile: string | null) {
       assertEnabled();
@@ -574,12 +578,12 @@ export function createCodexNativeContributionRuntimeV1(registrations: readonly C
         selectedCapability = mapped.attemptCapabilityReference;
       }
       const context = selectedCapability === null ? undefined : contexts.get(selectedCapability);
-      return context === undefined ? null : { forkPinDigest: context.binding.forkPinDigest };
+      return Promise.resolve(context === undefined ? null : { forkPinDigest: context.binding.forkPinDigest });
     },
     registerRevoker(next: () => Promise<void>) { if (revoker !== null) throw new Error("Codex native grant revoker is already registered"); revoker = next; },
     async revoke() { if (revoked) return; revoked = true; active.clear(); contexts.clear(); branchesByEntry.clear(); branchesBySession.clear(); sessions.clear(); claims.clear(); selectedCapability = null; pendingBranch = null; persistSessions(); const current = revoker; revoker = null; if (current !== null) await current(); else retained.close(); },
-    async sessionShutdown() { assertEnabled(); pendingBranch = null; },
-    async shutdown() { active.clear(); contexts.clear(); branchesByEntry.clear(); branchesBySession.clear(); sessions.clear(); claims.clear(); selectedCapability = null; pendingBranch = null; retained.close(); },
+    async sessionShutdown() { assertEnabled(); pendingBranch = null; return Promise.resolve(); },
+    async shutdown() { active.clear(); contexts.clear(); branchesByEntry.clear(); branchesBySession.clear(); sessions.clear(); claims.clear(); selectedCapability = null; pendingBranch = null; retained.close(); return Promise.resolve(); },
   });
 }
 
@@ -614,14 +618,14 @@ class CodexWorkerAdapterV1 implements WorkerAdapterV1 {
     this.#guard.assert(binding);
     const attempt = await this.#runtime.collect(this.#guard.binding) ?? this.#attempt;
     if (attempt === null) throw new Error("Codex native attempt receipt is unavailable");
-    return sealAttemptReceipt({ schemaVersion: "1", workspaceId: binding.workspaceId, runId: binding.runId, taskId: binding.taskId, attemptId: binding.attemptId, generation: binding.generation, attemptContextBindingDigest: binding.attemptContextBindingDigest, contextManifestCoreDigest: binding.contextManifestCoreDigest, forkPinDigest: binding.forkPinDigest, providerId: CODEX_PROVIDER_ID, providerOperationId: attempt.providerOperationId, providerIdempotencyKeyDigest: binding.providerIdempotencyKeyDigest, producerPrincipalId: this.#producerPrincipalId, producerGrantDigest: this.#producerGrantDigest, adapterId: CODEX_ADAPTER_ID, adapterVersion: CODEX_ADAPTER_VERSION, hostId: CODEX_HOST_ID, hostVersion: CODEX_HOST_VERSION, outcome: attempt.outcome, startedAt: attempt.startedAt, finishedAt: attempt.finishedAt, outputDigest: attempt.outputDigest, evidence: attempt.evidence, provenance: attempt.provenance, nonce: `${binding.attemptId}:${binding.generation}:${attempt.providerOperationId}` });
+    return sealAttemptReceipt({ schemaVersion: "1", workspaceId: binding.workspaceId, runId: binding.runId, taskId: binding.taskId, attemptId: binding.attemptId, generation: binding.generation, attemptContextBindingDigest: binding.attemptContextBindingDigest, contextManifestCoreDigest: binding.contextManifestCoreDigest, forkPinDigest: binding.forkPinDigest, providerId: CODEX_PROVIDER_ID, providerOperationId: attempt.providerOperationId, providerIdempotencyKeyDigest: binding.providerIdempotencyKeyDigest, producerPrincipalId: this.#producerPrincipalId, producerGrantDigest: this.#producerGrantDigest, adapterId: CODEX_ADAPTER_ID, adapterVersion: CODEX_ADAPTER_VERSION, hostId: CODEX_HOST_ID, hostVersion: CODEX_HOST_VERSION, outcome: attempt.outcome, startedAt: attempt.startedAt, finishedAt: attempt.finishedAt, outputDigest: attempt.outputDigest, evidence: attempt.evidence, provenance: attempt.provenance, nonce: `${binding.attemptId}:${String(binding.generation)}:${attempt.providerOperationId}` });
   }
 }
 
 export function createCodexAdapterV1(options: CodexAdapterOptionsV1): SecureWorkerAdapterV1 { return new SecureWorkerAdapterV1(options.binding, new CodexWorkerAdapterV1(options)); }
 export function codexDoctorV1(input: { readonly nativePackageVersion: string | null; readonly loaderDigest: string | null; readonly contributions: readonly { readonly name: string; readonly digest: string }[] }): DoctorProbeResultV1 {
   const observed = input.contributions.map(observedCodexContribution);
-  const contributionsMatch = observed.every(item => item !== null) && JSON.stringify(input.contributions) === JSON.stringify(CODEX_NATIVE_CONTRIBUTIONS.map(({ name, digest }) => ({ name, digest }))) && codexNativePackageDigestV1(observed as CodexNativeContributionDigestV1[]) === CODEX_NATIVE_PACKAGE_METADATA.packageDigest;
+  const contributionsMatch = observed.every(item => item !== null) && JSON.stringify(input.contributions) === JSON.stringify(CODEX_NATIVE_CONTRIBUTIONS.map(({ name, digest }) => ({ name, digest }))) && codexNativePackageDigestV1(observed) === CODEX_NATIVE_PACKAGE_METADATA.packageDigest;
   return parseDoctorProbeResultV1({ schemaVersion: "1", checks: [
     { code: "CODEX_NATIVE_VERSION", status: input.nativePackageVersion === CODEX_HOST_VERSION ? "ok" : "error", evidenceDigest: input.nativePackageVersion === null ? null : `version:${input.nativePackageVersion}` },
     { code: "Codex_EXTENSION_LOADER", status: input.loaderDigest === "sha256:a96f944d1a596dbfb7fdd84f482be5c50e34b04bb371126840d873e4ebf26902" ? "ok" : "error", evidenceDigest: input.loaderDigest },

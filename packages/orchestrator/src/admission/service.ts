@@ -31,7 +31,7 @@ import {
   type PresentedEvidenceV1,
   type SnapshotExpectationV1,
 } from "@horseness/policy";
-import { SQLiteAuthority, StoreConflictError } from "@horseness/store-sqlite";
+import { type SQLiteAuthority, StoreConflictError } from "@horseness/store-sqlite";
 import { authorizeAdmission, type AdmissionAuthorization, type AuthoritativeAdmissionAuthorization } from "../authorization/admission-authorization.js";
 import { loadRevision, type RevisionView } from "../revisions/revision-service.js";
 
@@ -87,7 +87,7 @@ function receiptMap(receipts: readonly AttemptReceiptEnvelopeV1[]): Map<string, 
   for (const receipt of receipts) { verifyAttemptReceipt(receipt); if (result.has(receipt.receiptDigest)) fail("RECEIPT_MISMATCH"); result.set(receipt.receiptDigest, receipt); }
   return result;
 }
-export interface AdmissionSealingAuthorityV1 { schemaVersion:"1"; observationCursor:CompositeCursorV1; fork:SealedForkPinV1; scope:DeltaAuthorityScopeV1; receipts:AttemptReceiptEnvelopeV1[]; pinnedPolicy:PolicySlotV1; evidence:Array<PresentedEvidenceV1 & {size:number;mediaType:string}> }
+export interface AdmissionSealingAuthorityV1 { schemaVersion:"1"; observationCursor:CompositeCursorV1; fork:SealedForkPinV1; scope:DeltaAuthorityScopeV1; receipts:AttemptReceiptEnvelopeV1[]; pinnedPolicy:PolicySlotV1; evidence:(PresentedEvidenceV1 & {size:number;mediaType:string})[] }
 export interface AdmissionCurrentAuthorityV1 { schemaVersion:"1"; evaluationObservationCursor:CompositeCursorV1; currentPolicy:PolicySlotV1; authorization:AuthoritativeAdmissionAuthorization; quota:{id:string;digest:string;available:boolean}; authenticatedApproverPrincipalId:string; authorityTime:string }
 function snapshotAt(authority:SQLiteAuthority, workspaceId:string, runId:string, sequence:number, name:string):JsonValue {
   const row=authority.db.prepare("SELECT envelope_hash,state_json FROM snapshots WHERE workspace_id=? AND stream_kind='run' AND stream_id=? AND sequence=? AND projection_name=? AND projection_version='1'").get(workspaceId,runId,sequence,name) as {envelope_hash:string;state_json:string}|undefined;
@@ -114,7 +114,7 @@ function loadAuthorities(authority:SQLiteAuthority, request:AdmissionRequestV1, 
   // Persisted snapshots are validated field-by-field below before their values are trusted.
   const historical=historicalValue as unknown as AdmissionSealingAuthorityV1;
   const current=currentValue as unknown as AdmissionCurrentAuthorityV1;
-  if(historical.schemaVersion!=="1"||current.schemaVersion!=="1"||!same(historical.observationCursor,sealing)||!same(current.evaluationObservationCursor,observed))fail("AUTHORITY_STATE_SUBSTITUTED");
+  if(historicalValue.schemaVersion!=="1"||currentValue.schemaVersion!=="1"||!same(historical.observationCursor,sealing)||!same(current.evaluationObservationCursor,observed))fail("AUTHORITY_STATE_SUBSTITUTED");
   verifyForkPin(historical.fork); if(historical.fork.forkPinDigest!==core.forkPinDigest)fail("FORK_PIN_MISMATCH");
   const recorded=new Set(authority.replay(core.workspaceId,"run",core.runId).filter(item=>item.envelope.sequence<=sealing.runSequence&&item.envelope.eventType==="AttemptReceiptRecordedV1").map(item=>(item.envelope.payload as {receiptDigest:string}).receiptDigest));
   for(const receipt of historical.receipts){verifyAttemptReceipt(receipt);if(!recorded.has(receipt.receiptDigest))fail("RECEIPT_MISMATCH");}
@@ -122,7 +122,7 @@ function loadAuthorities(authority:SQLiteAuthority, request:AdmissionRequestV1, 
   return {historical,current};
 }
 function validateRequest(request: AdmissionRequestV1, revision: RevisionView, historical:AdmissionSealingAuthorityV1, current:AdmissionCurrentAuthorityV1): { delta: DeltaResult; paths: string[]; snapshots:SnapshotExpectationV1; evaluationClock:EvaluationClockV1 } {
-  if (request.schemaVersion !== "1") fail("UNSUPPORTED_SCHEMA_VERSION");
+  if ((request as {schemaVersion:unknown}).schemaVersion !== "1") fail("UNSUPPORTED_SCHEMA_VERSION");
   verifyProposal(request.proposal);
   const core=request.proposal.core;
   const structural=applyDelta(revision.document,core.operations,{...historical.scope,workspaceId:core.workspaceId,runId:core.runId});
@@ -145,9 +145,9 @@ function validateRequest(request: AdmissionRequestV1, revision: RevisionView, hi
 }
 function existingTerminal(authority:SQLiteAuthority, request:AdmissionRequestV1, revision:RevisionView):AdmissionResultV1|null {
   const events=authority.replay(request.proposal.core.workspaceId,"run",request.proposal.core.runId);
-  const decisions=events.filter(item=>{const payload=item.envelope.payload;return item.envelope.eventType==="AdmissionDecisionRecordedV1"&&typeof payload==="object"&&payload!==null&&"proposalId" in payload&&payload.proposalId===request.proposal.proposalId;});
-  for(const decision of decisions){const payload=decision.envelope.payload;if(typeof payload!=="object"||payload===null||!("proposalDigest" in payload)||payload.proposalDigest!==request.proposal.proposalDigest)fail("PROPOSAL_IDENTITY_CONFLICT");}
-  const terminal=[...decisions].reverse().find(item=>{const payload=item.envelope.payload;return typeof payload==="object"&&payload!==null&&"state" in payload&&typeof payload.state==="string"&&["accepted","rejected","conflicted"].includes(payload.state);});
+  const decisions=events.filter(item=>{const payload:unknown=item.envelope.payload;return item.envelope.eventType==="AdmissionDecisionRecordedV1"&&typeof payload==="object"&&payload!==null&&"proposalId" in payload&&payload.proposalId===request.proposal.proposalId;});
+  for(const decision of decisions){const payload:unknown=decision.envelope.payload;if(typeof payload!=="object"||payload===null||!("proposalDigest" in payload)||payload.proposalDigest!==request.proposal.proposalDigest)fail("PROPOSAL_IDENTITY_CONFLICT");}
+  const terminal=[...decisions].reverse().find(item=>{const payload:unknown=item.envelope.payload;return typeof payload==="object"&&payload!==null&&"state" in payload&&typeof payload.state==="string"&&["accepted","rejected","conflicted"].includes(payload.state);});
   if(terminal===undefined)return null;
   const payload=terminal.envelope.payload as {state:"accepted"|"rejected"|"conflicted";provenanceDigest:string};
   return {schemaVersion:"1",state:payload.state,proposalId:request.proposal.proposalId,proposalDigest:request.proposal.proposalDigest,revision:revision.revision,stateHash:revision.stateHash,provenanceDigest:payload.provenanceDigest,deduplicated:true};
@@ -155,7 +155,7 @@ function existingTerminal(authority:SQLiteAuthority, request:AdmissionRequestV1,
 export class AdmissionService {
   constructor(private readonly authority: SQLiteAuthority) {}
   evaluateAndApply(request: AdmissionRequestV1): AdmissionResultV1 {
-    if(request===null||typeof request!=="object"||request.proposal===null||typeof request.proposal!=="object")fail("INVALID_ENVELOPE");
+    if((request as unknown)===null||typeof request!=="object"||(request.proposal as unknown)===null||typeof request.proposal!=="object")fail("INVALID_ENVELOPE");
     verifyProposal(request.proposal);
     const core=request.proposal.core; const revision=loadRevision(this.authority,core.workspaceId,core.runId); const prior=existingTerminal(this.authority,request,revision); if(prior!==null)return prior;
     const observed=currentCursor(this.authority,core.workspaceId,core.runId); const loaded=loadAuthorities(this.authority,request,observed);
@@ -166,15 +166,15 @@ export class AdmissionService {
     const conflict=delta.outcome==="accepted"?null:delta.reason;
     const evaluation=evaluateAdmission({schemaVersion:"1",proposalDigest:request.proposal.proposalDigest,proposalAuthorPrincipalId:core.authorPrincipalId,baseRevision:core.baseRevision,baseStateHash:core.baseStateHash,action:request.action,paths:validated.paths,version:request.version,pinnedPolicy:loaded.historical.pinnedPolicy,currentPolicy:loaded.current.currentPolicy,evidence:loaded.historical.evidence,snapshots:validated.snapshots,evaluationClock:validated.evaluationClock,approval:request.approval,preconditionConflict:conflict});
     let priorState:AdmissionTerminalState|undefined;
-    for(const item of [...this.authority.replay(core.workspaceId,"run",core.runId)].reverse()){const payload=item.envelope.payload;if(typeof payload==="object"&&payload!==null&&"proposalId" in payload&&payload.proposalId===request.proposal.proposalId&&"state" in payload&&typeof payload.state==="string"&&["accepted","rejected","conflicted","quarantined","approval_required"].includes(payload.state)){priorState=payload.state as AdmissionTerminalState;break;}}
+    for(const item of [...this.authority.replay(core.workspaceId,"run",core.runId)].reverse()){const payload:unknown=item.envelope.payload;if(typeof payload==="object"&&payload!==null&&"proposalId" in payload&&payload.proposalId===request.proposal.proposalId&&"state" in payload&&typeof payload.state==="string"&&["accepted","rejected","conflicted","quarantined","approval_required"].includes(payload.state)){priorState=payload.state as AdmissionTerminalState;break;}}
     const state:AdmissionTerminalState=request.action==="reject"&&priorState==="approval_required"?"rejected":evaluation.result;
     validateAdmissionTransition(priorState ?? "submitted", state);
     const resultingRevision=state==="accepted"?revision.revision+1:revision.revision; const resultingHash=state==="accepted"&&delta.outcome==="accepted"?delta.stateHash:revision.stateHash;
     const provenance:AdmissionProvenanceV1={schemaVersion:"1",proposalId:request.proposal.proposalId,proposalDigest:request.proposal.proposalDigest,decision:state,evaluation,observationCursor:observed,priorRevision:revision.revision,priorStateHash:revision.stateHash,resultingRevision,resultingStateHash:resultingHash,receiptDigests:[...core.receiptDigests].sort(),forkPinDigest:core.forkPinDigest,scopeDigest:core.deltaAuthorityScopeDigest,predecessorProposalDigest:core.predecessorProposalDigest};
     if(state==="accepted"&&delta.outcome!=="accepted")fail("STALE_BASE");
-    const workspaceEvents=this.authority.replay(core.workspaceId,"workspace",core.workspaceId); const workspaceHead=workspaceEvents.at(-1)!; const runEvents=this.authority.replay(core.workspaceId,"run",core.runId); const runHead=runEvents.at(-1)!;
+    const workspaceEvents=this.authority.replay(core.workspaceId,"workspace",core.workspaceId); const workspaceHead=workspaceEvents.at(-1) as HashedEventEnvelopeV1; const runEvents=this.authority.replay(core.workspaceId,"run",core.runId); const runHead=runEvents.at(-1) as HashedEventEnvelopeV1;
     const provenanceJson=canonicalJson(provenance as unknown as JsonValue);const provenanceDigest=domainDigest("horseness.admission-provenance.v1",provenance as unknown as JsonValue);const artifactDigest=domainDigestRaw(provenanceJson);
-    const priorDecision=[...runEvents].reverse().find(item=>{const payload=item.envelope.payload;return item.envelope.eventType==="AdmissionDecisionRecordedV1"&&typeof payload==="object"&&payload!==null&&"proposalId" in payload&&payload.proposalId===request.proposal.proposalId;});
+    const priorDecision=[...runEvents].reverse().find(item=>{const payload:unknown=item.envelope.payload;return item.envelope.eventType==="AdmissionDecisionRecordedV1"&&typeof payload==="object"&&payload!==null&&"proposalId" in payload&&payload.proposalId===request.proposal.proposalId;});
     const transition=request.action==="approve"||request.action==="reject"||request.action==="release"||request.action==="rebase"?request.action:"evaluate";
     const submitted=priorDecision===undefined?event({streamKind:"run",workspaceId:core.workspaceId,streamId:core.runId,sequence:runHead.envelope.sequence+1,prior:runHead.envelopeHash,type:"ProposalSubmittedV1",payload:{eventType:"ProposalSubmittedV1",workspaceId:core.workspaceId,runId:core.runId,proposalId:request.proposal.proposalId,proposalDigest:request.proposal.proposalDigest},commandId:request.commandId,principalId:core.authorPrincipalId}):null;
     const firstTransitionSequence=runHead.envelope.sequence+(submitted===null?1:2);const firstTransitionPrior=submitted?.envelopeHash??runHead.envelopeHash;

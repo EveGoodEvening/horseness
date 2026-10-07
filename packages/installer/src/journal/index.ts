@@ -116,8 +116,8 @@ function parseRawLine(line: string): InstallerJournalRecordV1 | InstallerJournal
 }
 
 function authenticateRaw(record: InstallerJournalRecordV1 | InstallerJournalRecordV0): void {
-  const { recordHash: _recordHash, ...core } = record;
-  if (installerSha256(`horseness.installer-journal-record\0${canonical(core)}`) !== record.recordHash) throw new InstallerJournalError("JOURNAL_HASH_MISMATCH");
+  const { recordHash, ...core } = record;
+  if (installerSha256(`horseness.installer-journal-record\0${canonical(core)}`) !== recordHash) throw new InstallerJournalError("JOURNAL_HASH_MISMATCH");
 }
 
 function upcast(record: InstallerJournalRecordV1 | InstallerJournalRecordV0): InstallerJournalRecordV1 {
@@ -150,7 +150,7 @@ interface JournalLockOwnerReadV1 {
 async function processIncarnation(processId: number): Promise<string> {
   if (process.platform !== "linux") throw new InstallerJournalError("JOURNAL_LOCK_LIVENESS_UNSUPPORTED");
   let stat: string;
-  try { stat = await readFile(`/proc/${processId}/stat`, "utf8"); }
+  try { stat = await readFile(`/proc/${String(processId)}/stat`, "utf8"); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new InstallerJournalError("JOURNAL_LOCK_OWNER_ABSENT");
     throw new InstallerJournalError("JOURNAL_LOCK_LIVENESS_UNVERIFIABLE");
@@ -207,7 +207,7 @@ export class InstallerJournal {
     return new InstallerJournal(root);
   }
 
-  private generationPath(generation: number): string { return join(this.root, `generation-${generation}.jsonl`); }
+  private generationPath(generation: number): string { return join(this.root, `generation-${String(generation)}.jsonl`); }
 
   async read(generation = 1): Promise<readonly InstallerJournalRecordV1[]> {
     let bytes: string;
@@ -218,8 +218,8 @@ export class InstallerJournal {
     const lines = bytes === "" ? [] : bytes.split("\n").filter((line) => line !== "");
     const result: InstallerJournalRecordV1[] = [];
     let previousHash = "0".repeat(64);
-    for (let index = 0; index < lines.length; index += 1) {
-      const raw = parseRawLine(lines[index] as string);
+    for (const [index, line] of lines.entries()) {
+      const raw = parseRawLine(line);
       authenticateRaw(raw);
       if (raw.generation !== generation || raw.sequence !== index + 1 || raw.previousHash !== previousHash) throw new InstallerJournalError("JOURNAL_CHAIN_MISMATCH");
       previousHash = raw.recordHash;
@@ -230,7 +230,7 @@ export class InstallerJournal {
 
   async append(payload: InstallerJournalPayloadV1, generation = 1): Promise<InstallerJournalRecordV1> {
     validatePayload(payload);
-    const lockPath = join(this.root, `.generation-${generation}.lock`);
+    const lockPath = join(this.root, `.generation-${String(generation)}.lock`);
     const owner: JournalLockOwnerV1 = Object.freeze({ schema: "horseness.installer-journal-lock-owner.v1", nonce: randomUUID(), processId: process.pid, processIncarnation: await processIncarnation(process.pid) });
     let acquired = false;
     const deadline = Date.now() + 5_000;
@@ -263,6 +263,15 @@ export class InstallerJournal {
       }
     }
     if (!acquired) throw new InstallerJournalError("JOURNAL_APPEND_LOCK_TIMEOUT");
+    const releaseLock = async (): Promise<void> => {
+      const current = await readLockOwner(lockPath);
+      if (!sameLockOwner(current.owner, owner)) throw new InstallerJournalError("JOURNAL_LOCK_OWNER_CHANGED");
+      const released = `${lockPath}.released-${owner.nonce}`;
+      await rename(lockPath, released);
+      await fsyncDirectory(this.root);
+      await rm(released, { recursive: true });
+      await fsyncDirectory(this.root);
+    };
     try {
       const records = await this.read(generation);
       const core = {
@@ -274,7 +283,7 @@ export class InstallerJournal {
       };
       const record: InstallerJournalRecordV1 = Object.freeze({ ...core, recordHash: installerSha256(`horseness.installer-journal-record\0${rawCore(core)}`) });
       const path = this.generationPath(generation);
-      const temp = `${path}.append-${process.pid}-${Date.now()}`;
+      const temp = `${path}.append-${String(process.pid)}-${String(Date.now())}`;
       let existing = "";
       try { existing = await readFile(path, "utf8"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       const handle = await open(temp, "wx", 0o600);
@@ -283,13 +292,7 @@ export class InstallerJournal {
       await fsyncDirectory(dirname(path));
       return record;
     } finally {
-      const current = await readLockOwner(lockPath);
-      if (!sameLockOwner(current.owner, owner)) throw new InstallerJournalError("JOURNAL_LOCK_OWNER_CHANGED");
-      const released = `${lockPath}.released-${owner.nonce}`;
-      await rename(lockPath, released);
-      await fsyncDirectory(this.root);
-      await rm(released, { recursive: true });
-      await fsyncDirectory(this.root);
+      await releaseLock();
     }
   }
 }

@@ -77,17 +77,17 @@ function fail(code: string): never { throw new DomainError(code); }
 function same(left: unknown, right: unknown): boolean { return canonicalJson(left as JsonValue) === canonicalJson(right as JsonValue); }
 
 function authenticate(capability: ForkAuthorityCapabilityV1): ForkAuthoritySnapshotIdentitiesV1 {
-  if (!forkAuthorityCapabilities.has(capability) || capability[forkAuthorityCapability] !== true) fail("FORK_AUTHORITY_UNAUTHENTICATED");
+  if (!forkAuthorityCapabilities.has(capability) || (capability[forkAuthorityCapability] as unknown) !== true) fail("FORK_AUTHORITY_UNAUTHENTICATED");
   const context = capability.context;
   const { source, authorization } = context;
-  if (source.schemaVersion !== "1" || authorization.schemaVersion !== "1") fail("UNSUPPORTED_SCHEMA_VERSION");
+  if ((source.schemaVersion as unknown) !== "1" || (authorization.schemaVersion as unknown) !== "1") fail("UNSUPPORTED_SCHEMA_VERSION");
   try {
     assertObservationCursorV1(source.observationCursor);
     assertObservationCursorV1(authorization.observationCursor);
     assertContextVersionV1(source.contextVersion);
     assertContextVersionV1(authorization.contextVersion);
   } catch { fail("FORK_AUTHORITY_CURSOR_INVALID"); }
-  if (source.observationCursor.kind !== "composite" || authorization.observationCursor.kind !== "composite") fail("FORK_AUTHORITY_CURSOR_INVALID");
+  if ((source.observationCursor.kind as unknown) !== "composite" || (authorization.observationCursor.kind as unknown) !== "composite") fail("FORK_AUTHORITY_CURSOR_INVALID");
   if (!same(source.contextVersion.observationCursor, source.observationCursor) || !same(authorization.contextVersion.observationCursor, authorization.observationCursor)) fail("CONTEXT_VERSION_MISMATCH");
   if (source.workspaceId !== authorization.workspaceId || source.runId !== authorization.runId ||
       source.observationCursor.workspaceId !== source.workspaceId || source.observationCursor.runId !== source.runId ||
@@ -98,7 +98,8 @@ function authenticate(capability: ForkAuthorityCapabilityV1): ForkAuthoritySnaps
   if (authorization.pinnedPolicyDigest !== source.pinnedPolicyDigest) fail("FORK_PINNED_POLICY_SUBSTITUTED");
   if (!authorization.currentPolicyDigest) fail("FORK_CURRENT_POLICY_INVALID");
   if (!authorization.quotaId || !authorization.quotaDigest || !authorization.quotaAvailable) fail("FORK_QUOTA_UNAVAILABLE");
-  const { expectedActiveForkPinDigest: _casExpectation, ...authenticatedAuthorization } = authorization;
+  const authenticatedAuthorization = { ...authorization };
+  delete (authenticatedAuthorization as Partial<typeof authorization>).expectedActiveForkPinDigest;
   return {
     sourceSnapshotDigest: domainDigest("horseness.fork-source-snapshot.v1", source as unknown as JsonValue),
     authorizationSnapshotDigest: domainDigest("horseness.fork-authorization-snapshot.v1", authenticatedAuthorization as unknown as JsonValue),
