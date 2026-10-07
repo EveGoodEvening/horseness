@@ -10,8 +10,6 @@ if (requested.length !== EXPECTED_COMMANDS.length || requested.some((command, in
 const root = resolve(import.meta.dirname, "../..");
 const temporaryRoot = mkdtempSync(join(tmpdir(), "horseness-cli-lifecycle-"));
 const deployRoot = join(temporaryRoot, "cli");
-const deployed = spawnSync("corepack", ["pnpm", "--config.node-linker=hoisted", "--config.strict-peer-dependencies=false", "--filter", "@horseness/cli", "deploy", "--prod", "--legacy", deployRoot], { cwd: root, encoding: "utf8", env: process.env });
-if (deployed.status !== 0) throw new Error(`CLI pack failed: ${deployed.stderr}\n${deployed.stdout}`);
 const cli = join(deployRoot, "bin", "horseness.mjs");
 const bootstrap = resolve(root, "apps/bootstrap/dist/horseness-bootstrap.mjs");
 const baseEnvelope = JSON.parse(readFileSync(resolve(root, "apps/bootstrap/generated/fixture-release.json"), "utf8"));
@@ -39,6 +37,7 @@ const rollback = releaseVariant("2.0.0", 23, downgrade.digest);
 const v3 = releaseVariant("3.0.0", 24, rollback.digest);
 const workspace = join(temporaryRoot, "workspace");
 const home = join(temporaryRoot, "home");
+const daemonRoot = join(temporaryRoot, "daemon");
 const environment = { ...process.env, HOME: home, PI_CODING_AGENT_HOME: join(home, ".pi", "agent"), OMP_HOME: join(home, ".omp"), CLAUDE_CONFIG_DIR: join(home, ".claude"), CODEX_HOME: join(home, ".codex"), HORSENESS_BOOTSTRAP_EXECUTABLE: bootstrap };
 function invoke(command, release, extra = [], expected = 0) {
   const args = [cli, command, "--manifest", release.path, "--workspace", workspace, "--host", "pi", "--scope", "user", "--accept-executable-risk", release.digest, "--json", ...extra];
@@ -47,6 +46,13 @@ function invoke(command, release, extra = [], expected = 0) {
   const output = JSON.parse(result.stdout); if (output.command !== command || output.ok !== (expected === 0)) throw new Error(`${command} output mismatch: ${result.stdout}`); return output.data;
 }
 try {
+  const deployed = spawnSync("corepack", ["pnpm", "--config.node-linker=hoisted", "--config.strict-peer-dependencies=false", "--filter", "@horseness/cli", "deploy", "--prod", "--legacy", deployRoot], { cwd: root, encoding: "utf8", env: process.env, timeout: 120_000 });
+  if (deployed.status !== 0) throw new Error(`CLI pack failed: ${deployed.stderr}\n${deployed.stdout}`);
+  if (!environment.HORSENESS_DAEMON_EXECUTABLE) {
+    const daemon = spawnSync("corepack", ["pnpm", "--config.node-linker=hoisted", "--config.strict-peer-dependencies=false", "--filter", "@horseness/daemon", "deploy", "--prod", "--legacy", daemonRoot], { cwd: root, encoding: "utf8", env: process.env, timeout: 120_000 });
+    if (daemon.status !== 0) throw new Error(`Daemon pack failed: ${daemon.stderr}\n${daemon.stdout}`);
+    environment.HORSENESS_DAEMON_EXECUTABLE = join(daemonRoot, "bin", "horseness-daemon.mjs");
+  }
   const installed = invoke("install", v1, ["--create-workspace"]); if (installed.operation !== "install") throw new Error("install did not mutate real state");
   if (invoke("upgrade", v2).releaseManifestDigest !== v2.digest) throw new Error("upgrade did not activate v2");
   if (invoke("downgrade", downgrade).releaseManifestDigest !== downgrade.digest) throw new Error("downgrade did not activate older version under newer signed sequence");
@@ -60,6 +66,6 @@ try {
   const removed = invoke("uninstall", v3); if (!Array.isArray(removed.removed) || !removed.removed.includes("pi")) throw new Error("uninstall did not remove contribution");
   process.stdout.write(`CLI lifecycle blackbox passed for ${requested.length} packed commands\n`);
 } finally {
-  try { const endpoint = JSON.parse(readFileSync(join(workspace, ".horseness", "daemon-endpoint.v1.json"), "utf8")); process.kill(endpoint.processId, "SIGTERM"); } catch {}
+  spawnSync(process.execPath, [cli, "stop", "--workspace-path", workspace, "--json"], { cwd: root, env: environment, encoding: "utf8", timeout: 20_000 });
   rmSync(temporaryRoot, { recursive: true, force: true });
 }

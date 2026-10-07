@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { attemptContextBindingDigest, contextManifestCoreDigest, domainDigest, emptyTaskExecutionProjectionV1, parseTaskExecutionEventV1, parseTaskExecutionProfileV1, parseTaskPlanOutputV1, reduceTaskExecutionV1, resolveTask, sealAttemptReceipt, sealDependencyJoinSnapshot, sealForkPin, sealTaskPlanV1, derivePlanAdoptionV1, taskContractDigestV2, taskExecutionProfileDigest, taskWorkflowGraphDigestV1, assertTaskWorkflowLaunchV1, assertTaskWorkflowAdoptionV1, deterministicReplay, sealEventEnvelope, type HashedEventEnvelopeV1, type TaskContractV2, type TaskExecutionPreparedDataV1, type TaskExecutionProfileV1, type CompositeCursorV1 } from "../src/index.js";
+import { deriveSchedulability, evaluateDependencies, type DependencyOutcomeV1, type TaskLifecycle, type TaskResolution } from "../src/index.js";
 
 const cursor: CompositeCursorV1 = {schemaVersion:"1",kind:"composite",workspaceId:"ws",runId:"run",workspaceSequence:1,workspaceEnvelopeHash:"wh",workspaceContextEpoch:0,runSequence:1,runEnvelopeHash:"rh",runContextEpoch:0};
 const version = {schemaVersion:"1" as const,kind:"composite" as const,workspaceContextEpoch:0,runContextEpoch:0,observationCursor:cursor};
@@ -222,4 +223,124 @@ void test("pre-handoff abort resolves atomically with workflow stop and never cr
   assert.deepEqual(replay.operational.execution.aborted,{"attempt:1":{reasonCode:"AUTHORIZATION_REVOKED",eventSequence:7}});
   assert.deepEqual(replay.operational.execution.receipts,{});
   assert.equal((replay.operational.execution.attempts["attempt:1"] ?? assert.fail("Expected fixture value")).state,"cancelled");
+});
+
+const branchingPlanOutput = {tasks:[
+  {key:"a",title:"a",instructions:"Build A",acceptanceCriteria:["A works"],dependsOn:[]},
+  {key:"b",title:"b",instructions:"Build B",acceptanceCriteria:["B works"],dependsOn:[]},
+  {key:"c",title:"c",instructions:"Join A and B",acceptanceCriteria:["C works"],dependsOn:["a","b"]},
+  {key:"d",title:"d",instructions:"Extend A",acceptanceCriteria:["D works"],dependsOn:["a"]},
+  {key:"e",title:"e",instructions:"Join C and D",acceptanceCriteria:["E works"],dependsOn:["c","d"]},
+  {key:"f",title:"f",instructions:"Extend B",acceptanceCriteria:["F works"],dependsOn:["b"]},
+]};
+
+void test("multi-root diamond adoption preserves every dependency and attaches only sinks to the objective",()=>{
+  const plan=sealTaskPlanV1("root",taskContractDigestV2(contract),branchingPlanOutput);
+  const before=structuredClone(plan);
+  const adoption=derivePlanAdoptionV1(plan);
+  const names=new Map(adoption.contracts.map(task=>[task.taskId,task.title]));
+  names.set("root","root");
+  assert.deepEqual(adoption.edges.map(edge=>`${names.get(edge.sourceTaskId)}->${names.get(edge.dependentTaskId)}`).sort(),
+    ["a->c","a->d","b->c","b->f","c->e","d->e","e->root","f->root"]);
+  assert.equal(new Set(adoption.edges.map(edge=>edge.edgeId)).size,8);
+  for(const [index,task] of adoption.contracts.entries()){
+    const item=branchingPlanOutput.tasks[index] ?? assert.fail("Missing plan task");
+    assert.deepEqual(task,{schemaVersion:"2",taskId:task.taskId,title:item.title,instructions:item.instructions,acceptanceCriteria:item.acceptanceCriteria,kind:"work",sourceTaskId:"root",completionPolicy:{schemaVersion:"1",kind:"predicate",predicate:{kind:"receipt-only"}}});
+  }
+  for(const edge of adoption.edges){
+    assert.equal(edge.edgeType,"requires_success");
+    assert.equal(edge.releasePredicate,"task-resolution");
+    assert.equal(edge.propagateCancellation,true);
+  }
+  let source=reduceTaskExecutionV1(emptyTaskExecutionProjectionV1(),{...base,eventType:"TaskCreatedV2",contract},1);
+  source={...source,plans:{[plan.planDigest]:plan}};
+  const snapshot=structuredClone(source);
+  const adopted=reduceTaskExecutionV1(source,{...base,eventType:"TaskPlanAdoptedV1",taskId:"root",planDigest:plan.planDigest},2);
+  assert.deepEqual(adopted.edges,adoption.edges);
+  assert.deepEqual(adopted.adopted[plan.planDigest],adoption.contracts.map(task=>task.taskId));
+  assert.deepEqual(adopted.lifecycles,Object.fromEntries(["root",...adoption.contracts.map(task=>task.taskId)].map(id=>[id,"draft"])));
+  assert.deepEqual(source,snapshot);
+  assert.deepEqual(plan,before);
+});
+
+void test("branching dependency frontiers release only on success and report cancellation separately",()=>{
+  const adoption=derivePlanAdoptionV1(sealTaskPlanV1("root",taskContractDigestV2(contract),branchingPlanOutput));
+  const names=new Map(adoption.contracts.map(task=>[task.taskId,task.title]));
+  names.set("root","root");
+  const evaluate=(name:string,resolutions:Readonly<Record<string,TaskResolution>>)=>{
+    const edges=adoption.edges.filter(edge=>names.get(edge.dependentTaskId)===name);
+    const outcomes=new Map<string,DependencyOutcomeV1 & {resolution:TaskResolution}>();
+    for(const edge of edges){
+      const resolution=resolutions[names.get(edge.sourceTaskId) ?? assert.fail("Missing source")];
+      if(resolution) outcomes.set(edge.edgeId,{edgeId:edge.edgeId,edgeType:edge.edgeType,sourceTaskId:edge.sourceTaskId,taskResolutionEventSequence:10,taskResolutionDigest:`resolution-${edge.sourceTaskId}`,winningGeneration:resolution==="succeeded"?1:null,resolution});
+    }
+    return evaluateDependencies(edges,outcomes);
+  };
+  const frontier=(resolutions:Readonly<Record<string,TaskResolution>>)=>[...names.values()].filter(name=>{
+    const dependencies=evaluate(name,resolutions);
+    const lifecycle:TaskLifecycle=resolutions[name] ?? "active";
+    return deriveSchedulability({lifecycle,contractValid:true,dependenciesSatisfied:dependencies.satisfied,hasUnknownDependency:dependencies.unknown,cancellationPropagated:dependencies.cancellationPropagated,authorizationAllowed:true,quotaAllowed:true,liveAttempt:false,unknownOutcome:false})==="ready";
+  }).sort();
+  assert.deepEqual(frontier({}),["a","b"]);
+  assert.deepEqual(frontier({a:"succeeded"}),["b","d"]);
+  assert.deepEqual(frontier({a:"succeeded",b:"succeeded"}),["c","d","f"]);
+  assert.deepEqual(frontier({a:"succeeded",b:"succeeded",c:"succeeded"}),["d","f"]);
+  assert.deepEqual(frontier({a:"succeeded",b:"succeeded",c:"succeeded",d:"succeeded"}),["e","f"]);
+  assert.deepEqual(frontier({a:"succeeded",b:"succeeded",c:"succeeded",d:"succeeded",e:"succeeded"}),["f"]);
+  assert.deepEqual(frontier({a:"succeeded",b:"succeeded",c:"succeeded",d:"succeeded",e:"succeeded",f:"succeeded"}),["root"]);
+  assert.deepEqual(evaluate("c",{a:"failed"}),{satisfied:false,unknown:true,cancellationPropagated:false,reasonCodes:["DEPENDENCY_UNKNOWN","DEPENDENCY_UNSATISFIED"]});
+  assert.deepEqual(evaluate("c",{a:"cancelled",b:"succeeded"}),{satisfied:false,unknown:false,cancellationPropagated:true,reasonCodes:["CANCELLATION_PROPAGATED","DEPENDENCY_UNSATISFIED"]});
+  assert.deepEqual(frontier({a:"failed",b:"succeeded"}),["f"]);
+  assert.deepEqual(frontier({a:"cancelled",b:"succeeded"}),["f"]);
+  assert.deepEqual(frontier({a:"succeeded",b:"succeeded",c:"succeeded",d:"succeeded",e:"failed",f:"succeeded"}),[]);
+  assert.deepEqual(frontier({a:"succeeded",b:"succeeded",c:"succeeded",d:"succeeded",e:"cancelled",f:"succeeded"}),[]);
+});
+
+void test("planner graph size accepts exact endpoints and rejects adjacent out-of-range sizes",()=>{
+  const tasks=Array.from({length:32},(_,index)=>({key:String(index),title:`Task ${String(index)}`,instructions:"Perform work",acceptanceCriteria:["Work complete"],dependsOn:index===0?[]:[String(index-1)]}));
+  assert.deepEqual(parseTaskPlanOutputV1({tasks:tasks.slice(0,1)}),{tasks:tasks.slice(0,1)});
+  assert.deepEqual(parseTaskPlanOutputV1({tasks}),{tasks});
+  const adoption=derivePlanAdoptionV1(sealTaskPlanV1("root",taskContractDigestV2(contract),{tasks}));
+  assert.equal(adoption.contracts.length,32);
+  assert.equal(adoption.edges.length,32);
+  assert.deepEqual(adoption.edges.filter(edge=>edge.dependentTaskId==="root").map(edge=>edge.sourceTaskId),[adoption.contracts[31]?.taskId]);
+  assert.throws(()=>parseTaskPlanOutputV1({tasks:[]}),/PLAN_INVALID/);
+  assert.throws(()=>parseTaskPlanOutputV1({tasks:[...tasks,{...tasks[0],key:"32"}]}),/PLAN_INVALID/);
+});
+
+void test("objective preparation requires both adopted sink resolutions, not terminal lifecycles or failed sinks",()=>{
+  const plan=sealTaskPlanV1("root",taskContractDigestV2(contract),branchingPlanOutput);
+  let state=reduceTaskExecutionV1(emptyTaskExecutionProjectionV1(),{...base,eventType:"TaskCreatedV2",contract},1);
+  state=reduceTaskExecutionV1({...state,plans:{[plan.planDigest]:plan}},{...base,eventType:"TaskPlanAdoptedV1",taskId:"root",planDigest:plan.planDigest},2);
+  state=reduceTaskExecutionV1(state,{...base,eventType:"TaskActivatedV1",taskId:"root"},3);
+  const sinks=state.edges.filter(edge=>edge.dependentTaskId==="root");
+  const resolutionFor=(taskId:string,outcome:TaskResolution)=>resolveTask({taskId,generations:[{attemptId:`attempt-${taskId}`,generation:1,state:outcome,bindingDigest:"binding",idempotencyKeyDigest:"key",providerHandle:"handle",terminalEventSequence:4,findingCodes:[]}],retryPolicyDigest:"no-retry",retryPermitted:false,cancellationRequested:outcome==="cancelled",observationCursor:cursor}) ?? assert.fail("Expected terminal resolution");
+  const resolutions=Object.fromEntries(sinks.map(edge=>[edge.sourceTaskId,resolutionFor(edge.sourceTaskId,"succeeded")]));
+  const p=prepared();
+  const join=sealDependencyJoinSnapshot({...p.join,dependencies:sinks.map(edge=>({edgeId:edge.edgeId,edgeType:edge.edgeType,sourceTaskId:edge.sourceTaskId,taskResolutionEventSequence:4,taskResolutionDigest:`resolution-${edge.sourceTaskId}`,winningGeneration:1}))});
+  const forkPin=sealForkPin({...p.forkPin.core,dependencyJoinSnapshotDigest:join.digest});
+  const manifest={...p.manifest,forkPinDigest:forkPin.forkPinDigest};
+  const bound={...p,join:join.core,forkPin,manifest,binding:{...p.binding,forkPinDigest:forkPin.forkPinDigest,contextManifestCoreDigest:contextManifestCoreDigest(manifest)}};
+  const event={...base,eventType:"TaskExecutionPreparedV1" as const,prepared:bound};
+  const before=structuredClone(state);
+  assert.throws(()=>reduceTaskExecutionV1(state,event,5),/TASK_NOT_READY/);
+  const first=sinks[0] ?? assert.fail("Missing first sink");
+  const second=sinks[1] ?? assert.fail("Missing second sink");
+  assert.throws(()=>reduceTaskExecutionV1({...state,resolutions:{[first.sourceTaskId]:resolutions[first.sourceTaskId] ?? assert.fail("Missing resolution")}},event,5),/TASK_NOT_READY/);
+  for(const outcome of ["failed","cancelled"] as const){
+    const blocked={...state,resolutions:{...resolutions,[second.sourceTaskId]:resolutionFor(second.sourceTaskId,outcome)}};
+    const snapshot=structuredClone(blocked);
+    assert.throws(()=>reduceTaskExecutionV1(blocked,event,5),/TASK_NOT_READY/);
+    assert.deepEqual(blocked,snapshot);
+  }
+  // Terminal lifecycle facts alone do not constitute dependency release.
+  const terminalOnly={...state,lifecycles:{...state.lifecycles,...Object.fromEntries(sinks.map(edge=>[edge.sourceTaskId,"succeeded" as const]))}};
+  assert.throws(()=>reduceTaskExecutionV1(terminalOnly,event,5),/TASK_NOT_READY/);
+  const ready={...state,resolutions};
+  const readyBefore=structuredClone(ready);
+  const launched=reduceTaskExecutionV1(ready,event,5);
+  assert.equal(launched.attempts["attempt:1"]?.state,"planned");
+  assert.deepEqual(launched.prepared["attempt:1"],bound);
+  assert.deepEqual(ready,readyBefore);
+  assert.deepEqual(state,before);
 });

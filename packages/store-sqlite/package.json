@@ -44,7 +44,7 @@
   "private": false,
   "scripts": {
     "lint": "eslint src --max-warnings=0",
-    "test": "node --import tsx --test test/*.test.ts test/migrations/*.test.ts",
+    "test": "node --import tsx --test --test-concurrency=1 \"test/**/*.test.ts\"",
     "test:crash-matrix": "node --import tsx --test test/crash-matrix.test.ts",
     "test:migration-0001": "node --import tsx --test test/migration-0001.test.ts",
     "test:recovery": "node --import tsx --test test/recovery/*.test.ts",

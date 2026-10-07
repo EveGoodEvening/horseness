@@ -96,6 +96,21 @@ Git-like forks
 
 核心 domain/store/orchestrator/SDK/daemon/CLI 及 Pi、OMP adapter 层已建立。四宿主完整闭环、安装、系统验证、发布尚未全部完成。详见 `docs/DESIGN_CHOICE.md` 与 `docs/progress.md`。
 
+## 测试
+
+使用 Node.js 22 和 manifest 固定的 pnpm；先执行 `corepack pnpm install --frozen-lockfile`。
+
+| 命令 | 覆盖范围 |
+|---|---|
+| `corepack pnpm run test` | 全部 package 单元/集成测试，包括编排、存储恢复/导入、CLI 可执行程序，以及根目录边界/回执检查。 |
+| `corepack pnpm run test:security` | 授权、恶意输入、artifact、恢复和安装器安全回归。 |
+| `corepack pnpm run test:e2e` | Linux 系统/安装黑盒，以及真实 CLI → daemon → 摘要校验后的 Pi：任务执行、拆解、依赖、取消、重启/崩溃恢复。 |
+| `corepack pnpm run host:harness:test` | 独立的原生宿主可行性与校验器测试。 |
+
+PR/push CI 运行默认 package 测试和 Linux e2e。e2e 使用仅监听本机的受控 provider，但 Pi 是真实原生宿主；获取和安装需要访问 npm registry，不需要模型服务凭据。场景使用临时工作区并清理自己的进程。package 测试也包含集成测试，并非纯内存单元测试基准。
+
+四宿主 `test:closed-loop` 保持独立，需要满足其原生宿主和登录会话前置条件。Linux 本地 e2e 不代表已验证真实模型认证、四宿主等价性、macOS/Windows e2e 或全部代码分支。实际结果见[证据记录](docs/progress/C22.md)，不能把测试数量或绿灯等同于穷尽覆盖。
+
 ## 延伸阅读
 
 - `docs/DESIGN_PRINCIPLE.md` — 设计原则：主 Agent 职责边界、admission 完整检查项、context reconstruction 可重放性、retry/resume attempt identity。

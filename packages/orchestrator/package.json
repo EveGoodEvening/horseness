@@ -18,7 +18,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src --max-warnings=0",
-    "test": "node src/admission/test-runner.mjs",
+    "test": "node --import tsx --test --test-concurrency=1 \"test/**/*.test.ts\"",
     "test:admission": "node src/admission/test-runner.mjs",
     "test:context-golden": "tsx --test test/context/**/*.test.ts",
     "test:tasks-forks-receipts": "tsx --test test/forks/**/*.test.ts test/projections/**/*.test.ts test/receipts/**/*.test.ts",

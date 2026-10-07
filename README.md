@@ -96,6 +96,21 @@ What it costs: heavier than free-form chat; every proposal needs a structured de
 
 The core domain/store/orchestrator/SDK/daemon/CLI and the Pi and OMP adapter layers are established. The complete closed loop across all four hosts, installation, system verification, and release are not yet fully done. See `docs/DESIGN_CHOICE.md` and `docs/progress.md`.
 
+## Tests
+
+Use Node.js 22 and the manifest-pinned pnpm; install with `corepack pnpm install --frozen-lockfile`.
+
+| Command | Coverage |
+|---|---|
+| `corepack pnpm run test` | All package unit/integration tests, including orchestration, storage recovery/import, executable CLI tests, and root boundary/receipt checks. |
+| `corepack pnpm run test:security` | Focused authorization, hostile-input, artifact, recovery, and installer security regressions. |
+| `corepack pnpm run test:e2e` | Linux system/installer blackboxes followed by real CLI → daemon → digest-verified Pi task execution, planning, dependencies, cancellation, and restart/crash recovery. |
+| `corepack pnpm run host:harness:test` | Separate native-host feasibility and validator suite. |
+
+PR/push CI runs the default package suite and Linux e2e. The e2e provider is controlled and loopback-only; native Pi is real, and acquisition/install requires npm registry access but no model-provider credentials. Each scenario uses disposable workspaces and cleans up owned processes. Package tests include integration tests; they are not a pure in-memory unit benchmark.
+
+The four-host `test:closed-loop` gate remains separate and requires its documented native-host/session prerequisites. Local Linux e2e does not establish live-provider authentication, all-host parity, macOS/Windows e2e, or complete branch coverage. See [the evidence ledger](docs/progress/C22.md) for observed results rather than treating a green test count as exhaustive coverage.
+
 ## Further Reading
 
 - `docs/DESIGN_PRINCIPLE.md` — design principles: main Agent responsibility boundaries, full admission checklist, context reconstruction replayability, retry/resume attempt identity.

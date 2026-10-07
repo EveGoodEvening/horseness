@@ -77,6 +77,31 @@ jobs:
       - name: Verify no static release secrets
         run: corepack pnpm run release:verify-no-static-secrets
 
+  e2e:
+    name: End-to-end / Linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI: "1"
+      TZ: UTC
+      LANG: C
+      NODE_OPTIONS: --unhandled-rejections=strict
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - name: Enable Corepack
+        run: corepack enable
+      - name: Install dependencies
+        run: corepack pnpm install --frozen-lockfile
+      - name: Test system lifecycle and native task workflows
+        run: corepack pnpm run test:e2e
+
   c13-os:
     name: Daemon / ${{ matrix.receipt-os }}
     runs-on: ${{ matrix.runner }}

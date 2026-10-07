@@ -58,12 +58,16 @@ const provider = createServer(async (request, response) => {
     for (const line of prompt.split("\n")) { try { const candidate = JSON.parse(line); if (candidate.schemaVersion === "2" && typeof candidate.instructions === "string") task = candidate; } catch {} }
     assert.ok(task, "real native request must include the bound task contract");
     const tools = body.messages.filter(message => message.role === "tool");
-    const prefix = task.instructions.includes("AUTOMATIC") ? "automatic" : "explicit";
+    const prefix = task.instructions.includes("FAILED_DEPENDENCY") ? "failed-dependency" : task.instructions.includes("CANCEL_ADOPTED") ? "cancel-adopted" : task.instructions.includes("AUTOMATIC") ? "automatic" : "explicit";
     requests.push({ taskId: task.taskId, sourceTaskId:task.sourceTaskId, kind: task.kind, prefix, toolResults: tools.length });
     if (task.kind === "planner") {
       assert.ok(!(body.tools ?? []).some(tool => ["write", "edit", "bash"].includes(tool.function?.name)), "planner must not receive writing tools");
       const ordinal=(plannerCalls.get(task.sourceTaskId)??0)+1;plannerCalls.set(task.sourceTaskId,ordinal);
       const firstKey=ordinal%2===0?"first-v2":"first",secondKey=ordinal%2===0?"second-v2":"second";
+      if (["failed-dependency", "cancel-adopted"].includes(prefix)) return streamResponse(response, JSON.stringify({ tasks: [
+        { key: "first", title: `Prepare ${prefix}`, instructions: prefix === "failed-dependency" ? "SMOKE_NATIVE_FAILURE: fail the prerequisite without producing a result." : `SMOKE_NEGATIVE_WRITE: write ${prefix}-first.txt containing forbidden work and a newline.`, acceptanceCriteria: ["Produce the prerequisite result."], dependsOn: [] },
+        { key: "second", title: `Consume ${prefix}`, instructions: `SMOKE_NEGATIVE_WRITE: write ${prefix}-second.txt containing forbidden work and a newline.`, acceptanceCriteria: ["Produce the dependent result only after prerequisite success."], dependsOn: ["first"] },
+      ] }));
       const plan={ tasks: [
         { key: firstKey, title: `Prepare ${prefix} result`, instructions: `SMOKE_FIRST ${prefix === "automatic" ? "AUTOMATIC" : "EXPLICIT"}: write ${prefix}-first.txt containing dependency ready and a newline.`, acceptanceCriteria: ["The first file contains exactly dependency ready followed by a newline."], dependsOn: [] },
         { key: secondKey, title: `Consume ${prefix} result`, instructions: `SMOKE_SECOND ${prefix === "automatic" ? "AUTOMATIC" : "EXPLICIT"}: read ${prefix}-first.txt, then write ${prefix}-second.txt containing dependency consumed and a newline.`, acceptanceCriteria: ["Read the first result before producing the second file."], dependsOn: [firstKey] },
@@ -75,6 +79,12 @@ const provider = createServer(async (request, response) => {
     if(task.instructions.includes("SMOKE_CRASH")){
       if(tools.length===0)return streamResponse(response,"",{name:"bash",arguments:{command:"printf '%s\\n' \"$PPID\" > native-smoke.pid"}});
       crashResponse=response;crashReached.resolve();return;
+    }
+    if (task.instructions.includes("SMOKE_NEGATIVE_WRITE")) {
+      const path = task.instructions.match(/write ([a-z-]+\.txt)/)?.[1];
+      assert.ok(path, "negative work must specify its observable side-effect file");
+      if (tools.length === 0) return streamResponse(response, "", { name: "write", arguments: { path, content: "forbidden work\n" } });
+      return streamResponse(response, "forbidden work completed");
     }
     if (task.instructions.includes("SMOKE_SINGLE")) {
       if (tools.length === 0) return streamResponse(response, "", { name: "write", arguments: { path: "single.txt", content: "native dispatch\n" } });
@@ -122,6 +132,27 @@ async function observeUntil(taskId, predicate) {
     await delay(100);
   }
   throw new Error(`Task did not reach expected state: ${taskId}`);
+}
+async function show(taskId) {
+  const data = await invoke(["task", "show", "--task", taskId]);
+  return data.task ?? data;
+}
+async function assertUnlaunched(taskId, lifecycle) {
+  const task = await show(taskId);
+  assert.equal(task.lifecycle, lifecycle);
+  assert.deepEqual(task.attempts, []);
+  assert.equal(task.output, null);
+  assert.equal(requests.filter(request => request.taskId === taskId).length, 0);
+  return task;
+}
+async function assertAbsent(paths) {
+  for (const path of paths) await assert.rejects(readFile(join(workspace, path)), { code: "ENOENT" });
+}
+async function assertRefused(args, code) {
+  const result = await command(cli, [...args, "--json"], { env: environment });
+  assert.notEqual(result.code, 0, result.stdout + result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.ok, false); assert.equal(output.error.code, code, result.stdout);
 }
 
 try {
@@ -213,6 +244,55 @@ try {
   await observeUntil(next.taskId,task=>task.lifecycle==="succeeded");
   assert.equal(requests.filter(item=>item.taskId===next.taskId).length,2);
   console.log("fresh planner identity, invalid auto-plan refusal and known native failure receipt passed");
+  const negativeFiles = ["failed-dependency-second.txt", "failed-dependency-objective.txt", "cancel-draft.txt", "cancel-adopted-first.txt", "cancel-adopted-second.txt", "cancel-adopted-objective.txt"];
+  const failedObjective = await invoke(["task", "add", "--title", "FAILED_DEPENDENCY SMOKE_NEGATIVE_WRITE: write failed-dependency-objective.txt containing forbidden work and a newline."]);
+  await invoke(["task", "breakdown", "--task", failedObjective.taskId, "--planner", "pi", "--model", `local/${model}`]);
+  const failurePreview = await observeUntil(failedObjective.taskId, task => task.plan && task.workflow?.state === "succeeded");
+  const failureAdoption = await invoke(["task", "adopt", "--task", failedObjective.taskId, "--plan", failurePreview.plan.planDigest]);
+  const failureChildren = await Promise.all(failureAdoption.taskIds.map(show));
+  const prerequisite = failureChildren.find(task => task.dependencies.length === 0);
+  const dependent = failureChildren.find(task => task.dependencies.includes(prerequisite?.taskId));
+  assert.ok(prerequisite); assert.ok(dependent);
+  await invoke(["task", "execute", "--task", failedObjective.taskId, "--adapter", "pi", "--model", `local/${model}`]);
+  const blockedObjective = await observeUntil(failedObjective.taskId, task => task.workflow?.state === "stopped");
+  assert.equal(blockedObjective.workflow.reasonCode, "TASK_NOT_READY");
+  const prerequisiteFailure = await show(prerequisite.taskId);
+  assert.equal(prerequisiteFailure.lifecycle, "failed"); assert.equal(prerequisiteFailure.output, null);
+  assert.equal(prerequisiteFailure.attempts.length, 1); assert.equal(prerequisiteFailure.attempts[0].state, "failed");
+  assert.equal(prerequisiteFailure.attempts[0].outputDigest, null); assert.ok(prerequisiteFailure.attempts[0].receiptDigest);
+  assert.equal(requests.filter(request => request.taskId === prerequisite.taskId).length, 1);
+  const blockedDependent = await assertUnlaunched(dependent.taskId, "draft");
+  assert.equal(blockedDependent.schedulability, "ineligible"); assert.deepEqual(blockedDependent.dependencies, [prerequisite.taskId]);
+  await assertUnlaunched(failedObjective.taskId, "draft");
+  const cancelledDraft = await invoke(["task", "add", "--title", "SMOKE_NEGATIVE_WRITE: write cancel-draft.txt containing forbidden work and a newline."]);
+  await invoke(["task", "cancel", "--task", cancelledDraft.taskId]);
+  await assertUnlaunched(cancelledDraft.taskId, "cancelled");
+  await assertRefused(["task", "dispatch", "--task", cancelledDraft.taskId, "--adapter", "pi", "--model", `local/${model}`], "EXECUTION_ALREADY_STARTED");
+  const cancelledObjective = await invoke(["task", "add", "--title", "CANCEL_ADOPTED SMOKE_NEGATIVE_WRITE: write cancel-adopted-objective.txt containing forbidden work and a newline."]);
+  await invoke(["task", "breakdown", "--task", cancelledObjective.taskId, "--planner", "pi", "--model", `local/${model}`]);
+  const cancellationPreview = await observeUntil(cancelledObjective.taskId, task => task.plan && task.workflow?.state === "succeeded");
+  const cancellationAdoption = await invoke(["task", "adopt", "--task", cancelledObjective.taskId, "--plan", cancellationPreview.plan.planDigest]);
+  const cancellationChildren = await Promise.all(cancellationAdoption.taskIds.map(show));
+  const cancelledPrerequisite = cancellationChildren.find(task => task.dependencies.length === 0);
+  assert.ok(cancelledPrerequisite);
+  await invoke(["task", "cancel", "--task", cancelledPrerequisite.taskId]);
+  await invoke(["task", "execute", "--task", cancelledObjective.taskId, "--adapter", "pi", "--model", `local/${model}`]);
+  const cancellationBlocked = await observeUntil(cancelledObjective.taskId, task => task.workflow?.state === "stopped");
+  assert.equal(cancellationBlocked.workflow.reasonCode, "TASK_NOT_READY");
+  await invoke(["task", "cancel", "--task", cancelledObjective.taskId]);
+  await assertUnlaunched(cancelledObjective.taskId, "cancelled");
+  for (const child of cancellationChildren) await assertUnlaunched(child.taskId, child.taskId === cancelledPrerequisite.taskId ? "cancelled" : "draft");
+  await assertRefused(["task", "execute", "--task", cancelledObjective.taskId, "--adapter", "pi", "--model", `local/${model}`], "EXECUTION_ALREADY_STARTED");
+  await assertAbsent(negativeFiles);
+  const durableIds = [failedObjective.taskId, prerequisite.taskId, dependent.taskId, cancelledDraft.taskId, cancelledObjective.taskId, ...cancellationAdoption.taskIds];
+  const beforeNegativeRestart = await Promise.all(durableIds.map(show));
+  const beforeNegativeRequests = requests.length;
+  await invoke(["stop", "--workspace-path", workspace]); initialized = false;
+  await invoke(["init"]); initialized = true;
+  assert.deepEqual(await Promise.all(durableIds.map(show)), beforeNegativeRestart);
+  assert.equal(requests.length, beforeNegativeRequests); await assertAbsent(negativeFiles);
+  console.log("failed prerequisite: real failure receipt, blocked dependent/objective, no side effects and restart persistence passed");
+  console.log("cancellation: draft refusal, adopted prerequisite dependency blockade, objective refusal and restart persistence passed");
   const interrupted=await invoke(["task","add","--title","SMOKE_CRASH: stop after native acceptance without relaunching."]);
   await invoke(["task","dispatch","--task",interrupted.taskId,"--adapter","pi","--model",`local/${model}`]);
   let crashTimer;
@@ -239,10 +319,16 @@ try {
   console.log("real native acceptance followed by daemon crash recovered as unknown without a second launch");
   console.log(JSON.stringify({ nativeHost: manifest.artifact.identity, executableDigest: manifest.artifact.executable.sha256, provider: "controlled-loopback", providerRequests: requests.length, automaticPlanAdopted: automaticResult.plan?.adoptedTaskIds.length === 2, canonicalRevision: 0, liveProviderAuthentication: "unobserved" }));
 } finally {
-  if(nativeProcessId&&nativeProcessStartTime){try{const stat=await readFile(`/proc/${nativeProcessId}/stat`,"utf8");if(stat.slice(stat.lastIndexOf(")")+2).trim().split(/\s+/u)[19]===nativeProcessStartTime)process.kill(nativeProcessId,"SIGKILL");}catch(error){if(error.code!=="ENOENT"&&error.code!=="ESRCH")throw error;}}
-  crashResponse?.destroy();
-  if (initialized) await command(cli, ["stop", "--workspace-path", workspace, "--json"], { env: environment });
-  provider.closeAllConnections();
-  await new Promise(resolveClose => provider.close(resolveClose));
-  await rm(root, { recursive: true, force: true });
+  try {
+    if(nativeProcessId&&nativeProcessStartTime){try{const stat=await readFile(`/proc/${nativeProcessId}/stat`,"utf8");if(stat.slice(stat.lastIndexOf(")")+2).trim().split(/\s+/u)[19]===nativeProcessStartTime)process.kill(nativeProcessId,"SIGKILL");}catch(error){if(error.code!=="ENOENT"&&error.code!=="ESRCH")throw error;}}
+  } finally {
+    crashResponse?.destroy();
+    try {
+      if (initialized) await command(cli, ["stop", "--workspace-path", workspace, "--json"], { env: environment });
+    } finally {
+      provider.closeAllConnections();
+      try { await new Promise(resolveClose => provider.close(resolveClose)); }
+      finally { await rm(root, { recursive: true, force: true }); }
+    }
+  }
 }

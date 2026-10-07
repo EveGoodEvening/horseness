@@ -18,7 +18,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src --max-warnings=0",
-    "test": "node --import tsx --test test/**/*.test.ts",
+    "test": "node --import tsx --test --test-concurrency=1 \"test/**/*.test.ts\"",
     "test:journal-crash": "node --import tsx --test test/journal/*.test.ts test/migrations/*.test.ts",
     "test:trust-consent": "node --import tsx --test test/trust/*.test.ts test/consent/*.test.ts"
   },
