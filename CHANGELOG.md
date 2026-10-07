@@ -4,6 +4,7 @@ This project follows semantic versioning. Release notes describe the public pack
 
 ## 1.0.0 — Unreleased
 
+- Rewrote the English and Chinese READMEs around a concrete login-fix example, Mermaid admission/conflict/dependency diagrams, and a runnable source-checkout workflow; clarified execution versus completion versus canonical acceptance and current release boundaries.
 - Fixed hosted native e2e dependency installation by passing the repository's package-manager pin explicitly when running Corepack outside the workspace, instead of using the runner's ambient pnpm version.
 - Exposed failed Linux e2e output in GitHub annotations while preserving the real command and exit status, so hosted-only failures remain diagnosable without authenticated log downloads.
 - Expanded the default test gate to all orchestrator and storage test directories plus root tooling checks; added unit coverage for branching task graphs, complete dependency joins, planner-size limits, and failed/cancelled dependency release.

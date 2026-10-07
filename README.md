@@ -2,119 +2,184 @@
 
 <img src="docs/horseness-carriage.svg" alt="A Han-dynasty-style stone relief of a charioteer guiding six horses" width="560">
 
-A multi-Agent state machine with version control, evidence gating, and deterministic reconstruction.
+**Let agents explore independently—not independently decide what counts as the final conclusion.**
 
-## Daily CLI workflow
+Horseness is a local-first state machine for multi-agent work: versioned working state, evidence-gated changes, and replayable context. It connects Pi, OMP, Claude Code, and Codex rather than replacing those native hosts.
 
-With Node 22 and matching `horseness` / `horseness-daemon` executables on `PATH`:
+**English** · [简体中文](README.zh.md) · [Quick start](#quick-start) · [Status](#status)
+
+## What problem does it solve?
+
+One agent investigates a login failure while another prepares a fix. After several handoffs and session compressions, the hard questions are: **Which version supports this conclusion? Where is its evidence? Can an old conclusion overwrite a newer one?**
+
+Horseness does not treat a chat summary as authoritative. Candidate changes pass through one explicit admission boundary:
+
+```mermaid
+flowchart TD
+    S["Canonical working state<br/>revision + stateHash"]
+    P["Pin the starting point<br/>ForkPin"]
+    C["Rebuild task context<br/>within the budget"]
+    W["Agent explores and executes"]
+    D["Submit a proposal<br/>Evidence + receipt"]
+    G(["Admission gate"])
+    N["Record decision and reasons<br/>Canonical state unchanged"]
+    S --> P --> C --> W --> D --> G
+    G -->|accepted| S
+    G -->|other outcomes| N
+```
+
+Canonical state is the accepted, structured working document—not the conversation and not an agent saying “done.” Only `DeltaAccepted` advances its revision; tasks, receipts, and decisions have separate durable records.
+
+A `ForkPin` fixes the state version, visible evidence, modification scope, and dependency snapshot. Context is rebuilt only from persistent data visible at that pin; the same pin and renderer configuration reproduce the same context. Items exceeding the budget are omitted whole, with a record of omissions, rather than silently truncated.
+
+## Example: an old conclusion cannot silently win
+
+Suppose two agents investigate login logic from `revision 12`, and both pass identity, authority, and evidence checks:
+
+```mermaid
+flowchart TD
+    R["Shared starting point<br/>revision 12"]
+    A["A submits first"]
+    B["B submits later<br/>Base: revision 12"]
+    S["Canonical state<br/>revision 13"]
+    G["Check B against<br/>the current base"]
+    X["conflicted · STALE_BASE<br/>Keep revision 13"]
+    R --> A
+    R --> B
+    A -->|accepted| S
+    S --> G
+    B --> G
+    G --> X
+```
+
+B does not win by writing last. Continuing requires an explicit pin refresh, inspection of the new state, and a new proposal with lineage; the original proposal and conflict record remain unchanged.
+
+Admission checks structure and identity, modification scope, evidence and receipts, base and operation preconditions, and **both the pinned and current policies**. There are exactly five outcomes:
+
+| Outcome | Meaning and next step |
+|---|---|
+| `accepted` | The change is admitted; canonical state advances one revision. |
+| `conflicted` | The base or an operation precondition no longer holds; propose against an explicit updated state. |
+| `rejected` | Structure, authority, evidence, policy, or another validation failed; identical retries cannot bypass rejection. |
+| `quarantined` | Held for review; release still requires full re-evaluation. |
+| `approval_required` | Waiting for authorized approval; approval is not acceptance and still requires re-evaluation. |
+
+## Quick start
+
+**The npm release is not published yet.** Run from a checkout with Node.js 22 and the repository-pinned pnpm. Install dependencies at the repository root, then switch to an existing target project; replace the example path below:
 
 ```sh
-horseness init
-horseness run create --title "Fix login"
-horseness task add --run current --title "Inspect authentication"
-horseness status
+corepack pnpm install --frozen-lockfile
+HORSENESS="$PWD/apps/cli/bin/horseness.mjs"
+export HORSENESS_DAEMON_EXECUTABLE="$PWD/apps/daemon/bin/horseness-daemon.mjs"
+
+cd /absolute/path/to/your/project
+"$HORSENESS" init
+"$HORSENESS" run create --title "Fix login"
+"$HORSENESS" task add --title "Inspect authentication"
+"$HORSENESS" status
+"$HORSENESS" task list
 ```
 
-Workspace discovery, current-run selection, cursor reads, IDs, and idempotency keys are handled internally. Tasks start as durable drafts; creation does not launch a worker. Use `--workspace PATH` to select another project, `--json` for scripts, and `horseness --help` for commands. See [CLI usage](docs/cli.md) for checkout execution, existing-workspace limits, and interrupted-operation recovery. The npm release has not yet been published.
+- A **workspace** is the project; a **run** is one work session; a **task** is a work item within it.
+- `init` initializes the project and connects to or starts its local daemon; it does not install native hosts. Subsequent CLI commands discover the workspace, select the current run, and handle cursors, creation IDs, and idempotency keys.
+- `task add` creates a durable draft. **It does not call a model.**
 
-Execution is explicit: `task dispatch --task ID --adapter HOST --model MODEL` starts one attempt; `task show --task ID` observes its authenticated result. For larger work, use `task breakdown`, inspect the preview, then `task adopt --plan DIGEST` and `task execute`. `task execute --auto-plan` explicitly combines planning, adoption, and serial dependency execution. Adding a task never starts this process. Native host/model prerequisites and existing-workspace authorization are documented in [CLI usage](docs/cli.md#explicit-execution-planning-and-cancellation).
+### Explicitly execute one task
 
-## The Problem
+In the same terminal, replace `TASK_ID` with an ID from `task list` and `PROVIDER/MODEL` with a real model identifier:
 
-Main Agent + free-form subagent summaries + session compression have inherent flaws:
-
-- Summaries drop constraints; new and old facts bleed together.
-- Conclusions cannot be traced back to evidence.
-- Concurrent subagents overwrite each other.
-- No precise replay; no way to tell which code version a conclusion holds against.
-
-## Core Idea
-
-Move the main Agent's correct cognition out of session text and into a **verifiable, replayable, versioned canonical working state**.
-
-The closed loop:
-
-```text
-subagent exploration
-→ evidence-gated state delta
-→ canonical working state
-→ automatic context reconstruction
-→ dependency-aware fork
+```sh
+"$HORSENESS" task dispatch --task TASK_ID --adapter pi --model PROVIDER/MODEL
+"$HORSENESS" task show --task TASK_ID
 ```
 
-## Mechanisms
+Prepare a supported native host version and its authentication session first. This example selects Pi; `omp`, `claude`, and `codex` are also explicit choices. Model identifiers are host-specific; there is no automatic host or model substitution. See [CLI prerequisites](docs/cli.md#native-runtime-prerequisites) for versions and authorization requirements.
 
-**Canonical state (main branch)** — the single deterministic state owned by the main Agent, carrying a `revision` and `stateHash`. Only `DeltaAccepted` advances `revision + 1`.
+> **Launch acknowledgement ≠ task completion ≠ accepted conclusion.** `dispatch` returns a durable launch acknowledgement; use `task show` to inspect progress, authenticated receipts, and output. Daily CLI tasks default to receipt-only completion, without requiring an unrelated canonical change; tasks that require an accepted change must satisfy that declared completion condition.
 
-**ForkPin (work branch locked to a base)** — a subagent creates an immutable fork from a fixed revision, binding the visible receipt/evidence, the delta scope it is authorized to modify, and the parent fork lineage. Concurrent forks never overwrite each other.
+Inspect an unknown outcome rather than treating it as failure and launching again. After an interruption, explicitly repeat the exact command and options to recover the original operation instead of blindly retrying a changed request.
 
-**Delta proposal (a PR with preconditions)** — a subagent does not mutate canonical state directly; it submits a structured delta: exact base revision, scope, `test`/`replace`/`remove` preconditions, and evidence claims. If the base has moved, it returns `conflicted` rather than silently overwriting.
+If matching executables are already on `PATH`, use `horseness` instead of `"$HORSENESS"`. Use `--workspace PATH` for another project, `--json` for scripts, and `--help` for commands. See [CLI usage](docs/cli.md) for existing-workspace authorization, cancellation, and recovery.
 
-**Evidence-gated admission (deterministic CI + policy gate)** — five deterministic checks: structural identity, modification authority, evidence authenticity, concurrency conflict, and the conjunction of pinned + current policy. Outcomes are only `accepted`/`rejected`/`conflicted`/`quarantined`/`approval_required`; only `accepted` advances the canonical revision.
+## Larger work: review a plan, then follow dependencies
 
-**Automatic context reconstruction (deterministic minimal-context build)** — rather than letting the main Agent hand-trim the session, the system deterministically renders a digest-verifiable minimal context from persistent state, driven by the ForkPin, task scope, and a fixed budget. Whole items are omitted, not truncated, and omissions are recorded.
+“Fix login” can first become a task graph. **Arrows represent prerequisites, not a promise of parallel execution**; current `task execute` runs serially in dependency order.
 
-**Dependency-aware fork (task DAG)** — downstream forks are created only after an upstream task's receipt/evidence at a specific generation satisfies its success conditions, binding an immutable join snapshot. Subsequent fixes build on `canonical revision + ForkPin + dependency snapshot`, not on the main Agent's current natural-language session.
-
-## Analogy
-
-```text
-Git-like forks
-+ database transactions
-+ content-addressed evidence
-+ deterministic build-like context generation
-+ policy-gated pull requests
-+ task DAG scheduler
+```mermaid
+flowchart TD
+    A["Find the login failure cause"]
+    B["Fix auth logic"]
+    C["Add regression<br/>tests"]
+    D["Integrate and verify<br/>Original objective"]
+    A --> B
+    A --> C
+    B --> D
+    C --> D
 ```
 
-| Horseness              | Git / engineering analogy                       |
-| ---------------------- | ----------------------------------------------- |
-| main Agent             | sole authorized integrator                      |
-| canonical state        | main branch                                     |
-| ForkPin                | work branch locked to a base commit             |
-| subagent exploration   | research on a branch                            |
-| evidence               | test output, artifacts, receipts                |
-| delta proposal         | PR with path scope and preconditions            |
-| admission              | deterministic CI + policy gate                  |
-| DeltaAccepted          | merge commit                                    |
-| context reconstruction | minimal context rebuilt from a locked revision  |
-| dependency-aware fork  | downstream branch created only after upstream succeeds |
+A downstream task can pin its dependency snapshot and start only after its dependencies satisfy their frozen completion conditions. It receives traceable upstream results, not just “the previous agent said it was ready.”
 
-## Quality Boundaries
+### Review before execution
 
-What it optimizes: long-task consistency, multi-Agent concurrency safety, traceability, replayable context, error isolation, stale-context detection, evidence-to-conclusion binding, and precise baselines for follow-up fixes.
+While the original objective is still a draft, use its ID as `TASK_ID`. Run these steps individually: inspect the preview's instructions, acceptance criteria, and dependencies before replacing `PLAN_DIGEST` with its digest.
 
-What it costs: heavier than free-form chat; every proposal needs a structured delta; evidence must be persisted and verified; task scope and dependencies must be defined up front; admission only deterministically verifies encoded rules — it does not judge semantic correctness; when the contract/scope/policy itself is misdesigned, the closed loop can only consistently execute the wrong rules.
+```sh
+"$HORSENESS" task breakdown --task TASK_ID --planner pi --model PROVIDER/MODEL
+"$HORSENESS" task show --task TASK_ID
+# Wait for the preview and review it before running the next two commands.
+"$HORSENESS" task adopt --task TASK_ID --plan PLAN_DIGEST
+"$HORSENESS" task execute --task TASK_ID --adapter pi --model PROVIDER/MODEL
+```
 
-> For long-running, multi-Agent engineering tasks that need reliable fixes and auditability, this closed loop is typically far more reliable than free-form summaries + session compression. For one-off small tasks, the cost may exceed the benefit.
+`breakdown` runs only the planner, not the child tasks; `adopt` adopts the exact reviewed plan and creates its dependency graph. The original objective remains the final integration task—it is not completed merely because planning finished.
 
-## Core Constraint
+### Explicitly authorize automatic composition
 
-> Any subagent conclusion is only candidate information — not the main Agent's canonical truth — until it has bound a ForkPin, scope, receipt, evidence, and precondition, and passed admission.
+If step-by-step review is not needed, use this **alternative** on a draft objective rather than running it again after the sequence above:
+
+```sh
+"$HORSENESS" task execute --task TASK_ID --adapter pi --model PROVIDER/MODEL --auto-plan
+```
+
+It combines planning, adoption, and execution, using the same host and model for planning by default. Automatic mode does not bypass grants, policy, quota, dependencies, or cancellation; it stops on failed dependencies, denial, or an unknown outcome.
+
+## When to use it—and its limits
+
+**Use it for** long-running, multi-agent engineering work that needs traceability and follow-up fixes. For a small one-off task, defining scope and dependencies, structuring changes, and retaining evidence may cost more than they save.
+
+- **It verifies rules, not truth.** Admission checks encoded rules and evidence bindings, not semantic correctness. A bad task contract or policy can still produce a bad result.
+- **It separates state versions, not OS processes.** A `ForkPin` is neither a Git branch nor a filesystem sandbox. Native tools retain their host's OS-user privileges; canonical admission does not intercept their writes to project files.
+- **It replays state and context, not model behavior.** Reconstructing inputs and history does not guarantee that another model call produces the same output.
 
 ## Status
 
-The core domain/store/orchestrator/SDK/daemon/CLI and the Pi and OMP adapter layers are established. The complete closed loop across all four hosts, installation, system verification, and release are not yet fully done. See `docs/DESIGN_CHOICE.md` and `docs/progress.md`.
+According to the [progress ledger](docs/progress.md), C00–C22 are complete: the core, CLI/daemon, four host adapters, installation/system verification, and the fourteen-package npm candidate have recorded delivery evidence.
 
-## Tests
+Public release is next: C23 publishes `next` → C24 verifies public packages on Linux/macOS/Windows → C25 promotes `latest`. Publication requires external npm/GitHub authority configuration; repository acceptance is not a completed public release. Self-contained bootstrap and offline distribution are outside the first release.
 
-Use Node.js 22 and the manifest-pinned pnpm; install with `corepack pnpm install --frozen-lockfile`.
+## Development and verification
 
-| Command | Coverage |
+From the repository root, with Node.js 22 and frozen dependencies installed:
+
+| Command | Verification scope |
 |---|---|
-| `corepack pnpm run test` | All package unit/integration tests, including orchestration, storage recovery/import, executable CLI tests, and root boundary/receipt checks. |
+| `corepack pnpm run test` | All package unit/integration tests plus root boundary and historical receipt checks. |
 | `corepack pnpm run test:security` | Focused authorization, hostile-input, artifact, recovery, and installer security regressions. |
-| `corepack pnpm run test:e2e` | Linux system/installer blackboxes followed by real CLI → daemon → digest-verified Pi task execution, planning, dependencies, cancellation, and restart/crash recovery. |
+| `corepack pnpm run test:e2e` | Linux system/installer blackboxes and real CLI → daemon → digest-verified Pi execution, planning, dependencies, cancellation, and recovery. |
 | `corepack pnpm run host:harness:test` | Separate native-host feasibility and validator suite. |
 
-PR/push CI runs the default package suite and Linux e2e. The e2e provider is controlled and loopback-only; native Pi is real, and acquisition/install requires npm registry access but no model-provider credentials. Each scenario uses disposable workspaces and cleans up owned processes. Package tests include integration tests; they are not a pure in-memory unit benchmark.
+PR/push CI runs the default package suite and Linux e2e. E2e uses real Pi with a controlled, loopback-only provider; acquisition and installation require npm registry access, not model-provider credentials. Scenarios use disposable workspaces and clean up their processes.
 
-The four-host `test:closed-loop` gate remains separate and requires its documented native-host/session prerequisites. Local Linux e2e does not establish live-provider authentication, all-host parity, macOS/Windows e2e, or complete branch coverage. See [the evidence ledger](docs/progress/C22.md) for observed results rather than treating a green test count as exhaustive coverage.
+The four-host `test:closed-loop` gate is separate and requires its native-host/session prerequisites. Linux e2e does not establish live-provider authentication, all-host parity, cross-OS native e2e, or complete branch coverage; see the [evidence ledger](docs/progress/C22.md) for observed scope.
 
-## Further Reading
+## Further reading
 
-- `docs/DESIGN_PRINCIPLE.md` — design principles: main Agent responsibility boundaries, full admission checklist, context reconstruction replayability, retry/resume attempt identity.
-- `docs/DESIGN_CHOICE.md` — design tradeoffs: original idea and flaw analysis, step-by-step closed-loop walkthrough, concrete examples, quality boundaries and costs.
-- `docs/architecture.md` — product invariants and state semantics (normative document).
-- `docs/plan.md` — chunk boundaries, dependencies, path ownership, acceptance commands.
-- `docs/progress.md` — progress ledger.
+| Question | Document |
+|---|---|
+| Commands, host setup, authorization, and interrupted operations | [CLI usage](docs/cli.md) |
+| Main-agent responsibilities, admission, and context reconstruction | [Design principles](docs/DESIGN_PRINCIPLE.md) |
+| Why this design, worked examples, and tradeoffs | [Design choices](docs/DESIGN_CHOICE.md) |
+| Product invariants and state semantics | [Architecture](docs/architecture.md) |
+| Delivery boundaries, path ownership, and acceptance commands | [Delivery plan](docs/plan.md) |
+| What is complete and where its evidence lives | [Progress ledger](docs/progress.md) |
