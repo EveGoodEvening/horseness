@@ -23,6 +23,9 @@ jobs:
       HORSENESS_OS_RECEIPTS_DIR: .ci/os-receipts
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
       - uses: actions/setup-node@v4
         with:
           node-version-file: .node-version
