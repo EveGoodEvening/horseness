@@ -100,7 +100,16 @@ jobs:
       - name: C13 focused typecheck
         run: corepack pnpm --filter @horseness/daemon --filter @horseness/protocol run typecheck
       - name: C13 multiprocess gate
-        run: corepack pnpm --filter @horseness/daemon run test:multiprocess
+        shell: bash
+        run: |
+          set +e
+          corepack pnpm --filter @horseness/daemon run test:multiprocess 2>&1 | tee c13-multiprocess.log
+          result=${PIPESTATUS[0]}
+          set -e
+          if [ "$result" -ne 0 ]; then
+            node -e 'const output=require("node:fs").readFileSync("c13-multiprocess.log","utf8"); console.log("::error title=C13 multiprocess diagnostics::"+output.replaceAll("%","%25").replaceAll("\r","%0D").replaceAll("\n","%0A"));'
+          fi
+          exit "$result"
       - name: Write candidate-bound OS receipt
         shell: bash
         env:
