@@ -4,9 +4,9 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 
 ## Global status
 
-- **Planning state:** C00–C22 are complete. Presentation-only CI naming maintenance is locally verified at `2eebcf516f105a3a0c6af3c05b054b41cfd284b1`. Historical CI repair candidate `2539cb076b69d8ee596162e93949b876054398f7` remains integrated on GitHub main with all five hosted jobs passing.
-- **Active claims:** none; CI display-name maintenance is complete locally and has not been pushed or exercised in a new hosted run.
-- **Next eligible:** C23 after integrating the naming follow-up and external npm/GitHub release configuration.
+- **Planning state:** C00–C21 remain complete. C22 is reopened for user-requested unit/e2e coverage maintenance under the final correction in `docs/plan.md`. Earlier CI and release evidence remains historical.
+- **Active claims:** none; the test-coverage correction is reviewed inline and awaits its two-file claim.
+- **Next eligible:** claim C22 coverage maintenance; C23 remains blocked on its completion and external npm/GitHub release configuration.
 - **Active blockers:** C23 still requires the protected GitHub `release` environment and npm package-level trusted publishers or explicit initial package creation authority. C24/C25 retain their external runner and promotion-authority prerequisites. No CI repair blocker remains and no public npm mutation was performed.
 - **Last integrated receipt:** immutable C01 `docs/checkpoints/C01/final/1.json`, envelope digest `17ddd75b49e35d3bf6f432c8c6acca30b4a66512229453aca4fc63e7f427ea7d`, indexed at A01 commit `223023330cb000b759d8a8b2419514638c1aa179`; receipt/index bytes must not be overwritten.
 - **Release readiness:** candidate `2539cb0` passed all 17 local Linux CI run steps, 349 package tests and the nine ordered C22 release gates, including reproducible packing and tarball-only verification of fourteen packages. [Hosted CI 37578722017](https://github.com/EveGoodEvening/horseness/actions/runs/37578722017) passed verify, Linux/macOS/Windows C13 and candidate-bound receipt collection. Supplemental storage/orchestrator and real Pi workflow/crash evidence remains scoped in the C22 ledger. No public publication, real OIDC exchange/provenance or live model-provider authentication is claimed.
