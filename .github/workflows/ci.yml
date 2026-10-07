@@ -107,7 +107,7 @@ jobs:
           result=${PIPESTATUS[0]}
           set -e
           if [ "$result" -ne 0 ]; then
-            node -e 'const output=require("node:fs").readFileSync("e2e.log","utf8"); console.log("::error title=End-to-end diagnostics::"+output.replaceAll("%","%25").replaceAll("\r","%0D").replaceAll("\n","%0A"));'
+            node -e 'const output=require("node:fs").readFileSync("e2e.log").subarray(-3500).toString("utf8"); console.log("::error title=End-to-end diagnostics (log tail)::"+output.replaceAll("%","%25").replaceAll("\r","%0D").replaceAll("\n","%0A"));'
           fi
           exit "$result"
 
