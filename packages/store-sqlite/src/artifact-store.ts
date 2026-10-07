@@ -27,7 +27,7 @@ export class ArtifactStore {
   }
   private pathFor(digest:string):string { if(!/^[a-f0-9]{64}$/.test(digest)) throw new ArtifactIntegrityError("invalid artifact digest"); return join(this.objects,digest.slice(0,2),digest.slice(2)); }
   private ensureWithin(path:string):void { const rel=relative(this.root,path); if(rel.startsWith(`..${sep}`)||rel==="..") throw new ArtifactIntegrityError("artifact path escape"); }
-  private syncDirectory(path:string):void { this.crash("artifact.dir-fsync.before"); const fd=openSync(path,"r"); try{fsyncSync(fd);}finally{closeSync(fd);} this.crash("artifact.dir-fsync.after"); }
+  private syncDirectory(path:string):void { this.crash("artifact.dir-fsync.before"); const fd=openSync(path,process.platform==="win32"?"r+":"r"); try{fsyncSync(fd);}finally{closeSync(fd);} this.crash("artifact.dir-fsync.after"); }
   publish(data:Uint8Array|string, mediaType:string|null=null):ArtifactRecord {
     const bytes=typeof data==="string"?Buffer.from(data):Buffer.from(data); const digest=sha256(bytes); const destination=this.pathFor(digest); this.ensureWithin(destination);
     if(!existsSync(destination)) {

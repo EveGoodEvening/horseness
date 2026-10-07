@@ -53,10 +53,12 @@ test("aliased workspace bootstrap and reopen share one canonical authority", () 
   try {
     daemon = new Daemon(config, { identity: () => "owner" });
     const result = bootstrap(daemon);
+    const artifact = daemon.authority.artifacts.publishAndRegister("canonical workspace artifact");
     daemon.close(); daemon = undefined;
     daemon = new Daemon(config, { identity: () => "owner" });
     assert.equal(daemon.config.workspaceId, result.workspaceId);
     assert.equal(daemon.authority.replay(result.workspaceId, "workspace", result.workspaceId).length, 1);
+    assert.equal(daemon.authority.artifacts.readReferenced(artifact.digest).toString("utf8"), "canonical workspace artifact");
   } finally { daemon?.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
