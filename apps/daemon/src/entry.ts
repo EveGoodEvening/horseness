@@ -43,7 +43,7 @@ const configPath = resolve(argument("--config-file"));
 const parsed = JSON.parse(protectedFile(configPath)) as EntryConfigV1;
 rmSync(configPath, { force: true });
 if (parsed.schemaVersion !== "1" || !["start", "bootstrap", "init", "restore-rebind"].includes(parsed.operation)) throw new Error("daemon entry config is invalid");
-const config: DaemonConfigV1 = { ...parsed.daemon, authorityTime: () => parsed.authorityTime };
+const config: DaemonConfigV1 = { ...parsed.daemon, authorityTime: () => new Date().toISOString() };
 
 if (parsed.operation === "init") {
   if (parsed.grantReferenceFile === undefined || parsed.resultFile === undefined) throw new Error("init paths are required");

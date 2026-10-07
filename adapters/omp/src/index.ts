@@ -404,3 +404,4 @@ export function ompDoctorV1(input: { readonly nativePackageVersion: string | nul
     { code: "OMP_CONTRIBUTIONS", status: expected.every(digest => input.contributionDigests.includes(digest)) && input.contributionDigests.length === expected.length ? "ok" : "error", evidenceDigest: OMP_NATIVE_PACKAGE_METADATA.packageDigest },
   ], restartRequired: false });
 }
+export { createOMPTaskAdapterV1, resolveOMPTaskProfileV1 } from "./task-runtime.js";

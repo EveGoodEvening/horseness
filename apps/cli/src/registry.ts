@@ -1,6 +1,7 @@
 import { METHOD_REGISTRY_V1, type ProtocolMethodV1 } from "@horseness/protocol";
 import { CoordinatorClientV1, type AuthorizedProtocolTransportV1, type CoordinatorCallV1, type OpaqueCredentialReferenceV1 } from "@horseness/sdk";
 import { cliFailureV1, cliSuccessV1, type CliResultV1, type JsonValue } from "./result.js";
+import { registerWorkflowCommandsV1 } from "./workflows.js";
 
 export type CliOutputModeV1 = "human" | "json";
 export interface InstallerCliRuntimeV1 {
@@ -156,5 +157,6 @@ export function requiredInstallerRuntimeV1(context: CliExecutionContextV1): Inst
 export function createDefaultCliCommandRegistryV1(): CliCommandRegistryV1 {
   const registry = new CliCommandRegistryV1();
   registerCoordinatorCommandsV1(registry);
+  registerWorkflowCommandsV1(registry);
   return registry;
 }

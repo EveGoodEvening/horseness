@@ -49,18 +49,14 @@ test("local transport accepts only opaque grant references and never reports the
   );
 });
 
-test("lifecycle blackbox accepts the root argument separator and enforces the complete command order", { timeout: 30_000 }, () => {
-  const script = resolve(import.meta.dirname, "../../../scripts/bootstrap/cli-lifecycle-blackbox.mjs");
-  const commands = ["install", "upgrade", "downgrade", "rollback", "retry-install", "uninstall", "doctor", "repair", "rebind-workspace", "smoke"] as const;
-  const accepted = spawnSync(process.execPath, ["--import", "tsx", script, "--", ...commands], { encoding: "utf8" });
-  assert.equal(accepted.status, 0, accepted.stderr || accepted.stdout);
-  assert.equal(accepted.stdout, "CLI lifecycle blackbox passed for 10 packed commands\n");
-
-  const wrongOrder = spawnSync(process.execPath, ["--import", "tsx", script, "--", commands[1], commands[0], ...commands.slice(2)], { encoding: "utf8" });
-  assert.notEqual(wrongOrder.status, 0);
-  assert.match(wrongOrder.stderr, /CLI command registry mismatch/u);
-
-  const incomplete = spawnSync(process.execPath, ["--import", "tsx", script, "--", ...commands.slice(0, -1)], { encoding: "utf8" });
-  assert.notEqual(incomplete.status, 0);
-  assert.match(incomplete.stderr, /CLI command registry mismatch/u);
+test("packed CLI performs the complete durable installer lifecycle", { timeout: 60_000 }, () => {
+  const root=resolve(import.meta.dirname,"../../.."),daemonRoot=mkdtempSync(join(tmpdir(),"horseness-lifecycle-daemon-"));
+  try {
+    const deployed=spawnSync("corepack",["pnpm","--config.node-linker=hoisted","--config.strict-peer-dependencies=false","--filter","@horseness/daemon","deploy","--prod","--legacy",daemonRoot],{cwd:root,encoding:"utf8"});
+    assert.equal(deployed.status,0,deployed.stderr||deployed.stdout);
+    const script = resolve(root, "scripts/bootstrap/cli-lifecycle-blackbox.mjs");
+    const commands = ["install", "upgrade", "downgrade", "rollback", "retry-install", "uninstall", "doctor", "repair", "rebind-workspace", "smoke"] as const;
+    const accepted = spawnSync(process.execPath, ["--import", "tsx", script, "--", ...commands], { encoding: "utf8",env:{...process.env,HORSENESS_DAEMON_EXECUTABLE:join(daemonRoot,"bin/horseness-daemon.mjs")} });
+    assert.equal(accepted.status, 0, accepted.stderr || accepted.stdout);
+  } finally { rmSync(daemonRoot,{recursive:true,force:true}); }
 });

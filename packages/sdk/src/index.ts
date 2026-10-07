@@ -36,6 +36,22 @@ export class SdkError extends Error {
   }
 }
 
+const DEFINITIVE_PROTOCOL_CODES:Readonly<Record<string,true>>={INVALID_PARAMS:true,STALE_OBSERVATION:true,METHOD_NOT_AUTHORIZED:true,AUTH_SCOPE_MISMATCH:true,GRANT_INVALID:true,GRANT_EXPIRED:true,CURSOR_SCOPE_INSUFFICIENT:true,IDEMPOTENCY_REQUIRED:true,IDEMPOTENCY_FORBIDDEN:true};
+export class CoordinatorFailureV1 extends SdkError {
+  readonly reasonCode:string;
+  readonly definitive:boolean;
+  readonly details:JsonValue|null;
+  constructor(response:JsonRpcFailureV1){
+    const data=response.error.data,details=data.details;
+    const record=details!==null&&typeof details==="object"&&!Array.isArray(details)?details as Readonly<Record<string,JsonValue>>:null;
+    const workflow=record?.schemaVersion==="1"&&typeof record.reasonCode==="string"&&typeof record.definitive==="boolean";
+    const reasonCode=workflow?String(record.reasonCode):data.reasonCode;
+    const message=workflow&&typeof record.message==="string"?record.message:response.error.message;
+    super("TRANSPORT_FAILURE",`${reasonCode}: ${message}`);
+    this.name="CoordinatorFailureV1";this.reasonCode=reasonCode;this.definitive=workflow?record.definitive===true:Object.hasOwn(DEFINITIVE_PROTOCOL_CODES,reasonCode);this.details=details;
+  }
+}
+
 export interface OpaqueCredentialReferenceV1 {
   readonly schemaVersion: "1";
   readonly kind: "keychain" | "environment-reference" | "host-reference";
@@ -93,7 +109,7 @@ export function coordinatorCursorMatchesV1(requirement: (typeof METHOD_REGISTRY_
 }
 
 function failure(response: JsonRpcFailureV1): never {
-  throw new SdkError("TRANSPORT_FAILURE", `${response.error.data.reasonCode}: ${response.error.message}`);
+  throw new CoordinatorFailureV1(response);
 }
 
 export class CoordinatorClientV1 {

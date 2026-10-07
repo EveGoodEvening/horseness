@@ -71,3 +71,4 @@ export async function deliverWorkerReturn(workerReturn:WorkerReturnV1,client:Wor
  const decision=await perform("decision",()=>client.subscribeDecision!(workerReturn.decisionResume));
  return Object.freeze({receiptDigest,decision:decision.decision,resumeToken:decision.resumeToken});
 }
+export * from "./task-runtime.js";

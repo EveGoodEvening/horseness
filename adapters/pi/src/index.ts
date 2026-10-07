@@ -335,3 +335,4 @@ export function piDoctorV1(input: { readonly nativePackageVersion: string | null
     { code: "PI_CONTRIBUTIONS", status: expected.every(digest => input.contributionDigests.includes(digest)) && input.contributionDigests.length === expected.length ? "ok" : "error", evidenceDigest: PI_NATIVE_PACKAGE_METADATA.packageDigest },
   ], restartRequired: false });
 }
+export { createPiTaskAdapterV1, resolvePiTaskProfileV1 } from "./task-runtime.js";

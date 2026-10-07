@@ -22,7 +22,7 @@ export interface BootstrapResultV1 {
   readonly grantReference: string;
   readonly grantDigest: string;
 }
-const AUTHORITY_METHODS:readonly ProtocolMethodV1[]=["workspace.get.v1","run.create.v1","run.get.v1","run.list.v1","task.create.v1","task.list.v1","grant.issue.v1","grant.delegate.v1","grant.revoke.v1","grant.list.v1"];
+const AUTHORITY_METHODS:readonly ProtocolMethodV1[]=["workspace.get.v1","run.create.v1","run.get.v1","run.list.v1","task.create.v1","task.list.v1","task.get.v1","task.cancel.v1","task.dispatch.v1","task.breakdown.v1","task.adoptPlan.v1","task.execute.v1","dispatch.launch.v1","dispatch.get.v1","dispatch.reconcile.v1","grant.issue.v1","grant.delegate.v1","grant.revoke.v1","grant.list.v1"];
 
 export class BootstrapCeremony {
   readonly consumingPath: string;

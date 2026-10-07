@@ -1,5 +1,6 @@
 import { assertJsonValue, canonicalJson, domainDigest, DomainError, type JsonValue } from "./canonical.js";
 import type { TaskCompletionPolicyV1 } from "./tasks.js";
+import { parseTaskExecutionEventV1, TASK_EXECUTION_EVENT_TYPES_V1, type TaskExecutionEventV1 } from "./execution.js";
 
 export type Hash = string;
 export interface AbsentWorkspaceGenesisCursorV1 { schemaVersion: "1"; kind: "absent-workspace-genesis"; workspaceId: string; expectedWorkspaceHead: "absent" }
@@ -53,7 +54,7 @@ export interface TaskResolvedEventV1 { eventType: "TaskResolvedV1"; workspaceId:
 export interface ForkCreatedEventV1 { eventType: "ForkCreatedV1"; workspaceId: string; runId: string; forkPinDigest: string }
 export interface ContextManifestPublishedEventV1 { eventType: "ContextManifestPublishedV1"; workspaceId: string; runId: string; contextManifestCoreDigest: string }
 export type WorkspaceEventPayloadV1 = WorkspaceCreatedV1 | PolicyReferenceChangedV1 | WorkspaceAdmissionRecordedV1;
-export type RunEventPayloadV1 = RunCreatedV1 | TaskCreatedV1 | ProposalSubmittedV1 | AdmissionDecisionRecordedV1 | AttemptReceiptRecordedV1 | DeltaAcceptedV1 | TaskResolvedEventV1 | ForkCreatedEventV1 | ContextManifestPublishedEventV1;
+export type RunEventPayloadV1 = RunCreatedV1 | TaskCreatedV1 | ProposalSubmittedV1 | AdmissionDecisionRecordedV1 | AttemptReceiptRecordedV1 | DeltaAcceptedV1 | TaskResolvedEventV1 | ForkCreatedEventV1 | ContextManifestPublishedEventV1 | TaskExecutionEventV1;
 export type DomainEventPayloadV1 = WorkspaceEventPayloadV1 | RunEventPayloadV1;
 type ProtocolRecord = Record<string, unknown>;
 
@@ -132,6 +133,7 @@ export function assertDomainCommandV1(value: unknown): asserts value is DomainCo
 
 export function parseDomainEventPayloadV1(value: unknown): DomainEventPayloadV1 {
   const h = protocolRecord(value, "EVENT_PAYLOAD_INVALID");
+  if (typeof h.eventType === "string" && (TASK_EXECUTION_EVENT_TYPES_V1 as readonly string[]).includes(h.eventType)) return parseTaskExecutionEventV1(value);
   const specs: Record<string, readonly string[]> = { WorkspaceCreatedV1:["eventType","workspaceId","authorityPrincipalId","initialGrantDigest","authorityConsumptionMarker","activePolicyDigest"], PolicyReferenceChangedV1:["eventType","workspaceId","activePolicyDigest"], WorkspaceAdmissionRecordedV1:["eventType","workspaceId","proposalDigest","decisionEventId","state","quotaId","quotaDigest","consumed"], RunCreatedV1:["eventType","workspaceId","runId","initialDocument","canonicalizerVersion","hashVersion"], TaskCreatedV1:["eventType","workspaceId","runId","taskId","title","completionPolicy"], ProposalSubmittedV1:["eventType","workspaceId","runId","proposalId","proposalDigest"], AdmissionDecisionRecordedV1:["eventType","workspaceId","runId","proposalId","proposalDigest","transition","state","provenanceDigest","artifactDigest","observationCursor"], AttemptReceiptRecordedV1:["eventType","workspaceId","runId","receiptId","receiptDigest","outcome"], DeltaAcceptedV1:["eventType","workspaceId","runId","proposalId","proposalDigest","priorStateHash","resultingStateHash","resultingDocument"], TaskResolvedV1:["eventType","workspaceId","runId","taskId","resolution","evaluationClock"], ForkCreatedV1:["eventType","workspaceId","runId","forkPinDigest"], ContextManifestPublishedV1:["eventType","workspaceId","runId","contextManifestCoreDigest"] };
   if (typeof h.eventType !== "string" || !(h.eventType in specs)) protocolError("UNSUPPORTED_EVENT_TYPE"); const r = exactRecord(value, specs[h.eventType]!, "EVENT_PAYLOAD_INVALID"); for (const key of specs[h.eventType]!) if (!["initialDocument","resultingDocument","evaluationClock","observationCursor","completionPolicy","outcome","resolution","canonicalizerVersion","hashVersion","eventType"].includes(key)) nonEmpty(r[key],"EVENT_PAYLOAD_INVALID");
   if (h.eventType === "RunCreatedV1") { json(r.initialDocument,"EVENT_PAYLOAD_INVALID"); literal(r.canonicalizerVersion,"jcs-v1","EVENT_PAYLOAD_INVALID"); literal(r.hashVersion,"sha256-v1","EVENT_PAYLOAD_INVALID"); }

@@ -5,5 +5,6 @@ export * from "./projections/index.js";
 export * from "./receipts/index.js";
 export * from "./forks/index.js";
 export * from "./context/index.js";
+export * from "./execution/service.js";
 
 export const ORCHESTRATOR_PACKAGE = "@horseness/orchestrator" as const;

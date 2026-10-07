@@ -15,6 +15,26 @@ horseness status
 
 `task add` 创建持久化 draft，不会自动启动 worker，也不推进 canonical revision。请求发送前保存完整 ID、cursor 和幂等键；网络中断后保留同一请求，仅在用户明确重复原命令时重发。过期状态、冲突和权限拒绝不会触发静默自动重试。旧工作区不会被 `init` 擅自接管或重新授权。
 
+执行必须显式授权；`task add` 永远只创建 draft。新增命令：
+
+```sh
+horseness task dispatch --task TASK_ID --adapter pi --model PROVIDER/MODEL
+horseness task show --task TASK_ID
+horseness task breakdown --task TASK_ID --planner claude --model CONCRETE_MODEL
+horseness task show --task TASK_ID
+horseness task adopt --task TASK_ID --plan PLAN_DIGEST
+horseness task execute --task TASK_ID --adapter pi --model PROVIDER/MODEL
+horseness task cancel --task TASK_ID
+```
+
+host 可选 `pi`、`omp`、`claude`、`codex`，不会静默替换 host/model。省略 model 仅在 daemon 能确定具体默认身份时可用，否则报 `MODEL_REQUIRED`。启动命令返回持久化受理确认，不代表任务已完成；用 `task show` 查看依赖、attempt、认证 receipt/output digest、输出、计划预览和 workflow 的停止原因。CLI 不直接启动 native worker，不读取数据库，也不自动轮询。
+
+`breakdown` 只启动独立 planner，原目标不被完成，也不自动采纳或执行子任务。先审阅预览的指令、人工验收标准和依赖，再用精确 digest 显式 `adopt`；原目标保留为最终集成任务。验收标准是 worker 指导，不冒充自动语义证明。`execute` 显式授权目标依赖闭包的串行执行；需要自动规划并采纳时才传 `--auto-plan`，可同时指定 `--planner HOST --planner-model NAME`。该 flag 不带值、默认关闭，其他命令不接受；planner 参数要求该 flag。拒绝、依赖失败或未知结果会停止 workflow，不自动重试未知外部交接。`cancel` 持久化禁止后续启动，但不宣称撤销已交接的外部工作。
+
+旧工作区不会由 `init` 静默扩权。当前 authority 且拥有 `grant.issue.v1` 权限的用户可显式运行 `horseness workspace enable-execution`；通过 `grant.list.v1` 检查当前身份和 scope，再申请保持同 principal/scope/expiry 的执行授权。非 authority 被拒绝。opaque reference 在私有文件中原子替换并 fsync，不输出到终端；授权本身不调用模型。
+
+中断请求保留完整原始调用及规范化选项指纹，包括 adapter、model、plan、自动规划和 planner 选项。改变选项不能重放旧 mutation；pending 期间 `status`、`task show` 等查询仍可用。明确的最终拒绝清除 pending，未经验证的响应保留请求。已在隔离工作区通过真实 Pi 0.73.1 和本地确定性 provider 验证原生读写工具、receipt、重复请求恢复、重启、计划预览/采用、依赖执行、自动规划、失败结果与原生交接后的崩溃恢复；这不等于线上模型认证或其他宿主的 live 验证，详细范围见 C22 证据账本。
+
 已在真实 CLI → daemon → SQLite 路径验证上述四条命令与 daemon 重启后的状态保留。详见 [CLI 使用说明](cli.md)。以下保留原低层接口问题的背景说明；`run-create` 等协议级命令仍供高级自动化和调试使用。
 
 ## 原问题
@@ -72,9 +92,9 @@ horseness run-create \
 horseness run create --title "我的任务"
 ```
 
-## 当前用户必须手工完成的流程
+## 历史低层接口所需的手工流程
 
-当前 CLI 通常要求用户：
+直接使用低层协议接口时，用户通常需要：
 
 1. 找到 workspace ID；
 2. 查询当前状态；

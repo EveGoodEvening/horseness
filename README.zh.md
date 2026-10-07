@@ -17,6 +17,8 @@ horseness status
 
 CLI 自动发现项目、选择当前 run、查询 cursor、生成 ID 和幂等键，不再要求手填协议 JSON。任务以持久化 draft 状态创建，不会自动启动 worker。用 `--workspace PATH` 选择其他项目，`--json` 获取机器可读结果，`horseness --help` 查看帮助。源码运行方式、旧工作区限制和中断恢复见 [CLI 使用说明](docs/cli.md)。npm 版本尚未发布。
 
+执行需要显式发起：`task dispatch --task ID --adapter HOST --model MODEL` 启动一次执行，`task show --task ID` 查看经过验证的结果。较大的目标可以先 `task breakdown`，审阅预览后 `task adopt --plan DIGEST`，再 `task execute` 按依赖执行；`task execute --auto-plan` 则显式组合拆解、采用计划和串行执行。`task add` 不会启动这些动作。原生宿主、模型和旧工作区授权要求见 [CLI 使用说明](docs/cli.md#explicit-execution-planning-and-cancellation)。
+
 ## 问题
 
 主 Agent + 自由形式 subagent 总结 + session 压缩，存在固有缺陷：

@@ -16,6 +16,18 @@ const calls: string[] = [];
 const runtime: CodexNativeRuntimeV1 = { async launch() { calls.push("launch"); return attempt; }, async cancel() { calls.push("cancel"); return attempt; }, async reconcile() { calls.push("reconcile"); return attempt; }, async resume(request) { calls.push(request.operation); return attempt; }, async collect() { calls.push("collect"); return attempt; } };
 const adapter = createCodexAdapterV1({ binding, credential: { schemaVersion: "1", kind: "host-reference", reference: "codex.grant.ref", scope: { workspaceId: "ws", adapterId: CODEX_ADAPTER_ID, purpose: "horseness-attempt-grant" } }, runtime, producerPrincipalId: "worker", producerGrantDigest: "grant" });
 
+test("Codex seals known failures and cancellations without claiming successful output", async () => {
+  for (const outcome of ["failed", "cancelled"] as const) {
+    const terminal: CodexNativeAttemptV1 = { ...attempt, outcome, outputDigest: null };
+    const failedAdapter = createCodexAdapterV1({ binding, credential: { schemaVersion: "1", kind: "host-reference", reference: "codex.grant.ref", scope: { workspaceId: "ws", adapterId: CODEX_ADAPTER_ID, purpose: "horseness-attempt-grant" } }, runtime: { ...runtime, async collect() { return terminal; } }, producerPrincipalId: "worker", producerGrantDigest: "grant" });
+    const receipt = await failedAdapter.collectReceipt(binding);
+    verifyAttemptReceipt(receipt);
+    assert.equal(receipt.outcome, outcome);
+    assert.equal(receipt.outputDigest, null);
+    assert.deepEqual(receipt.evidence, terminal.evidence);
+  }
+});
+
 test("Codex package exposes meaningful immutable native contributions", () => { assert.equal(CODEX_NATIVE_PACKAGE_METADATA.hostVersionRange, "=0.144.1-linux-x64"); assert.equal(CODEX_INSTALL_CONTRIBUTIONS.length, 5); assert.deepEqual(CODEX_INSTALL_CONTRIBUTIONS.map(item => item.mode), Array(5).fill("read-only")); });
 
 test("Codex app-server item parser separates passive bookkeeping from every pinned executing tool surface", () => {

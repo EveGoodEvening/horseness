@@ -20,6 +20,17 @@ const adapter = createClaudeAdapterV1({ binding, credential: { schemaVersion: "1
 test("Claude package exposes meaningful immutable native contributions", () => { assert.equal(CLAUDE_NATIVE_PACKAGE_METADATA.hostVersionRange, "=2.1.228"); assert.equal(CLAUDE_INSTALL_CONTRIBUTIONS.length, 8); assert.deepEqual(CLAUDE_INSTALL_CONTRIBUTIONS.map(item => item.mode), Array(8).fill("read-only")); });
 test("Claude lifecycle retains binding, reconciles, resumes and seals a valid receipt", async () => { const capabilities = await adapter.detectCapabilities(); assert.equal(capabilities.providerId, CLAUDE_PROVIDER_ID); const launched = await adapter.launch({ ...binding, operation: "launch", renderedContextDigest: "sha256:rendered", providerOptions: {} }); assert.equal(launched.providerOperationId, "claude-operation"); await adapter.reconcile({ ...binding, operation: "reconcile", providerOperationId: "claude-operation" }); await adapter.resume({ ...binding, operation: "reattach", providerOperationId: "claude-operation", nativeSessionId: "claude-session" }); await adapter.resume({ ...binding, operation: "resume", providerOperationId: "claude-operation", nativeSessionId: "claude-session" }); const receipt = await adapter.collectReceipt(binding); verifyAttemptReceipt(receipt); assert.equal(receipt.providerId, CLAUDE_PROVIDER_ID); assert.deepEqual(calls, ["launch", "reconcile", "reattach", "resume", "collect"]); });
 test("Claude rejects binding and credential scope substitution", () => { assert.throws(() => createClaudeAdapterV1({ binding, credential: { schemaVersion: "1", kind: "host-reference", reference: "claude.grant.ref", scope: { workspaceId: "other", adapterId: CLAUDE_ADAPTER_ID, purpose: "horseness-attempt-grant" } }, runtime, producerPrincipalId: "worker", producerGrantDigest: "grant" })); assert.throws(() => adapter.launch({ ...binding, generation: 2, operation: "launch", renderedContextDigest: "sha256:rendered", providerOptions: {} })); });
+test("Claude seals known failures and cancellations without claiming successful output", async () => {
+  for (const outcome of ["failed", "cancelled"] as const) {
+    const terminal: ClaudeNativeAttemptV1 = { ...attempt, outcome, outputDigest: null };
+    const failedAdapter = createClaudeAdapterV1({ binding, credential: { schemaVersion: "1", kind: "host-reference", reference: "claude.grant.ref", scope: { workspaceId: "ws", adapterId: CLAUDE_ADAPTER_ID, purpose: "horseness-attempt-grant" } }, runtime: { ...runtime, async collect() { return terminal; } }, producerPrincipalId: "worker", producerGrantDigest: "grant" });
+    const receipt = await failedAdapter.collectReceipt(binding);
+    verifyAttemptReceipt(receipt);
+    assert.equal(receipt.outcome, outcome);
+    assert.equal(receipt.outputDigest, null);
+    assert.deepEqual(receipt.evidence, terminal.evidence);
+  }
+});
 test("Claude doctor independently hashes exact shipped package resources and rejects copied-byte tampering", async () => {
   const nativeRoot = fileURLToPath(new URL("../native/", import.meta.url));
   const copiedRoot = await mkdtemp(join(tmpdir(), "horseness-claude-native-provenance-"));

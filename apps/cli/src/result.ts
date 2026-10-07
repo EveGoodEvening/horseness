@@ -70,6 +70,41 @@ export function renderCliHumanV1(result: CliResultV1, secretKeys: readonly strin
   if (safe.command === "run create") return `Created run ${String(data.runId)}: ${quoted(data.title)} (current)\nNext: horseness task add --title TEXT\n`;
   if (safe.command === "run use") return `Current run: ${String(data.runId)} — ${quoted(data.title)}\n`;
   if (safe.command === "task add") return `Added task ${String(data.taskId)}: ${quoted(data.title)} [draft]\nRun: ${String(data.runId)}\n`;
+  if (safe.command === "workspace enable-execution") return `Execution authority enabled for workspace ${String(data.workspaceId)}. No task was launched.\n`;
+  if (["task dispatch", "task breakdown", "task execute", "task adopt", "task cancel"].includes(safe.command)) {
+    const lines = [`${safe.command}: ${String(data.status)} — task ${String(data.taskId)}`, `Operation: ${String(data.outcomeId)}`];
+    if (data.workflowId !== undefined) lines.push(`Workflow: ${String(data.workflowId)}`);
+    if (data.plannerTaskId !== undefined) lines.push(`Planner task: ${String(data.plannerTaskId)}`);
+    if (data.taskIds !== undefined) lines.push(`Adopted tasks: ${(data.taskIds as readonly string[]).join(", ")}`);
+    if (safe.command === "task breakdown") lines.push("Planning started; this acknowledgement is not a completed preview. Inspect task show, then explicitly adopt its plan digest.");
+    else if (safe.command === "task dispatch" || safe.command === "task execute") lines.push("Durable start acknowledgement, not task completion. Observe progress and authenticated results with task show.");
+    lines.push(`Next: horseness task show --task ${String(data.taskId)} --run ${String(data.runId)}`);
+    return `${lines.join("\n")}\n`;
+  }
+  if (safe.command === "task show") {
+    const task = data.task as Readonly<Record<string, JsonValue>>;
+    const lines = [`Task: ${String(task.taskId)} — ${quoted(task.title)}`, `Lifecycle: ${String(task.lifecycle)}`, `Schedulability: ${typeof task.schedulability === "string" ? task.schedulability : JSON.stringify(task.schedulability)}`, `Dependencies: ${(task.dependencies as readonly string[]).join(", ") || "none"}`];
+    for (const attempt of task.attempts as readonly Readonly<Record<string, JsonValue>>[]) {
+      lines.push(`Attempt ${String(attempt.attemptId)} generation ${String(attempt.generation)}: ${String(attempt.adapterId)} / ${String(attempt.model)} [${String(attempt.state)}]`);
+      for (const key of ["providerOperationId", "receiptDigest", "outputDigest", "failureCode"]) if (attempt[key] !== null && attempt[key] !== undefined) lines.push(`  ${key}: ${String(attempt[key])}`);
+    }
+    if (task.workflow !== null) {
+      const workflow = task.workflow as Readonly<Record<string, JsonValue>>;
+      lines.push(`Workflow ${String(workflow.workflowId)}: ${String(workflow.state)}${workflow.reasonCode === null ? "" : ` (${String(workflow.reasonCode)})`}`);
+    }
+    if (task.plan !== null) {
+      const plan = task.plan as Readonly<Record<string, JsonValue>>;
+      const adopted = plan.adoptedTaskIds as readonly string[];
+      lines.push(`Plan: ${String(plan.planDigest)} [${adopted.length === 0 ? "preview — not adopted" : "adopted"}]`);
+      for (const child of plan.tasks as readonly Readonly<Record<string, JsonValue>>[]) {
+        lines.push(`  ${String(child.key)}: ${quoted(child.title)}`, `    Instructions: ${quoted(child.instructions)}`, `    Acceptance criteria: ${JSON.stringify(child.acceptanceCriteria)}`, `    Depends on: ${(child.dependsOn as readonly string[]).join(", ") || "none"}`);
+      }
+      if (adopted.length === 0) lines.push(`Adopt explicitly: horseness task adopt --task ${String(task.taskId)} --plan ${String(plan.planDigest)} --run ${String(data.runId)}`);
+      else lines.push(`Adopted tasks: ${adopted.join(", ")}`);
+    }
+    lines.push(task.output === null ? "No published output yet; an acknowledgement or worker prose is not completion." : `Published output:\n${String(task.output)}`);
+    return `${lines.join("\n")}\n`;
+  }
   if (safe.command === "run list") {
     const runs = data.runs as readonly Readonly<Record<string, JsonValue>>[];
     return runs.length === 0 ? "No runs yet. Create one with horseness run create --title TEXT.\n" : `${runs.map((run) => `${run.current ? "*" : " "} ${String(run.runId)}  ${quoted(run.title)}`).join("\n")}\n`;
@@ -86,7 +121,7 @@ export function renderCliHumanV1(result: CliResultV1, secretKeys: readonly strin
         lines.push(`Run: ${String(run.runId)} — ${quoted(run.title)}`, `Canonical revision: ${String(run.revision)}`);
       }
     } else lines.push(`Run: ${String(data.runId)}`);
-    lines.push(`Tasks: ${tasks.length}`, ...tasks.map((task) => `  ${String(task.taskId)}  [${String(task.lifecycle)}] ${quoted(task.title)}`));
+    lines.push(`Tasks: ${tasks.length}`, ...tasks.map((task) => `  ${String(task.taskId)}  [${String(task.lifecycle)}] ${quoted(task.title)}${task.schedulability === undefined ? "" : ` — ${JSON.stringify(task.schedulability)}`}${task.workflow === undefined || task.workflow === null ? "" : ` workflow=${JSON.stringify(task.workflow)}`}${task.result === undefined || task.result === null ? "" : ` result=${JSON.stringify(task.result)}`}${task.dependencies === undefined ? "" : ` dependencies=${JSON.stringify(task.dependencies)}`}`));
     if (tasks.length === 0 && (safe.command === "task list" || data.run !== null)) lines.push("Add a task with horseness task add --title TEXT.");
     return `${lines.join("\n")}\n`;
   }

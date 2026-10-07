@@ -15,6 +15,7 @@ function initialPinCore(): Omit<ForkPinCoreV1, "ancestry"> {
 
 test("task lifecycle is closed and illegal or unknown transitions fail closed", () => {
   assert.equal(reduceTaskLifecycle("draft", { type: "activate" }), "active");
+  assert.equal(reduceTaskLifecycle("draft", { type: "resolve", resolution: "cancelled" }), "cancelled");
   assert.equal(reduceTaskLifecycle("active", { type: "resolve", resolution: "succeeded" }), "succeeded");
   assert.throws(() => reduceTaskLifecycle("draft", { type: "resolve", resolution: "failed" }), /ILLEGAL_TASK_TRANSITION/);
   assert.throws(() => reduceTaskLifecycle("active", { type: "bogus" } as never), /ILLEGAL_TASK_TRANSITION/);
