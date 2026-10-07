@@ -6,9 +6,12 @@ export const repositoryRoot = resolve(import.meta.dirname, "../..");
 
 export async function runCommand(command, args, options = {}) {
   const { timeoutMs = 180_000, env = {}, maxOutputBytes = 8 * 1024 * 1024 } = options;
+  const childEnvironment = { ...process.env, ...env };
+  // This is an independent CLI/test runner, not a worker of the parent node:test.
+  delete childEnvironment.NODE_TEST_CONTEXT;
   const child = spawn(command, args, {
     cwd: repositoryRoot,
-    env: { ...process.env, ...env },
+    env: childEnvironment,
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stdout = "";
