@@ -240,8 +240,11 @@ void test("multi-root diamond adoption preserves every dependency and attaches o
   const adoption=derivePlanAdoptionV1(plan);
   const names=new Map(adoption.contracts.map(task=>[task.taskId,task.title]));
   names.set("root","root");
-  assert.deepEqual(adoption.edges.map(edge=>`${names.get(edge.sourceTaskId)}->${names.get(edge.dependentTaskId)}`).sort(),
-    ["a->c","a->d","b->c","b->f","c->e","d->e","e->root","f->root"]);
+  assert.deepEqual(adoption.edges.map(edge=>{
+    const source=names.get(edge.sourceTaskId) ?? assert.fail("Unknown dependency source");
+    const dependent=names.get(edge.dependentTaskId) ?? assert.fail("Unknown dependency target");
+    return `${source}->${dependent}`;
+  }).sort(),["a->c","a->d","b->c","b->f","c->e","d->e","e->root","f->root"]);
   assert.equal(new Set(adoption.edges.map(edge=>edge.edgeId)).size,8);
   for(const [index,task] of adoption.contracts.entries()){
     const item=branchingPlanOutput.tasks[index] ?? assert.fail("Missing plan task");
