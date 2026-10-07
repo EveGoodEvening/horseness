@@ -1,10 +1,11 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, closeSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, closeSync } from "node:fs";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { canonicalJson, createWorkspaceGenesis, domainDigest, NO_POLICY_DIGEST, type JsonValue } from "@horseness/domain";
 import { StoreConflictError, type SQLiteAuthority } from "@horseness/store-sqlite";
 import type { AuthenticatedGrantV1, ProtocolMethodV1 } from "@horseness/protocol";
 import { GRANT_AUTHORITY_STATE_KIND, GrantStore } from "./grant-store.js";
+import { assertPrivateStatePath, protectPrivateStatePath } from "./private-state.js";
 
 export interface BootstrapCapabilityV1 {
   readonly schemaVersion: "1";
@@ -36,11 +37,11 @@ export class BootstrapCeremony {
 
   createCapability(authorityPrincipalId = `authority:${randomUUID()}`): BootstrapCapabilityV1 {
     mkdirSync(dirname(this.capabilityPath), { recursive: true, mode: 0o700 });
-    chmodSync(dirname(this.capabilityPath), 0o700);
+    protectPrivateStatePath(dirname(this.capabilityPath), "directory");
     const capability: BootstrapCapabilityV1 = Object.freeze({ schemaVersion: "1", capabilityId: randomUUID(), secret: randomBytes(32).toString("base64url"), workspaceId: this.workspaceId, osIdentity: this.currentIdentity(), authorityPrincipalId, issuedAt: this.authorityTime() });
     const descriptor = openSync(this.capabilityPath, "wx", 0o600);
     try { writeFileSync(descriptor, `${canonicalJson(capability as unknown as JsonValue)}\n`); } finally { closeSync(descriptor); }
-    chmodSync(this.capabilityPath, 0o600);
+    protectPrivateStatePath(this.capabilityPath, "file");
     return capability;
   }
 
@@ -56,9 +57,8 @@ export class BootstrapCeremony {
 
   consumeBootstrapCapability(secret: string): BootstrapResultV1 {
     const identity = this.currentIdentity();
-    const parent = statSync(dirname(this.capabilityPath));
-    const capabilityFile = statSync(this.capabilityPath, { bigint: false });
-    if (!parent.isDirectory() || (parent.mode & 0o777) !== 0o700 || !capabilityFile.isFile() || (capabilityFile.mode & 0o777) !== 0o600) throw new Error("bootstrap capability permissions invalid");
+    assertPrivateStatePath(dirname(this.capabilityPath), "directory");
+    assertPrivateStatePath(this.capabilityPath, "file");
     renameSync(this.capabilityPath, this.consumingPath);
     let appended = false;
     try {
@@ -83,6 +83,6 @@ export class BootstrapCeremony {
 }
 
 export function assertContainedStatePath(workspacePath: string, path: string): void {
-  const root = `${resolve(workspacePath)}/`;
-  if (!resolve(path).startsWith(root)) throw new Error("daemon state path escapes workspace");
+  const descendant = relative(resolve(workspacePath), resolve(path));
+  if (descendant === "" || descendant === ".." || descendant.startsWith(`..${sep}`) || isAbsolute(descendant)) throw new Error("daemon state path escapes workspace");
 }

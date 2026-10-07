@@ -6,6 +6,7 @@ This project follows semantic versioning. Release notes describe the public pack
 
 - Fixed CI and install-smoke startup by installing the manifest-pinned pnpm before Node setup initializes its pnpm cache.
 - Restored the full CI gate chain: authenticated historical bootstrap checks use their sealed candidate, bootstrap tests launch the real daemon, and stale admission fixtures use current storage. TypeScript lint now covers its configured source/test targets without relaxing the existing rules.
+- Fixed bootstrap through aliased temporary/workspace paths and Windows path containment; Windows bootstrap capabilities now use verified current-user-only protected DACLs instead of POSIX permission bits.
 - Added explicit native `task dispatch/show`, planner `task breakdown/adopt`, dependency-aware `task execute`, opt-in automatic planning, cancellation, and explicit existing-workspace execution authorization. `task add` remains draft-only.
 - Added immutable native execution profiles, durable launch intent and planner-result identity, authenticated output/evidence receipts, pre-handoff cancellation, and fail-closed unknown-outcome recovery without duplicate launches.
 - Bound execution to current grant lineage, adapter scope, policy and authority observations; restricted receipt artifact references to the producing attempt and gated Codex turns on an empty complete MCP inventory.

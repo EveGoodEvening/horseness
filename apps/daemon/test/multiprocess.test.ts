@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Daemon, discoverDaemonEndpoint } from "../src/index.js";
+import { assertContainedStatePath } from "../src/bootstrap.js";
 
 const authorityTime = (): string => "2026-08-12T00:00:00.000Z";
 function fixture(identity = "owner"): { root: string; daemon: Daemon } {
@@ -20,11 +21,50 @@ function bootstrap(daemon: Daemon): ReturnType<Daemon["consumeBootstrapCapabilit
 test("successful bootstrap is single-use and owner-only", () => {
   const { daemon } = fixture();
   const capability = daemon.createBootstrapCapability();
-  assert.equal(statSync(daemon.config.stateDirectory).mode & 0o777, 0o700);
-  assert.equal(statSync(daemon.config.bootstrapCapabilityPath).mode & 0o777, 0o600);
+  if (process.platform !== "win32") {
+    assert.equal(statSync(daemon.config.stateDirectory).mode & 0o777, 0o700);
+    assert.equal(statSync(daemon.config.bootstrapCapabilityPath).mode & 0o777, 0o600);
+  }
   const result = daemon.consumeBootstrapCapability(capability.secret);
   assert.equal(daemon.authority.replay(result.workspaceId, "workspace", result.workspaceId).length, 1);
   assert.throws(() => daemon.consumeBootstrapCapability(capability.secret)); daemon.close();
+});
+
+test("bootstrap refuses broad native permissions before consuming authority", () => {
+  const { root, daemon } = fixture();
+  try {
+    const capability = daemon.createBootstrapCapability();
+    if (process.platform === "win32") {
+      const changed = spawnSync("icacls.exe", [daemon.config.bootstrapCapabilityPath, "/grant", "*S-1-1-0:(R)"], { encoding: "utf8", windowsHide: true });
+      assert.equal(changed.status, 0, changed.stderr || changed.stdout);
+    } else chmodSync(daemon.config.bootstrapCapabilityPath, 0o644);
+    assert.throws(() => daemon.consumeBootstrapCapability(capability.secret), /bootstrap capability permissions invalid/);
+    assert.equal(daemon.authority.replay(daemon.config.workspaceId, "workspace", daemon.config.workspaceId).length, 0);
+  } finally { daemon.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("aliased workspace bootstrap and reopen share one canonical authority", () => {
+  const root = mkdtempSync(join(tmpdir(), "horseness-daemon-alias-"));
+  const physical = join(root, "physical"), alias = join(root, "alias");
+  mkdirSync(physical, { mode: 0o700 });
+  symlinkSync(physical, alias, process.platform === "win32" ? "junction" : "dir");
+  const config = { workspacePath: alias, databasePath: join(alias, "authority.sqlite"), artifactRoot: join(alias, "artifacts"), transport: { kind: "stdio" as const }, authorityTime };
+  let daemon: Daemon | undefined;
+  try {
+    daemon = new Daemon(config, { identity: () => "owner" });
+    const result = bootstrap(daemon);
+    daemon.close(); daemon = undefined;
+    daemon = new Daemon(config, { identity: () => "owner" });
+    assert.equal(daemon.config.workspaceId, result.workspaceId);
+    assert.equal(daemon.authority.replay(result.workspaceId, "workspace", result.workspaceId).length, 1);
+  } finally { daemon?.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("state containment rejects the workspace itself, sibling prefixes and parent escapes", () => {
+  const root = join(tmpdir(), "horseness-contained-workspace");
+  for (const path of [root, join(`${root}-other`, "state"), join(root, "..", "outside-state")]) {
+    assert.throws(() => assertContainedStatePath(root, path), /daemon state path escapes workspace/);
+  }
 });
 
 test("concurrent bootstrap has exactly one winner", async () => {
