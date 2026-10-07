@@ -137,6 +137,12 @@ async function show(taskId) {
   const data = await invoke(["task", "show", "--task", taskId]);
   return data.task ?? data;
 }
+async function showAll(taskIds) {
+  const tasks = [];
+  // CLI workspace discovery/state is locked even for read-only commands.
+  for (const taskId of taskIds) tasks.push(await show(taskId));
+  return tasks;
+}
 async function assertUnlaunched(taskId, lifecycle) {
   const task = await show(taskId);
   assert.equal(task.lifecycle, lifecycle);
@@ -249,7 +255,7 @@ try {
   await invoke(["task", "breakdown", "--task", failedObjective.taskId, "--planner", "pi", "--model", `local/${model}`]);
   const failurePreview = await observeUntil(failedObjective.taskId, task => task.plan && task.workflow?.state === "succeeded");
   const failureAdoption = await invoke(["task", "adopt", "--task", failedObjective.taskId, "--plan", failurePreview.plan.planDigest]);
-  const failureChildren = await Promise.all(failureAdoption.taskIds.map(show));
+  const failureChildren = await showAll(failureAdoption.taskIds);
   const prerequisite = failureChildren.find(task => task.dependencies.length === 0);
   const dependent = failureChildren.find(task => task.dependencies.includes(prerequisite?.taskId));
   assert.ok(prerequisite); assert.ok(dependent);
@@ -272,7 +278,7 @@ try {
   await invoke(["task", "breakdown", "--task", cancelledObjective.taskId, "--planner", "pi", "--model", `local/${model}`]);
   const cancellationPreview = await observeUntil(cancelledObjective.taskId, task => task.plan && task.workflow?.state === "succeeded");
   const cancellationAdoption = await invoke(["task", "adopt", "--task", cancelledObjective.taskId, "--plan", cancellationPreview.plan.planDigest]);
-  const cancellationChildren = await Promise.all(cancellationAdoption.taskIds.map(show));
+  const cancellationChildren = await showAll(cancellationAdoption.taskIds);
   const cancelledPrerequisite = cancellationChildren.find(task => task.dependencies.length === 0);
   assert.ok(cancelledPrerequisite);
   await invoke(["task", "cancel", "--task", cancelledPrerequisite.taskId]);
@@ -285,11 +291,11 @@ try {
   await assertRefused(["task", "execute", "--task", cancelledObjective.taskId, "--adapter", "pi", "--model", `local/${model}`], "EXECUTION_ALREADY_STARTED");
   await assertAbsent(negativeFiles);
   const durableIds = [failedObjective.taskId, prerequisite.taskId, dependent.taskId, cancelledDraft.taskId, cancelledObjective.taskId, ...cancellationAdoption.taskIds];
-  const beforeNegativeRestart = await Promise.all(durableIds.map(show));
+  const beforeNegativeRestart = await showAll(durableIds);
   const beforeNegativeRequests = requests.length;
   await invoke(["stop", "--workspace-path", workspace]); initialized = false;
   await invoke(["init"]); initialized = true;
-  assert.deepEqual(await Promise.all(durableIds.map(show)), beforeNegativeRestart);
+  assert.deepEqual(await showAll(durableIds), beforeNegativeRestart);
   assert.equal(requests.length, beforeNegativeRequests); await assertAbsent(negativeFiles);
   console.log("failed prerequisite: real failure receipt, blocked dependent/objective, no side effects and restart persistence passed");
   console.log("cancellation: draft refusal, adopted prerequisite dependency blockade, objective refusal and restart persistence passed");
