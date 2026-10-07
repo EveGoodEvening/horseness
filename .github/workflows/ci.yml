@@ -100,7 +100,16 @@ jobs:
       - name: Install dependencies
         run: corepack pnpm install --frozen-lockfile
       - name: Test system lifecycle and native task workflows
-        run: corepack pnpm run test:e2e
+        shell: bash
+        run: |
+          set +e
+          corepack pnpm run test:e2e 2>&1 | tee e2e.log
+          result=${PIPESTATUS[0]}
+          set -e
+          if [ "$result" -ne 0 ]; then
+            node -e 'const output=require("node:fs").readFileSync("e2e.log","utf8"); console.log("::error title=End-to-end diagnostics::"+output.replaceAll("%","%25").replaceAll("\r","%0D").replaceAll("\n","%0A"));'
+          fi
+          exit "$result"
 
   c13-os:
     name: Daemon / ${{ matrix.receipt-os }}

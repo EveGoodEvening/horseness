@@ -4,6 +4,7 @@ This project follows semantic versioning. Release notes describe the public pack
 
 ## 1.0.0 — Unreleased
 
+- Exposed failed Linux e2e output in GitHub annotations while preserving the real command and exit status, so hosted-only failures remain diagnosable without authenticated log downloads.
 - Expanded the default test gate to all orchestrator and storage test directories plus root tooling checks; added unit coverage for branching task graphs, complete dependency joins, planner-size limits, and failed/cancelled dependency release.
 - Added ordinary PR Linux e2e for system/installer blackboxes and real digest-verified Pi workflows, including failed prerequisites, cancellation, and restart persistence. Independent nested test runners now clear inherited Node test-worker state instead of silently skipping their tests; installation blackboxes deploy the real daemon without changing signed fixtures.
 - Renamed CI and installer-smoke checks by responsibility instead of delivery chunk IDs, with descriptive historical-evidence steps; executable gates and receipt/artifact contracts are unchanged.
