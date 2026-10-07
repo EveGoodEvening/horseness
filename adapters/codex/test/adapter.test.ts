@@ -120,7 +120,7 @@ void test("Codex retained authority reclaims only a mismatched process incarnati
     const commandEnd = stat.lastIndexOf(")");
     const incarnation = stat.slice(commandEnd + 2).trim().split(/\s+/)[19];
     assert.ok(incarnation);
-    await writeFile(join(lock, "owner.json"), JSON.stringify({ pid: process.pid, nonce: randomUUID(), incarnation: `${String(BigInt(incarnation) + 1n)}` }), { mode: 0o600 });
+    await writeFile(join(lock, "owner.json"), JSON.stringify({ pid: process.pid, nonce: randomUUID(), incarnation: String(BigInt(incarnation) + 1n) }), { mode: 0o600 });
     const reclaimed = createCodexRetainedDeliveryAuthorityV1(root);
     let entered = false;
     await reclaimed.runExclusive(key, async () => { entered = true; return Promise.resolve(); });

@@ -58,7 +58,7 @@ export async function createClaudeTaskAdapterV1(options: NativeTaskAdapterOption
   if (profile.nativeExecutableDigest !== EXECUTABLE_DIGEST) throw new Error("NATIVE_PROFILE_MISMATCH");
   const spool = await createNativeTaskSpoolV1(options);
   const controller = new AbortController();
-  let active: Promise<NativeTaskTerminalV1 | null> | null = null;
+  let active: Promise<NativeTaskTerminalV1> | null = null;
   const collect = async () => active ? await active : await spool.load();
   const runtime = {
     detectCapabilities() { return Promise.resolve({ schemaVersion: "1" as const, adapterId: CLAUDE_ADAPTER_ID, providerId: profile.providerId, launch: true, cancel: true, reconcile: "supported" as const, reattach: "unsupported" as const, nativeResume: "unsupported" as const, contextInjection: "bytes" as const, receiptCollection: true as const, maxContextBytes: 1_048_576, outputMediaTypes: ["text/plain", "application/json"], evidenceMediaTypes: ["application/json"] }); },

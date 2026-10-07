@@ -66,12 +66,13 @@ async function runChild(loaderPath: string, runnerPath: string, extensionPath: s
     emitBeforeAgentStart(prompt: string, attachments: undefined, systemPrompt: string, context: object): Promise<unknown>;
     emit(event: Record<string, unknown>): Promise<unknown>;
   }
-  const [loaderModule, runnerModule]: unknown[] = await Promise.all([import(pathToFileURL(loaderPath).href), import(pathToFileURL(runnerPath).href)]);
-  const { loadExtensions } = loaderModule as { loadExtensions(paths: string[], cwd: string): Promise<{ errors: unknown[]; extensions: LoadedExtension[]; runtime: unknown }> };
+  const importedModules: unknown = await Promise.all([import(pathToFileURL(loaderPath).href), import(pathToFileURL(runnerPath).href)]);
+  const [loaderModule, runnerModule] = importedModules as [unknown, unknown];
+  const loader = loaderModule as { loadExtensions(paths: string[], cwd: string): Promise<{ errors: unknown[]; extensions: LoadedExtension[]; runtime: unknown }> };
   const { ExtensionRunner } = runnerModule as { ExtensionRunner: new (extensions: LoadedExtension[], runtime: unknown, cwd: string, session: { getCwd(): string }, providers: { registerProvider(): undefined; unregisterProvider(): undefined }) => ChildRunner };
-  const loaded = await loadExtensions([extensionPath], cwd);
-  if (loaded.errors.length !== 0 || loaded.extensions.length !== 1) throw new Error(`OMP extension load failed: ${JSON.stringify(loaded.errors)}`);
-  const extension = loaded.extensions[0] as LoadedExtension;
+  const loaded = await loader.loadExtensions([extensionPath], cwd);
+  const extension = loaded.extensions[0];
+  if (loaded.errors.length !== 0 || loaded.extensions.length !== 1 || extension === undefined) throw new Error(`OMP extension load failed: ${JSON.stringify(loaded.errors)}`);
   const runner = new ExtensionRunner(loaded.extensions, loaded.runtime, cwd, { getCwd: () => cwd }, { registerProvider() { return undefined; }, unregisterProvider() { return undefined; } });
   const handlerErrors: { extensionPath: string; event: string; error: string }[] = [];
   runner.onError((error: { extensionPath: string; event: string; error: string }) => {
@@ -110,7 +111,7 @@ async function runChild(loaderPath: string, runnerPath: string, extensionPath: s
         value = await tool.definition.execute(args[1], args[2]);
       } else if (message.method === "emit") {
         const event = structuredClone((message.args as unknown[])[0]) as Record<string, unknown> & { prompt?: string };
-        if (event.type === "before_agent_start") value = await runner.emitBeforeAgentStart(String(event.prompt ?? ""), undefined, "", {});
+        if (event.type === "before_agent_start") value = await runner.emitBeforeAgentStart(event.prompt ?? "", undefined, "", {});
         else value = await runner.emit(event);
       } else if (message.method === "revoke") {
         await revoke?.();

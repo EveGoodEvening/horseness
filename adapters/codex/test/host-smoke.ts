@@ -412,7 +412,7 @@ try {
   }
   smokeStage = "real-host-restart";
   await closeAppServer();
-  await new Promise<void>((resolveClose, reject) => required(server).close(error => { error ? reject(error) : resolveClose(); }(); })); server = undefined;
+  await new Promise<void>((resolveClose, reject) => { required(server).close(error => { if (error) reject(error); else resolveClose(); }); }); server = undefined;
   await runtime.shutdown();
   retainedAuthority = createCodexRetainedDeliveryAuthorityV1(retainedRoot);
   runtime = makeRuntime(); runtimes = new Map(registrations.map(item => [item.capabilityReference, runtime]));
@@ -462,7 +462,7 @@ try {
   assert.equal(forked.threadId, forkSession); assert.equal(forked.mcpCalls.length, 0); assert.equal(forked.executingToolCallCount, 0); assert.ok(forked.assistantText.includes("FORK_OK"));
   if (new Set([invocation.turnId, resumed.turnId, forked.turnId]).size !== 3) throw new Error("CODEX_NATIVE_TURN_COUNT_INVALID");
   assert.deepEqual(observed, decisions); assert.equal(acceptedRevision, 1); assert.deepEqual(acceptedDocument, { value: 2 });
-  await new Promise<void>((resolveClose, reject) => required(server).close(error => { error ? reject(error) : resolveClose(); }(); })); server = undefined;
+  await new Promise<void>((resolveClose, reject) => { required(server).close(error => { if (error) reject(error); else resolveClose(); }); }); server = undefined;
   for (const scenario of scenarioAuthorities) scenario.authority.close();
   type UninstallCrash = UninstallPhase | "after_plugin_uninstall";
   const syncDirectory = async (path: string) => { const handle = await open(path, "r"); try { await handle.sync(); } finally { await handle.close(); } };

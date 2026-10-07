@@ -229,8 +229,9 @@ function parseJournal(databasePath: string, artifactRoot: string): RestorePaths 
   const journal = value as Record<string, unknown>;
   const phases: readonly RestorePhase[] = ["staged", "old-moved", "database-activated", "artifacts-activated", "committed"];
   const identity = journal.retainedBackupIdentity;
+  const identityIsObject=typeof identity === "object" && identity !== null;
   const validIdentity = identity === null || (
-    typeof identity === "object" && identity !== null && "kind" in identity && "createdAt" in identity && "databaseDigest" in identity && "manifestDigest" in identity &&
+    identityIsObject && "kind" in identity && "createdAt" in identity && "databaseDigest" in identity && "manifestDigest" in identity &&
     Object.keys(identity).sort().join("\0") === ["createdAt", "databaseDigest", "kind", "manifestDigest"].sort().join("\0") &&
     identity.kind === "HorsenessVerifiedBackupIdentityV1" &&
     typeof identity.createdAt === "string" &&

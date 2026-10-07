@@ -44,7 +44,8 @@ export function recordTerminalReceipt(record:DispatchRecordV1,input:{attemptId:s
 /** Authenticate a stored receipt capability, atomically adopt its operation/handle, and terminalize. */
 export function recordAuthenticatedTerminalReceipt(record:DispatchRecordV1,event:VerifiedReceiptEventV1,authority:VerifiedAttemptAuthorityV1):DispatchRecordV1{
  assertRecord(record);if(record.phase==="planned")throw new DomainError("RECEIPT_PRE_INTENT");
- const generation={attemptId:record.attemptId,generation:record.generation,state:"acknowledged" as const,bindingDigest:record.bindingDigest,idempotencyKeyDigest:record.idempotencyKey as string,providerHandle:record.providerHandle,terminalEventSequence:null,findingCodes:[]};
+ const idempotencyKey=record.idempotencyKey;if(!idempotencyKey)throw new DomainError("INVALID_ATTEMPT_STATE");
+ const generation={attemptId:record.attemptId,generation:record.generation,state:"acknowledged" as const,bindingDigest:record.bindingDigest,idempotencyKeyDigest:idempotencyKey,providerHandle:record.providerHandle,terminalEventSequence:null,findingCodes:[]};
  const projected=projectAuthenticatedReceipt(registerReceiptGeneration(emptyReceiptProjection(record.attemptId),generation),event,authority);
  const receipt=event.receipt,operationId=authority.binding.providerOperationId,handle=authority.providerHandle??null;
  if(!projected.outcomes.has(record.generation)||receipt.attemptId!==record.attemptId||receipt.generation!==record.generation||receipt.attemptContextBindingDigest!==record.bindingDigest||record.operationId!==null&&record.operationId!==operationId||record.providerHandle!==null&&record.providerHandle!==handle)throw new DomainError("DISPATCH_RECEIPT_MISMATCH");

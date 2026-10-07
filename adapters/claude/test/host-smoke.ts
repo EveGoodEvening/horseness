@@ -371,7 +371,7 @@ try {
     }
     if (activeMetadata === null && disabledMetadata === null) throw new Error("CLAUDE_UNINSTALL_DISCOVERY_EVIDENCE_MISSING");
     if (disabledMetadata === null) {
-      if (activeMetadata === null || !activeMetadata.isDirectory()) throw new Error("CLAUDE_UNINSTALL_ACTIVE_INVALID");
+      if (!activeMetadata?.isDirectory()) throw new Error("CLAUDE_UNINSTALL_ACTIVE_INVALID");
       await assertDisabledContribution(discoveryPath);
       await rename(discoveryPath, disabledPath);
       await syncRoot();

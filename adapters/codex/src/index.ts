@@ -213,14 +213,14 @@ export function createCodexRetainedDeliveryAuthorityV1(stateDirectory: string): 
         catch {
           if (Date.now() - statSync(path).mtimeMs > 1_000) { rmSync(path, { recursive: true }); syncDirectory(locks); continue; }
           if (Date.now() >= deadline) throw new Error("Codex retained delivery lock acquisition timed out");
-          const { promise: wait, resolve } = Promise.withResolvers<undefined>(); setTimeout(resolve, 10); await wait; continue;
+          const { promise: wait, resolve } = Promise.withResolvers<undefined>(); setTimeout(() => { resolve(undefined); }, 10); await wait; continue;
         }
         if (!ownerIsCurrent(existing)) {
           const reread = readOwner(join(path, "owner.json"));
           if (ownersMatch(reread, existing)) { rmSync(path, { recursive: true }); syncDirectory(locks); continue; }
         }
         if (Date.now() >= deadline) throw new Error("Codex retained delivery lock acquisition timed out");
-        const { promise: wait, resolve } = Promise.withResolvers<undefined>(); setTimeout(resolve, 10); await wait;
+        const { promise: wait, resolve } = Promise.withResolvers<undefined>(); setTimeout(() => { resolve(undefined); }, 10); await wait;
       }
     }
   };
@@ -382,7 +382,7 @@ function createSessionBindingStore(directory: string | undefined) {
       if (details.isSymbolicLink() || !details.isFile() || (details.mode & 0o077) !== 0) throw new Error("Codex session binding state must be a private regular file");
       const parsed = JSON.parse(readFileSync(path, "utf8")) as Omit<CodexSessionBindingStateV1, "schemaVersion" | "sessions" | "branches" | "claims"> & { schemaVersion: unknown; sessions: CodexSessionBindingStateV1["sessions"] | null; branches: CodexSessionBindingStateV1["branches"] | null; claims?: CodexSessionBindingStateV1["claims"] };
       if (parsed.schemaVersion !== "CodexSessionBindingStateV1" || parsed.sessions === null || parsed.branches === null) throw new Error("Codex session binding state is invalid");
-      return { ...parsed, claims: parsed.claims ?? {} };
+      return { ...parsed, schemaVersion: parsed.schemaVersion, sessions: parsed.sessions, branches: parsed.branches, claims: parsed.claims ?? {} };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return { schemaVersion: "CodexSessionBindingStateV1", sessions: {}, branches: {}, claims: {} };
       throw error;

@@ -62,14 +62,14 @@ export async function deliverWorkerReturn(workerReturn:WorkerReturnV1,client:Wor
  const receiptDigest=await perform("receipt",()=>client.submitReceipt(workerReturn.receipt,guard.binding));
  const proposal=await perform("proposal",()=>client.submitProposal(workerReturn.proposal,guard.binding));
  if(proposal.proposalId!==workerReturn.decisionResume.proposalId||proposal.proposalDigest!==workerReturn.decisionResume.proposalDigest)fail("DECISION_SCOPE_MISMATCH","proposal decision subscription substituted");
- const {startDecisionSubscription,observeDecision,subscribeDecision}=client;
+ const startDecisionSubscription=client.startDecisionSubscription?.bind(client),observeDecision=client.observeDecision?.bind(client),subscribeDecision=client.subscribeDecision?.bind(client);
  if(startDecisionSubscription!==undefined&&observeDecision!==undefined){
-  const subscription=await perform("decision-subscription",()=>startDecisionSubscription.call(client,{...workerReturn.decisionResume}));
-  const decision=await perform("decision",()=>observeDecision.call(client,{...workerReturn.decisionResume,resumeToken:subscription.resumeToken}));
+  const subscription=await perform("decision-subscription",()=>startDecisionSubscription({...workerReturn.decisionResume}));
+  const decision=await perform("decision",()=>observeDecision({...workerReturn.decisionResume,resumeToken:subscription.resumeToken}));
   return Object.freeze({receiptDigest,decision:decision.decision,resumeToken:decision.resumeToken});
  }
  if(subscribeDecision===undefined)return fail("WORKER_RETURN_INVALID","decision client does not implement a complete delivery protocol");
- const decision=await perform("decision",()=>subscribeDecision.call(client,workerReturn.decisionResume));
+ const decision=await perform("decision",()=>subscribeDecision(workerReturn.decisionResume));
  return Object.freeze({receiptDigest,decision:decision.decision,resumeToken:decision.resumeToken});
 }
 export * from "./task-runtime.js";

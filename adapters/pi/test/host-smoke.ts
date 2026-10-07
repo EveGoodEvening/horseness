@@ -61,7 +61,7 @@ try {
   const installedExtension = join(root, "extensions", "horseness-pi.mjs"); await cp(extensionSource, installedExtension);
   // Exercise the pinned host's loader resolved from its installed distribution.
   const loader: unknown = await import(pathToFileURL(loaderPath).href);
-  const { loadExtensions } = loader as { loadExtensions(paths: string[], cwd: string): Promise<{ errors: unknown[]; extensions: Extension[] }> };
+  const { loadExtensions } = loader as { loadExtensions: (paths: string[], cwd: string) => Promise<{ errors: unknown[]; extensions: Extension[] }> };
   let nativeTool: NativeTool | undefined; let stateTool: StateTool | undefined;
 
   const outcomes = ["accepted", "rejected", "conflicted", "quarantined", "approval_required"] as const;
@@ -119,7 +119,7 @@ try {
       await adapter.launch({ ...binding, operation: "launch", renderedContextDigest: "rendered", providerOptions: {} });
       const retained = createPiRetainedDeliveryAuthorityV1(join(scenarioRoot, "pi-retained"));
       Object.defineProperty(globalThis, Symbol.for("horseness.adapter.pi.native-runtime.v1"), { configurable: true, value: createPiNativeContributionRuntimeV1([{ capabilityReference: binding.attemptCapability, binding, adapter, authority: { client: delivery as WorkerReturnClientV1, async sealProposal(_binding, receipt) { return await Promise.resolve(delivery.sealProposal(proposalCore, receipt)); } }, subscriptionId: delivery.subscriptionId }], { retained }), writable: true });
-      const loaded = await loadExtensions([installedExtension], root); assert.deepEqual(loaded.errors, []); assert.equal(loaded.extensions.length, 1); extension = loaded.extensions[0] as Extension; nativeTool = extension.tools.get("horseness_worker_return")?.definition as NativeTool | undefined; stateTool = extension.tools.get("horseness_native_state")?.definition as StateTool | undefined; assert.ok(nativeTool); assert.ok(stateTool);
+      const loaded = await loadExtensions([installedExtension], root); assert.deepEqual(loaded.errors, []); assert.equal(loaded.extensions.length, 1); const loadedExtension = loaded.extensions[0]; assert.ok(loadedExtension); extension = loadedExtension; nativeTool = extension.tools.get("horseness_worker_return")?.definition as NativeTool | undefined; stateTool = extension.tools.get("horseness_native_state")?.definition as StateTool | undefined; assert.ok(nativeTool); assert.ok(stateTool);
       const scenarioTool = nativeTool;
       const native = await nativeTool.execute(`tool-${desired}`, { attemptCapabilityReference: binding.attemptCapability, output, evidence }); observed.push(native.details.delivery.decision);
       assert.equal(native.details.workerReturn.schemaVersion, "1"); assert.equal(native.details.workerReturn.binding.attemptCapability, binding.attemptCapability); assert.equal(native.details.delivery.resumeToken, `authority-resume-${desired}`); assert.deepEqual(publicationKinds, ["artifact", "evidence"]);

@@ -46,7 +46,7 @@ export function createCodexTaskParserV1(model: string, context: string, cwd: str
   const texts = new Map<string, string>();
   return {
     initialize: `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { clientInfo: { name: "horseness-task", version: "0.1.0" }, capabilities: { experimentalApi: true } } })}\n`,
-    onLine(this: void, line: string, write: (input: string) => void, end: () => void) {
+    onLine: (line: string, write: (input: string) => void, end: () => void) => {
       const message = object(JSON.parse(line));
       if (confinementFailed) throw new Error("CODEX_TOOL_CONFINEMENT_FAILED");
       if (message.error !== undefined) { if (!inventoryVerified) confinementFailed = true; throw new Error("CODEX_NATIVE_RPC_ERROR"); }
@@ -120,7 +120,7 @@ export async function createCodexTaskAdapterV1(options: NativeTaskAdapterOptions
       const retained = await spool.load(); if (retained) return retained;
       if (await nativeExecutableDigestV1(profile.nativeExecutablePath) !== EXECUTABLE_DIGEST) throw new Error("NATIVE_EXECUTABLE_CHANGED");
       await spool.begin();
-      active = (async () => {
+      const launching = (async () => {
         const startedAt = new Date().toISOString(); const parser = createCodexTaskParserV1(profile.modelId, options.renderedContext, options.workspacePath, profile.purpose);
         const wire = await runNativeProcessV1({ executablePath: profile.nativeExecutablePath, args: ["app-server", "--stdio", "--strict-config"], input: parser.initialize, onLine: parser.onLine, cwd: options.workspacePath, env: environment(), timeoutMs: profile.timeoutMs, maxOutputBytes: profile.maxOutputBytes, signal: controller.signal });
         const parsed = parser.finish(wire.exitCode);
@@ -129,7 +129,7 @@ export async function createCodexTaskAdapterV1(options: NativeTaskAdapterOptions
         const evidenceDigest = await spool.publish(evidenceBytes, "application/json");
         const record: NativeTaskTerminalV1 = { providerOperationId: parsed.providerOperationId, nativeSessionId: parsed.nativeSessionId, startedAt, finishedAt: new Date().toISOString(), outcome: parsed.outcome, outputDigest, evidence: [{ digest: evidenceDigest, mediaType: "application/json", size: evidenceBytes.byteLength }], provenance: { profileDigest: taskExecutionProfileDigest(profile), observedHostId: profile.hostId, observedHostVersion: profile.hostVersion, observedProviderId: profile.providerId, observedModelId: parsed.model, nativeSessionId: parsed.nativeSessionId, exitCode: wire.exitCode } };
         await spool.save(record); return record;
-      })().catch((error: unknown) => { const reason = error instanceof Error ? /^[A-Z][A-Z0-9_]+/.exec(error.message)?.[0] : undefined; throw new Error(`UNKNOWN_OUTCOME: ${reason ?? "NATIVE_TERMINAL_UNAVAILABLE"}`); }); return await active;
+      })().catch((error: unknown) => { const reason = error instanceof Error ? /^[A-Z][A-Z0-9_]+/.exec(error.message)?.[0] : undefined; throw new Error(`UNKNOWN_OUTCOME: ${reason ?? "NATIVE_TERMINAL_UNAVAILABLE"}`); }); active = launching; return await launching;
     },
     async cancel() { controller.abort(); if (active) { try { await active; } catch { /* Interrupted handoff remains unknown. */ } } const record = await spool.load(); if (!record) throw new Error("UNKNOWN_OUTCOME"); return record; },
     async reconcile() { const record = await collect(); if (!record) throw new Error("UNKNOWN_OUTCOME"); return record; },

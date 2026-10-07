@@ -4,12 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
-  NO_POLICY_DIGEST, NO_POLICY_V1, createRunGenesis, createWorkspaceGenesis,
+  NO_POLICY_DIGEST, NO_POLICY_V1, canonicalJson, createRunGenesis, createWorkspaceGenesis,
   deltaAuthorityScopeDigest, jsonValueDigest, sealForkPin, sealProposal,
   type CapabilityV1, type CompositeCursorV1, type ProposalEnvelopeCoreV1,
 } from "@horseness/domain";
-import { SQLiteAuthority } from "@horseness/store-sqlite";
+import { SQLiteAuthority, type SnapshotRecord } from "@horseness/store-sqlite";
 import { AdmissionService, loadRevision, type AdmissionRequestV1 } from "../../src/index.js";
+
+function seedSnapshot(authority: SQLiteAuthority, snapshot: Omit<SnapshotRecord, "state"> & { state: unknown }): void {
+  authority.db.prepare("INSERT OR REPLACE INTO snapshots(workspace_id,stream_kind,stream_id,sequence,envelope_hash,projection_name,projection_version,state_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)").run(snapshot.workspaceId, snapshot.streamKind, snapshot.streamId, snapshot.sequence, snapshot.envelopeHash, snapshot.projectionName, snapshot.projectionVersion, canonicalJson(snapshot.state), "2026-08-12T00:00:00.000Z");
+}
 
 function fixture() {
   const root=mkdtempSync(join(tmpdir(),"horseness-c07-")); const authority=new SQLiteAuthority(join(root,"db.sqlite"),join(root,"artifacts"));
@@ -21,7 +25,7 @@ function fixture() {
   const scope={schemaVersion:"1" as const,workspaceId:"w",runId:"r",taskId:"t",roots:["/value","/nested"]};
   const fork=sealForkPin({schemaVersion:"1",forkId:"f",pinVersion:1,workspaceId:"w",runId:"r",parentForkPinDigest:null,refreshesForkPinDigest:null,canonicalRevision:revision.revision,canonicalStateHash:revision.stateHash,canonicalizerVersion:"jcs-v1",hashVersion:"sha256-v1",sourceObservationCursor:cursor,sourceContextVersion:{schemaVersion:"1",kind:"composite",workspaceContextEpoch:cursor.workspaceContextEpoch,runContextEpoch:cursor.runContextEpoch,observationCursor:cursor},dependencyJoinSnapshotDigest:"join",deltaAuthorityScopeDigest:deltaAuthorityScopeDigest(scope),pinnedPolicyDigest:NO_POLICY_DIGEST,ancestry:[],createdByPrincipalId:"worker",createdByGrantDigest:"grant"});
   const capability:CapabilityV1={schemaVersion:"1",workspaceId:"w",runId:"r",commands:["submit-proposal"],issuer:"authority",delegatee:"worker",issuedObservationSequence:1,expiresObservationSequence:100,nonce:"cap",revocationSequence:null};
-  const put=(name:string,state:Parameters<SQLiteAuthority["putSnapshot"]>[0]["state"])=>authority.putSnapshot({workspaceId:"w",streamKind:"run",streamId:"r",sequence:cursor.runSequence,envelopeHash:cursor.runEnvelopeHash,projectionName:name,projectionVersion:"1",state});
+  const put=(name:string,state:unknown)=>seedSnapshot(authority,{workspaceId:"w",streamKind:"run",streamId:"r",sequence:cursor.runSequence,envelopeHash:cursor.runEnvelopeHash,projectionName:name,projectionVersion:"1",state});
   put("admission-sealing",{schemaVersion:"1",observationCursor:cursor,fork,scope,receipts:[],pinnedPolicy:NO_POLICY_V1,evidence:[]});
   put("admission-current",{schemaVersion:"1",evaluationObservationCursor:cursor,currentPolicy:NO_POLICY_V1,authorization:{role:"worker",capabilityId:"capability",capability,grantDigest:"grant",revoked:false},quota:{id:"quota",digest:"quota-digest",available:true},authenticatedApproverPrincipalId:"approver",authorityTime:"2026-08-12T00:00:00Z"});
   return {authority,cursor,scope,fork,cleanup:()=>{authority.close();rmSync(root,{recursive:true,force:true});}};
@@ -39,4 +43,4 @@ test("proposal schema/id and operation shape precede scope, authority identifier
 
 test("pointer and overlap validation precede authenticated scope escape",()=>{const f=fixture();try{const service=new AdmissionService(f.authority);const overlap=request(f,"overlap");overlap.proposal=sealProposal({...overlap.proposal.core,operations:[{op:"replace",path:"/nested",expectedValueDigest:jsonValueDigest({value:1}),value:{}},{op:"replace",path:"/nested/value",expectedValueDigest:jsonValueDigest(1),value:2}]});overlap.scopeDigest="substituted";assert.match(errorCode(()=>service.evaluateAndApply(overlap)),/OVERLAPPING_WRITE_TARGET/);const escaped=request(f,"escape");escaped.proposal=sealProposal({...escaped.proposal.core,operations:[{op:"replace",path:"/private",expectedValueDigest:jsonValueDigest(1),value:2}]});assert.match(errorCode(()=>service.evaluateAndApply(escaped)),/SCOPE_ESCAPE/);}finally{f.cleanup();}});
 
-test("base conflict precedes current policy, grant, quota, version, and no-op evaluation",()=>{const f=fixture();try{const service=new AdmissionService(f.authority);const staleFork=sealForkPin({...f.fork.core,canonicalRevision:9,canonicalStateHash:"stale"});f.authority.putSnapshot({workspaceId:"w",streamKind:"run",streamId:"r",sequence:f.cursor.runSequence,envelopeHash:f.cursor.runEnvelopeHash,projectionName:"admission-sealing",projectionVersion:"1",state:{schemaVersion:"1",observationCursor:f.cursor,fork:staleFork,scope:f.scope,receipts:[],pinnedPolicy:NO_POLICY_V1,evidence:[]}});const stale=request(f,"stale");stale.proposal=sealProposal({...stale.proposal.core,forkPinDigest:staleFork.forkPinDigest,baseRevision:9,baseStateHash:"stale"});stale.forkPinDigest=staleFork.forkPinDigest;assert.equal(service.evaluateAndApply(stale).state,"conflicted");assert.equal(loadRevision(f.authority,"w","r").revision,0);}finally{f.cleanup();}});
+test("base conflict precedes current policy, grant, quota, version, and no-op evaluation",()=>{const f=fixture();try{const service=new AdmissionService(f.authority);const staleFork=sealForkPin({...f.fork.core,canonicalRevision:9,canonicalStateHash:"stale"});seedSnapshot(f.authority, {workspaceId:"w",streamKind:"run",streamId:"r",sequence:f.cursor.runSequence,envelopeHash:f.cursor.runEnvelopeHash,projectionName:"admission-sealing",projectionVersion:"1",state:{schemaVersion:"1",observationCursor:f.cursor,fork:staleFork,scope:f.scope,receipts:[],pinnedPolicy:NO_POLICY_V1,evidence:[]}});const stale=request(f,"stale");stale.proposal=sealProposal({...stale.proposal.core,forkPinDigest:staleFork.forkPinDigest,baseRevision:9,baseStateHash:"stale"});stale.forkPinDigest=staleFork.forkPinDigest;assert.equal(service.evaluateAndApply(stale).state,"conflicted");assert.equal(loadRevision(f.authority,"w","r").revision,0);}finally{f.cleanup();}});

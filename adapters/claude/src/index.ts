@@ -215,14 +215,14 @@ export function createClaudeRetainedDeliveryAuthorityV1(stateDirectory: string):
         catch {
           if (Date.now() - statSync(path).mtimeMs > 1_000) { rmSync(path, { recursive: true }); syncDirectory(locks); continue; }
           if (Date.now() >= deadline) throw new Error("Claude retained delivery lock acquisition timed out");
-          const { promise: wait, resolve } = Promise.withResolvers<undefined>(); setTimeout(resolve, 10); await wait; continue;
+          const { promise: wait, resolve } = Promise.withResolvers<undefined>(); setTimeout(() => { resolve(undefined); }, 10); await wait; continue;
         }
         if (!ownerIsCurrent(existing)) {
           const reread = readOwner(join(path, "owner.json"));
           if (ownersMatch(reread, existing)) { rmSync(path, { recursive: true }); syncDirectory(locks); continue; }
         }
         if (Date.now() >= deadline) throw new Error("Claude retained delivery lock acquisition timed out");
-        const { promise: wait, resolve } = Promise.withResolvers<undefined>(); setTimeout(resolve, 10); await wait;
+        const { promise: wait, resolve } = Promise.withResolvers<undefined>(); setTimeout(() => { resolve(undefined); }, 10); await wait;
       }
     }
   };
