@@ -166,7 +166,9 @@ try {
   const manifest = JSON.parse(await readFile(join(repository, "tests/fixtures/hosts/pi/manifest.v1.json"), "utf8"));
   const acquired = await acquireUpstreamArtifact(manifest.artifact, { cacheRoot: process.env.HORSENESS_HOST_CACHE ?? join(tmpdir(), "horseness-verified-native-cache") });
   await cp(join(acquired.cachePath, "package"), native, { recursive: true });
-  const installed = await command("corepack", ["pnpm", "install", "--prod", "--ignore-scripts"], { cwd: native, env: process.env });
+  // The extracted host is outside the workspace where Corepack discovers our pin.
+  const { packageManager } = JSON.parse(await readFile(join(repository, "package.json"), "utf8"));
+  const installed = await command("corepack", [packageManager, "install", "--prod", "--ignore-scripts"], { cwd: native, env: process.env });
   assert.equal(installed.code, 0, installed.stderr + installed.stdout);
   const nativeExecutable = join(native, manifest.artifact.executable.path);
   assert.equal(`sha256:${createHash("sha256").update(await readFile(nativeExecutable)).digest("hex")}`, manifest.artifact.executable.sha256);
