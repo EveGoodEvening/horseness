@@ -697,3 +697,12 @@ After affected gates and review, run all nine literal C22 commands in the existi
 ### C22 accepted README image lint correction
 
 The execution candidate's release documentation gate found that the existing approved README carriage headers use `<img width="560">`, while the root MD033 configuration allows only the historical `ID` anchor element. Integration review selects the narrow configuration correction rather than altering the approved artwork/layout or disabling the rule. C22 additionally owns only `package.json` at `markdownlint-cli2.config.MD033.allowed_elements` to add `img` alongside `ID`. No other HTML element, package dependency, release command, acceptance order, or artwork path changes. Rerun documentation lint and the unchanged nine release gates; the SVG remains genuine vector artwork with its existing accessibility and width.
+
+## C22 CI package-manager setup review fix (2026-10-07)
+
+The latest main candidate `887bb3a47f64c7710ecef83c9f8447afaf5ca2f0` failed GitHub CI run `37569789134` before any acceptance command: `actions/setup-node@v4` could not resolve `pnpm` while initializing its cache. Review confirms that the subsequent `corepack enable` cannot satisfy an earlier action prerequisite. Reopen C22 serially for this workflow-only correction; no architecture or package contract changes.
+
+Exact repair ownership is `.github/workflows/ci.yml`, `.github/workflows/install-smoke.yml` solely for the identical pnpm setup ordering, `CHANGELOG.md`, `AGENTS.md`, and the two C22 tracker files. This planning correction owns `docs/plan.md` itself. Install the package-manager version already pinned by root `package.json` with `pnpm/action-setup@v4` before every cache-enabled Node setup. Preserve Corepack, frozen-lockfile installation, caching, all existing gates and OS matrices. The uncached release setup is unchanged; no dependency, lockfile, fixture or historical evidence changes are authorized.
+
+Verification: run `actionlint .github/workflows/ci.yml .github/workflows/install-smoke.yml`; execute the upstream pnpm action from an isolated PATH without pnpm and prove the pinned version and store lookup used by Node setup; run the Linux `verify` job commands and the C13 focused typecheck/multiprocess commands under Node 22 with the frozen environment. Run the unchanged nine C22 gates in order at the repair candidate. Hosted cache service and macOS/Windows results require a subsequent GitHub run and must not be inferred from local smoke. A new permanent test for YAML step wiring is not required.
+
