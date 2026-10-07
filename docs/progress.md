@@ -12,6 +12,7 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 - **Release readiness:** candidate `2539cb0` passed all 17 local Linux CI run steps, 349 package tests and the nine ordered C22 release gates, including reproducible packing and tarball-only verification of fourteen packages. [Hosted CI 37578722017](https://github.com/EveGoodEvening/horseness/actions/runs/37578722017) passed verify, Linux/macOS/Windows C13 and candidate-bound receipt collection. Supplemental storage/orchestrator and real Pi workflow/crash evidence remains scoped in the C22 ledger. No public publication, real OIDC exchange/provenance or live model-provider authentication is claimed.
 - **Base chunk count:** 26 (`C00`–`C25`)
 - **Historical remediation count:** 2 (`R001`, `R002`, both complete)
+- **Planned maintenance:** user-requested responsibility-based CI display names; exact scope and affected checks are defined in the final C22 plan correction. Prior CI completion evidence remains unchanged.
 
 ## Post-C01 chunk workflow
 
