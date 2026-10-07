@@ -1,9 +1,10 @@
-name: install-smoke
+name: Installer smoke
 on: [workflow_dispatch]
 permissions:
   contents: read
 jobs:
   c20:
+    name: Installer / ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -30,28 +31,30 @@ jobs:
         with:
           node-version-file: .node-version
           cache: pnpm
-      - run: corepack enable && corepack pnpm install --frozen-lockfile
-      - name: c20:typecheck
+      - name: Install dependencies
+        run: corepack enable && corepack pnpm install --frozen-lockfile
+      - name: Typecheck installer, CLI, and bootstrap
         run: corepack pnpm --filter @horseness/installer --filter @horseness/cli --filter @horseness/bootstrap run typecheck
-      - name: c20:test
+      - name: Test installer and CLI
         run: corepack pnpm --filter @horseness/installer --filter @horseness/cli run test
-      - name: c20:bootstrap-build
+      - name: Build bootstrap executable
         run: corepack pnpm run bootstrap:build
-      - name: c20:install-blackbox-online
+      - name: Smoke-test online installation
         run: corepack pnpm run install:blackbox -- --clean-home --workspace "${{ runner.temp }}/horseness-fixture-workspace" --create-workspace --host all --accept-executable-risk fixture-release-digest
-      - name: c20:install-blackbox-offline
+      - name: Smoke-test offline installation
         run: corepack pnpm run install:blackbox:offline -- --clean-home --workspace "${{ runner.temp }}/horseness-fixture-workspace" --create-workspace --host all --accept-executable-risk fixture-release-digest
-      - name: c20:doctor-hostile-no-side-effects
+      - name: Check doctor has no side effects on hostile input
         run: corepack pnpm run doctor:hostile-no-side-effects
-      - name: c20:uninstall-failure-matrix
+      - name: Test uninstall failure recovery
         run: corepack pnpm run uninstall:failure-matrix
-      - name: c20:cli-lifecycle-blackbox
+      - name: Test CLI installation lifecycle
         run: corepack pnpm run cli:lifecycle:blackbox -- install upgrade downgrade rollback retry-install uninstall doctor repair rebind-workspace smoke
-      - name: c20:boundaries-check
+      - name: Check package boundaries
         run: corepack pnpm run boundaries:check
-      - name: Write candidate-bound C20 receipt
+      - name: Record installer verification result
         run: node scripts/bootstrap/write-c20-os-receipt.mjs ${{ matrix.os }} ${{ github.sha }}
-      - uses: actions/upload-artifact@v4
+      - name: Upload installer verification receipt
+        uses: actions/upload-artifact@v4
         with:
           name: C20-${{ matrix.os }}
           path: .ci/os-receipts/C20-${{ matrix.os }}.json
