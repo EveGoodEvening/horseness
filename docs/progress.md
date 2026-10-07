@@ -5,7 +5,7 @@ This integrated summary is the authoritative scheduler ledger. Detailed executio
 ## Global status
 
 - **Planning state:** C00–C21 are complete; C22 is reopened for the workflow-only pnpm setup review fix after main CI run `37569789134` failed on integrated candidate `887bb3a47f64c7710ecef83c9f8447afaf5ca2f0`. Historical execution and release evidence remains unchanged.
-- **Active claims:** none; the CI repair ownership correction precedes a two-file C22 claim.
+- **Active claims:** C22 CI package-manager setup repair, `in-progress`, from planning-correction base `f900ff3`; exact paths and acceptance are recorded in the C22 ledger.
 - **Next eligible:** C23 after C22 repair verification and external npm/GitHub configuration.
 - **Active blockers:** C22 CI fails before acceptance because Node setup requests the pnpm cache before pnpm is installed. C23 still requires the protected GitHub `release` environment and npm package-level trusted publishers or explicit initial package creation authority. C24/C25 retain their external runner and promotion-authority prerequisites. No remote workflow or public npm mutation was performed.
 - **Last integrated receipt:** immutable C01 `docs/checkpoints/C01/final/1.json`, envelope digest `17ddd75b49e35d3bf6f432c8c6acca30b4a66512229453aca4fc63e7f427ea7d`, indexed at A01 commit `223023330cb000b759d8a8b2419514638c1aa179`; receipt/index bytes must not be overwritten.
