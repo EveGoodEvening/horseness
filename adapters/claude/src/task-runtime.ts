@@ -15,7 +15,8 @@ function environment(): Record<string, string> {
 }
 export async function resolveClaudeTaskProfileV1(options: NativeTaskProfileOptionsV1): Promise<TaskExecutionProfileV1> {
   options = structuredClone(options);
-  const effort = parseTaskEffortV1(options.effort === undefined ? "medium" : options.effort);
+  const { effort = "medium" } = options;
+  parseTaskEffortV1(effort);
   if (!options.model || !/^claude-[a-z0-9]+(?:-[a-z0-9]+)*-\d{8}$/.test(options.model)) throw new Error("MODEL_REQUIRED");
   const path = await realpath(options.executablePath ?? join(process.env.HOME ?? "", ".local/bin/claude"));
   if (await nativeExecutableDigestV1(path) !== EXECUTABLE_DIGEST) throw new Error("UNSUPPORTED_NATIVE_HOST: expected verified Claude Code 2.1.228; configure the daemon trusted executablePath override to its pinned executable");

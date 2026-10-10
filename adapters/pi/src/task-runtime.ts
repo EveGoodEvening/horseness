@@ -7,7 +7,7 @@ import type { AdapterCancelRequestV1, AdapterLaunchRequestV1, AdapterReconcileRe
 
 export async function resolvePiTaskProfileV1(options:NativeTaskProfileOptionsV1):Promise<TaskExecutionProfileV1>{
  options={...options};
- const effort=parseTaskEffortV1(options.effort===undefined?"medium":options.effort);
+ const {effort="medium"}=options;parseTaskEffortV1(effort);
  if(options.model===null||!/^[-a-zA-Z0-9_.]+\/[^\s:*?]+$/.test(options.model))throw new AdapterKitError("MODEL_REQUIRED","Specify exact provider/model; configured or fuzzy defaults cannot be frozen safely");
  const slash=options.model.indexOf("/"); const executablePath=await resolveNativeExecutablePathV1("pi",options.executablePath);
  const nativeExecutableDigest=await nativeExecutableDigestV1(executablePath);

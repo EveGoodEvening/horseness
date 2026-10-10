@@ -14,7 +14,8 @@ function environment(): Record<string, string> {
 }
 export async function resolveCodexTaskProfileV1(options: NativeTaskProfileOptionsV1): Promise<TaskExecutionProfileV1> {
   options = structuredClone(options);
-  const effort = parseTaskEffortV1(options.effort === undefined ? "medium" : options.effort);
+  const { effort = "medium" } = options;
+  parseTaskEffortV1(effort);
   if (!options.model || !/^[a-z0-9][a-z0-9.-]{1,127}$/.test(options.model) || ["default", "auto"].includes(options.model)) throw new Error("MODEL_REQUIRED");
   const path = await realpath(options.executablePath ?? join(process.env.HOME ?? "", ".local/bin/codex"));
   if (await nativeExecutableDigestV1(path) !== EXECUTABLE_DIGEST) throw new Error("UNSUPPORTED_NATIVE_HOST: expected verified Codex 0.144.1-linux-x64; configure the daemon trusted executablePath override to its pinned executable");
