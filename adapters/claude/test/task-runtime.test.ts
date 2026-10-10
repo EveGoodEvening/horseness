@@ -24,5 +24,10 @@ void test("Claude unresolved default and mutable aliases fail before executable 
   for (const selected of [null, "sonnet", "default"]) await assert.rejects(resolveClaudeTaskProfileV1({ workspacePath: "/unused", model: selected, purpose: "work", executablePath: "/does-not-exist" }), /MODEL_REQUIRED/);
 });
 void test("Claude rejects invalid effort before native inspection",async()=>{
- for(const effort of [null,"off","max",1])await assert.rejects(resolveClaudeTaskProfileV1({workspacePath:"/unused",model,purpose:"work",executablePath:"/does-not-exist",effort:effort as TaskEffortV1}),{code:"EXECUTION_INVALID"});
+ for(const effort of [null,"disabled","ultra",1])await assert.rejects(resolveClaudeTaskProfileV1({workspacePath:"/unused",model,purpose:"work",executablePath:"/does-not-exist",effort:effort as TaskEffortV1}),{code:"EXECUTION_INVALID"});
+});
+void test("Claude accepts every public effort before trusted executable inspection", async () => {
+ for (const effort of ["off", "none", "low", "medium", "high", "xhigh", "max"] as const) {
+  await assert.rejects(resolveClaudeTaskProfileV1({workspacePath:"/unused",model,purpose:"work",executablePath:"/does-not-exist",effort}), {code:"ENOENT"});
+ }
 });

@@ -17,7 +17,7 @@ export async function resolveClaudeTaskProfileV1(options: NativeTaskProfileOptio
   options = structuredClone(options);
   const { effort = "medium" } = options;
   parseTaskEffortV1(effort);
-  if (!options.model || !/^claude-[a-z0-9]+(?:-[a-z0-9]+)*-\d{8}$/.test(options.model)) throw new Error("MODEL_REQUIRED");
+  if (!options.model || !/^claude-[a-z0-9]+(?:-[a-z0-9]+)*-\d{8}$/.test(options.model) && !/^claude-(?:opus-(?:4-[678]|5)|sonnet-(?:4-6|5)|(?:fable|mythos)-5)$/.test(options.model)) throw new Error("MODEL_REQUIRED");
   const path = await realpath(options.executablePath ?? join(process.env.HOME ?? "", ".local/bin/claude"));
   if (await nativeExecutableDigestV1(path) !== EXECUTABLE_DIGEST) throw new Error("UNSUPPORTED_NATIVE_HOST: expected verified Claude Code 2.1.228; configure the daemon trusted executablePath override to its pinned executable");
   const version = await runNativeProcessV1({ executablePath: path, args: ["--version"], cwd: options.workspacePath, timeoutMs: 10_000, maxOutputBytes: 4096, env: environment() });
@@ -58,6 +58,7 @@ export async function createClaudeTaskAdapterV1(options: NativeTaskAdapterOption
   const profile = options.profile;
   if (profile.adapterId !== "claude" || profile.hostId !== "claude" || profile.hostVersion !== CLAUDE_HOST_VERSION || profile.providerId !== "anthropic" || profile.modelId !== options.model || profile.purpose !== options.purpose || profile.idempotentLaunch || profile.lookup !== "local-terminal-record") throw new Error("NATIVE_PROFILE_MISMATCH");
   if (profile.nativeExecutableDigest !== EXECUTABLE_DIGEST) throw new Error("NATIVE_PROFILE_MISMATCH");
+  if (profile.effort !== undefined) parseTaskEffortV1(profile.effort);
   const spool = await createNativeTaskSpoolV1(options);
   const controller = new AbortController();
   let active: Promise<NativeTaskTerminalV1> | null = null;
@@ -71,7 +72,10 @@ export async function createClaudeTaskAdapterV1(options: NativeTaskAdapterOption
       await spool.begin();
       active = (async () => {
         const startedAt = new Date().toISOString();
-        const wire = await runNativeProcessV1({ executablePath: profile.nativeExecutablePath, args: ["-p", "--output-format", "stream-json", "--verbose", "--model", profile.modelId, ...(profile.effort === undefined ? [] : ["--effort", profile.effort]), ...(profile.purpose === "planner" ? ["--tools", ""] : ["--permission-mode", "acceptEdits"]), "--strict-mcp-config", "--mcp-config", "{\"mcpServers\":{}}", "--setting-sources", "", "--disable-slash-commands"], input: options.renderedContext, cwd: options.workspacePath, env: environment(), timeoutMs: profile.timeoutMs, maxOutputBytes: profile.maxOutputBytes, signal: controller.signal });
+        // Pinned CLI converts MAX_THINKING_TOKENS=0 to thinking.type=disabled.
+        const env = environment();
+        if (profile.effort === "none" || profile.effort === "off") env.MAX_THINKING_TOKENS = "0";
+        const wire = await runNativeProcessV1({ executablePath: profile.nativeExecutablePath, args: ["-p", "--output-format", "stream-json", "--verbose", "--model", profile.modelId, ...(profile.effort === undefined || profile.effort === "none" || profile.effort === "off" ? [] : ["--effort", profile.effort]), ...(profile.purpose === "planner" ? ["--tools", ""] : ["--permission-mode", "acceptEdits"]), "--strict-mcp-config", "--mcp-config", "{\"mcpServers\":{}}", "--setting-sources", "", "--disable-slash-commands"], input: options.renderedContext, cwd: options.workspacePath, env, timeoutMs: profile.timeoutMs, maxOutputBytes: profile.maxOutputBytes, signal: controller.signal });
         const parsed = parseClaudeTaskTerminalV1(wire.stdout, profile.modelId, wire.exitCode);
         const outputDigest = parsed.outcome === "succeeded" ? await spool.publish(Buffer.from(parsed.output), options.purpose === "planner" ? "application/json" : "text/plain") : null;
         const evidenceBytes = Buffer.from(JSON.stringify({ schemaVersion: 1, profileDigest: taskExecutionProfileDigest(profile), hostId: profile.hostId, hostVersion: profile.hostVersion, modelId: parsed.model, nativeSessionId: parsed.nativeSessionId, terminal: parsed.terminal, exitCode: wire.exitCode, ...(parsed.outcome === "succeeded" ? {} : { diagnostics: parsed.output }) }));

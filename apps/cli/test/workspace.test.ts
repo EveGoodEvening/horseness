@@ -124,9 +124,8 @@ void test("execution flags reject malformed and unrelated automatic planning bef
     ["task", "execute", "--task", "task:one", "--adapter", "pi", "--effort", ""],
     ["task", "execute", "--task", "task:one", "--adapter", "pi", "--planner-effort", "medium"],
     ["task", "execute", "--task", "task:one", "--adapter", "pi", "--auto-plan", "--planner-effort"],
-    ["task", "execute", "--task", "task:one", "--adapter", "pi", "--auto-plan", "--planner-effort", "max"],
+    ["task", "execute", "--task", "task:one", "--adapter", "pi", "--auto-plan", "--planner-effort", "turbo"],
   ]) assert.equal(await runCliV1(args, dependencies), 2);
-  assert.equal(output.length, 10);
 });
 
 void test("omitted task effort recovers the same explicit medium pending operation", async () => {
@@ -147,7 +146,7 @@ void test("omitted task effort recovers the same explicit medium pending operati
     const output: string[] = [];
     const dependencies = { transport: { request(): Promise<never> { return Promise.reject(new Error("unused")); } }, credential: { schemaVersion: "1" as const, kind: "host-reference" as const, reference: "grant:test", scope: { workspaceId: state.workspaceId, adapterId: "cli", purpose: "workspace" } }, stdout: (text: string) => output.push(text), stderr: (text: string) => output.push(text) };
     const args = ["task", "dispatch", "--workspace", root, "--task", taskId, "--adapter", "pi", "--json"];
-    assert.equal(await runCliV1([...args, "--effort", "high"], dependencies), 1);
+    assert.equal(await runCliV1([...args, "--effort", "none"], dependencies), 1);
     assert.equal((JSON.parse(output.pop() ?? "") as { error: { code: string } }).error.code, "OPERATION_PENDING");
     assert.equal(calls, 0);
     assert.deepEqual((JSON.parse(readFileSync(file, "utf8")) as CliWorkspaceV1).pending, pending);

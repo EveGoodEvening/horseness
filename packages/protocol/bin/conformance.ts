@@ -93,9 +93,9 @@ for(const method of ["task.dispatch.v1","task.breakdown.v1","task.execute.v1"] a
  const request=requestFor(definition),params=request.params as Record<string,unknown>,body=params.body as Record<string,unknown>,input=body.input as Record<string,unknown>;
  const value={...(input.value as Record<string,unknown>)};delete value.effort;delete value.plannerEffort;
  const fields=method==="task.execute.v1"?["effort","plannerEffort"]:["effort"];
- for(const field of fields)for(const effort of [undefined,"low","medium","high","", "HIGH",null,1,true]){
+ for(const field of fields)for(const effort of [undefined,"off","none","low","medium","high","xhigh","max","", "HIGH","turbo",null,1,true]){
   const candidate={...input,value:{...value,...(effort===undefined?{}:{[field]:effort})}},wire={...request,params:{...params,body:{...body,input:candidate}}};
-  const valid=effort===undefined||effort==="low"||effort==="medium"||effort==="high";
+  const valid=effort===undefined||effort==="off"||effort==="none"||effort==="low"||effort==="medium"||effort==="high"||effort==="xhigh"||effort==="max";
   if((observed(()=>definition.parseInput(candidate))==="accept")!==valid)throw new Error(`${method}:${field}: effort validation mismatch`);
   assertSchema(requestJsonSchema,wire,valid,`${method}:${field}:${String(effort)}`);checks++;
  }

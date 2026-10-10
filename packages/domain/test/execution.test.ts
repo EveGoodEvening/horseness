@@ -47,7 +47,10 @@ void test("profile parsing closes options and binds concrete model identity",()=
   const medium = { ...profile, effort: "medium" as const };
   assert.notEqual(taskExecutionProfileDigest(profile), taskExecutionProfileDigest(medium));
   assert.notEqual(taskExecutionProfileDigest(medium), taskExecutionProfileDigest({ ...profile, effort: "high" }));
-  for (const effort of [undefined, null, "", "HIGH", "max", 1]) assert.throws(() => parseTaskExecutionProfileV1({ ...profile, effort }));
+  const levels = ["off", "none", "low", "medium", "high", "xhigh", "max"] as const;
+  assert.equal(new Set(levels.map(effort => taskExecutionProfileDigest({ ...profile, effort }))).size, levels.length);
+  assert.notEqual(taskExecutionProfileDigest(profile), taskExecutionProfileDigest({ ...profile, effort: "none" }));
+  for (const effort of [undefined, null, "", "HIGH", "turbo", 1]) assert.throws(() => parseTaskExecutionProfileV1({ ...profile, effort }));
 });
 void test("prepared events bind exact rendered bytes and frozen profile manifest source",()=>{
   const p=prepared();

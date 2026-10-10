@@ -34,7 +34,7 @@ export async function resolveCodexTaskProfileV1(options: NativeTaskProfileOption
       const selectedValue:unknown = result.data.find(item => object(item).model === options.model);
       const selected = selectedValue === undefined ? undefined : object(selectedValue);
       observation.advertised = selected !== undefined;
-      observation.effortSupported = selected !== undefined && Array.isArray(selected.supportedReasoningEfforts) && selected.supportedReasoningEfforts.some(item => object(item).reasoningEffort === effort);
+      observation.effortSupported = selected !== undefined && Array.isArray(selected.supportedReasoningEfforts) && selected.supportedReasoningEfforts.some(item => object(item).reasoningEffort === (effort === "off" ? "none" : effort));
       end();
     }
   } });
@@ -75,7 +75,7 @@ export function createCodexTaskParserV1(model: string, context: string, cwd: str
         const inventory = object(message.result);
         if (!inventoryRequested || inventoryVerified || !threadId || !Array.isArray(inventory.data) || inventory.data.length !== 0 || inventory.nextCursor !== null) throw new Error("CODEX_TOOL_CONFINEMENT_FAILED");
         inventoryVerified = true; confinementFailed = false;
-        write(`${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "turn/start", params: { threadId, model, ...(effort === undefined ? {} : { effort }), approvalPolicy: "never", permissions, environments: [], input: [{ type: "text", text: "Execute the bound task in the supplied developer context and return its final output.", text_elements: [] }] } })}\n`);
+        write(`${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "turn/start", params: { threadId, model, ...(effort === undefined ? {} : { effort: effort === "off" ? "none" : effort }), approvalPolicy: "never", permissions, environments: [], input: [{ type: "text", text: "Execute the bound task in the supplied developer context and return its final output.", text_elements: [] }] } })}\n`);
       } else if (message.id === 3 && message.result !== undefined) {
         if (!inventoryVerified) { confinementFailed = true; throw new Error("CODEX_TOOL_CONFINEMENT_FAILED"); }
         const turn = object(object(message.result).turn);

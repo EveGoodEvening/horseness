@@ -51,7 +51,7 @@ const provider = createServer(async (request, response) => {
     for await (const chunk of request) { size += chunk.length; if (size > 1024 * 1024) throw new Error("provider input limit"); chunks.push(chunk); }
     const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     assert.equal(body.model, model); assert.equal(body.stream, true);
-    assert.ok(["low", "medium", "high"].includes(body.reasoning_effort), "real native requests must carry the selected reasoning effort");
+    assert.ok(["none", "low", "medium", "high", "xhigh"].includes(body.reasoning_effort), "real Pi requests must carry the selected supported reasoning effort");
     if (requests.length >= 32) throw new Error("provider operation budget exhausted");
     const user = body.messages.findLast(message => message.role === "user");
     const prompt = typeof user?.content === "string" ? user.content : (user?.content ?? []).filter(part => part.type === "text").map(part => part.text).join("\n");
@@ -175,7 +175,7 @@ try {
   assert.equal(`sha256:${createHash("sha256").update(await readFile(nativeExecutable)).digest("hex")}`, manifest.artifact.executable.sha256);
   await new Promise((resolveListen, reject) => { provider.once("error", reject); provider.listen(0, "127.0.0.1", resolveListen); });
   const port = provider.address().port;
-  await writeFile(join(home, ".pi/agent/models.json"), JSON.stringify({ providers: { local: { baseUrl: `http://127.0.0.1:${port}/v1`, api: "openai-completions", apiKey: "local-only", models: [{ id: model, name: model, reasoning: true, compat: { supportsReasoningEffort: true }, input: ["text"], contextWindow: 128000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } }), { mode: 0o600 });
+  await writeFile(join(home, ".pi/agent/models.json"), JSON.stringify({ providers: { local: { baseUrl: `http://127.0.0.1:${port}/v1`, api: "openai-completions", apiKey: "local-only", models: [{ id: model, name: model, reasoning: true, thinkingLevelMap: { off: "none", xhigh: "xhigh" }, compat: { supportsReasoningEffort: true }, input: ["text"], contextWindow: 128000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } }), { mode: 0o600 });
   environment = { ...process.env, HOME: home, PI_CODING_AGENT_DIR: join(home, ".pi/agent"), HORSENESS_PI_EXECUTABLE: nativeExecutable, HORSENESS_DAEMON_EXECUTABLE: join(repository, "apps/daemon/bin/horseness-daemon.mjs"), NO_COLOR: "1" };
   await invoke(["init"]); initialized = true;
   await invoke(["run", "create", "--title", "Native task orchestration smoke"]);
@@ -184,6 +184,9 @@ try {
   const dispatchArgs = ["task", "dispatch", "--task", single.taskId, "--adapter", "pi", "--model", `local/${model}`];
   await assertRefused([...dispatchArgs, "--effort", "turbo"], "INVALID_INVOCATION");
   await assertRefused(["task", "execute", "--task", single.taskId, "--adapter", "pi", "--model", `local/${model}`, "--planner-effort", "high"], "INVALID_INVOCATION");
+  await assertRefused([...dispatchArgs, "--effort", "max"], "EXECUTION_PREFLIGHT_FAILED");
+  await assertRefused(["task", "execute", "--task", single.taskId, "--adapter", "pi", "--model", `local/${model}`, "--auto-plan", "--planner-effort", "max"], "EXECUTION_PREFLIGHT_FAILED");
+  await assertUnlaunched(single.taskId, "draft");
   assert.equal(requests.length, 0);
   const clientStatePath = join(workspace, ".horseness/cli-workspace.v1.json");
   let settled = false, retained;
@@ -199,7 +202,7 @@ try {
   assert.ok(retained, "capture the real pre-send durable request for lost-result recovery");
   const current = JSON.parse(await readFile(clientStatePath, "utf8"));
   await writeFile(clientStatePath, `${JSON.stringify({ ...current, pending: retained })}\n`, { mode: 0o600 });
-  await assertRefused([...dispatchArgs, "--effort", "high"], "OPERATION_PENDING");
+  await assertRefused([...dispatchArgs, "--effort", "none"], "OPERATION_PENDING");
   assert.deepEqual(JSON.parse(await readFile(clientStatePath, "utf8")).pending, retained);
   assert.deepEqual(await invoke([...dispatchArgs, "--effort", "medium"]), dispatched);
   const finished = await observeUntil(single.taskId, task => task.lifecycle === "succeeded");
@@ -220,13 +223,15 @@ try {
   const preview = await observeUntil(objective.taskId, task => task.plan !== null && task.plan !== undefined);
   assert.equal(preview.lifecycle, "draft"); assert.equal(preview.plan.tasks.length, 2); assert.deepEqual(preview.plan.adoptedTaskIds, []);
   await assert.rejects(readFile(join(workspace, "explicit-first.txt")), { code: "ENOENT" });
-  await invoke(["task","breakdown","--task",objective.taskId,"--planner","pi","--model",`local/${model}`]);
+  await invoke(["task","breakdown","--task",objective.taskId,"--planner","pi","--model",`local/${model}`,"--effort","xhigh"]);
   const refreshed=await observeUntil(objective.taskId,task=>task.plan?.planDigest!==preview.plan.planDigest&&task.workflow?.state==="succeeded");
   assert.equal(refreshed.plan.tasks[0].key,"first-v2");
-  await invoke(["task","breakdown","--task",objective.taskId,"--planner","pi","--model",`local/${model}`]);
+  await invoke(["task","breakdown","--task",objective.taskId,"--planner","pi","--model",`local/${model}`,"--effort","none"]);
   const restoredPreview=await observeUntil(objective.taskId,task=>task.plan?.planDigest===preview.plan.planDigest&&task.workflow?.state==="succeeded");
   assert.equal(plannerCalls.get(objective.taskId),3);assert.equal(restoredPreview.lifecycle,"draft");
-  assert.deepEqual(requests.filter(item => item.sourceTaskId === objective.taskId && item.kind === "planner").map(item => item.effort), ["high", "medium", "medium"]);
+  assert.deepEqual(requests.filter(item => item.sourceTaskId === objective.taskId && item.kind === "planner").map(item => item.effort), ["high", "xhigh", "none"]);
+  const nonePlanner = requests.find(item => item.sourceTaskId === objective.taskId && item.kind === "planner" && item.effort === "none");
+  assert.equal((await show(nonePlanner.taskId)).attempts[0].effort, "none");
   const planFile = join(workspace, "reviewed-plan.json");
   const exported = await invoke(["task", "export-plan", "--task", objective.taskId, "--out", planFile]);
   assert.equal(exported.planDigest, preview.plan.planDigest);
@@ -295,13 +300,15 @@ try {
   const automatic = await invoke(["task", "add", "--title", "SMOKE_OBJECTIVE AUTOMATIC: integrate the dependency results."]);
   await invoke(["task","breakdown","--task",automatic.taskId,"--planner","pi","--model",`local/${model}`]);
   const earlierAutomaticPreview=await observeUntil(automatic.taskId,task=>task.plan!==null&&task.plan!==undefined&&task.workflow?.state==="succeeded");
-  const automaticStart=await invoke(["task", "execute", "--task", automatic.taskId, "--adapter", "pi", "--model", `local/${model}`, "--effort", "high", "--auto-plan", "--planner-effort", "low"]);
+  const automaticStart=await invoke(["task", "execute", "--task", automatic.taskId, "--adapter", "pi", "--model", `local/${model}`, "--effort", "high", "--auto-plan", "--planner-effort", "off"]);
   const automaticResult = await observeUntil(automatic.taskId, task => { assert.equal(task.workflow?.workflowId,automaticStart.workflowId);return task.lifecycle === "succeeded"; });
   assert.notEqual(automaticResult.plan.planDigest,earlierAutomaticPreview.plan.planDigest);assert.equal(automaticResult.plan.tasks[0].key,"first-v2");
   assert.equal(automaticResult.output, "automatic integration verified");
   assert.equal(await readFile(join(workspace, "automatic-second.txt"), "utf8"), "dependency consumed\n");
   assert.equal(automaticResult.attempts[0].effort, "high");
-  assert.deepEqual(requests.filter(item => item.sourceTaskId === automatic.taskId && item.kind === "planner").map(item => item.effort), ["medium", "low"]);
+  assert.deepEqual(requests.filter(item => item.sourceTaskId === automatic.taskId && item.kind === "planner").map(item => item.effort), ["medium", "none"]);
+  const offPlanner = requests.find(item => item.sourceTaskId === automatic.taskId && item.kind === "planner" && item.effort === "none");
+  assert.equal((await show(offPlanner.taskId)).attempts[0].effort, "off");
   assert.ok(requests.filter(item => item.prefix === "automatic" && item.kind === "work").every(item => item.effort === "high"));
   assert.equal((await invoke(["status"])).run.revision, 0);
   const invalid=await invoke(["task","add","--title","SMOKE_OBJECTIVE INVALID_AUTO: reject untrusted planning authority."]);
@@ -317,10 +324,10 @@ try {
   const failed=await observeUntil(failing.taskId,task=>task.lifecycle==="failed");
   assert.equal(failed.attempts[0].state,"failed");assert.equal(failed.attempts[0].outputDigest,null);assert.ok(failed.attempts[0].receiptDigest);
   const next=await invoke(["task","add","--title","SMOKE_SINGLE_AFTER_FAILURE: create single.txt without an unknown-outcome blocker."]);
-  await invoke(["task","dispatch","--task",next.taskId,"--adapter","pi","--model",`local/${model}`,"--effort","high"]);
+  await invoke(["task","dispatch","--task",next.taskId,"--adapter","pi","--model",`local/${model}`,"--effort","xhigh"]);
   await observeUntil(next.taskId,task=>task.lifecycle==="succeeded");
   assert.equal(requests.filter(item=>item.taskId===next.taskId).length,2);
-  assert.deepEqual(requests.filter(item => item.taskId === next.taskId).map(item => item.effort), ["high", "high"]);
+  assert.deepEqual(requests.filter(item => item.taskId === next.taskId).map(item => item.effort), ["xhigh", "xhigh"]);
   console.log("fresh planner identity, invalid auto-plan refusal and known native failure receipt passed");
   const negativeFiles = ["failed-dependency-second.txt", "failed-dependency-objective.txt", "cancel-draft.txt", "cancel-adopted-first.txt", "cancel-adopted-second.txt", "cancel-adopted-objective.txt"];
   const failedObjective = await invoke(["task", "add", "--title", "FAILED_DEPENDENCY SMOKE_NEGATIVE_WRITE: write failed-dependency-objective.txt containing forbidden work and a newline."]);
@@ -397,7 +404,7 @@ try {
   assert.equal(unknown.lifecycle,"active");assert.equal(unknown.output,null);assert.equal(unknown.attempts.length,1);
   assert.equal(requests.filter(item=>item.taskId===interrupted.taskId).length,2);
   console.log("real native acceptance followed by daemon crash recovered as unknown without a second launch");
-  console.log("native effort: medium defaults, explicit low/high, separate planner effort, frozen restart profile and changed-effort recovery refusal passed");
+  console.log("native effort: off/none/low/medium/high/xhigh, unsupported max without launch, independent defaults, distinct no-reasoning identities and frozen recovery passed");
   console.log(JSON.stringify({ nativeHost: manifest.artifact.identity, executableDigest: manifest.artifact.executable.sha256, provider: "controlled-loopback", providerRequests: requests.length, automaticPlanAdopted: automaticResult.plan?.adoptedTaskIds.length === 2, canonicalRevision: 0, liveProviderAuthentication: "unobserved" }));
 } finally {
   try {

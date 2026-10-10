@@ -5,7 +5,7 @@ import { assertAcyclic, dependencySatisfied, reduceDispatch, reduceTaskLifecycle
 import { verifyAttemptReceipt, type AttemptReceiptEnvelopeV1 } from "./receipt.js";
 
 export type NativeTaskAdapterIdV1 = "pi" | "omp" | "claude" | "codex";
-export type TaskEffortV1 = "low" | "medium" | "high";
+export type TaskEffortV1 = "off" | "none" | "low" | "medium" | "high" | "xhigh" | "max";
 export interface TaskExecutionProfileV1 { schemaVersion: "1"; adapterId: NativeTaskAdapterIdV1; hostId: string; hostVersion: string; nativeExecutablePath: string; nativeExecutableDigest: string; providerId: string; modelId: string; effort?: TaskEffortV1; purpose: "work" | "planner"; timeoutMs: number; maxOutputBytes: number; lookup: "local-terminal-record" | "native"; idempotentLaunch: boolean }
 export interface TaskContractV2 { schemaVersion: "2"; taskId: string; title: string; instructions: string; acceptanceCriteria: string[]; kind: "work" | "planner"; sourceTaskId: string | null; completionPolicy: { schemaVersion: "1"; kind: "predicate"; predicate: { kind: "receipt-only" } } }
 function fail(code = "EXECUTION_INVALID"): never { throw new DomainError(code); }
@@ -14,7 +14,7 @@ function text(value: unknown, code = "EXECUTION_INVALID"): asserts value is stri
 function texts(value: unknown, nonempty = false, code = "EXECUTION_INVALID"): asserts value is string[] { if (!Array.isArray(value) || (nonempty && !value.length)) fail(code); for (const item of value) text(item, code); }
 function positive(value: unknown): void { if (!Number.isSafeInteger(value) || (value as number) < 1) fail(); }
 function choice(value: unknown, choices: readonly string[]): void { if (typeof value !== "string" || !choices.includes(value)) fail(); }
-export function parseTaskEffortV1(value: unknown): TaskEffortV1 { choice(value, ["low", "medium", "high"]); return value as TaskEffortV1; }
+export function parseTaskEffortV1(value: unknown): TaskEffortV1 { choice(value, ["off", "none", "low", "medium", "high", "xhigh", "max"]); return value as TaskEffortV1; }
 export function parseTaskExecutionProfileV1(value: unknown): TaskExecutionProfileV1 {
   // Omission belongs to historical profiles: never inject a default into their digest.
   const hasEffort = value !== null && typeof value === "object" && Object.hasOwn(value, "effort");

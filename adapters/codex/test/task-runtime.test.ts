@@ -95,8 +95,13 @@ void test("Codex refuses ambient MCP servers, incomplete inventories, and unsupp
   assert.equal(requests.includes("turn/start"), false);
 });
 void test("Codex rejects invalid effort before native inspection or protocol initialization",async()=>{
- for(const effort of [null,"off","max",1]){
+ for(const effort of [null,"disabled","ultra",1]){
   await assert.rejects(resolveCodexTaskProfileV1({workspacePath:"/unused",model,purpose:"work",executablePath:"/does-not-exist",effort:effort as TaskEffortV1}),{code:"EXECUTION_INVALID"});
   assert.throws(()=>createCodexTaskParserV1(model,"context","/workspace","work",effort as TaskEffortV1),{code:"EXECUTION_INVALID"});
+ }
+});
+void test("Codex accepts every public effort before trusted executable inspection", async () => {
+ for (const effort of ["off", "none", "low", "medium", "high", "xhigh", "max"] as const) {
+  await assert.rejects(resolveCodexTaskProfileV1({workspacePath:"/unused",model,purpose:"work",executablePath:"/does-not-exist",effort}), {code:"ENOENT"});
  }
 });
