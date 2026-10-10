@@ -58,6 +58,51 @@ This inspects the current grant through `grant.list.v1`, preserves its identity,
 
 Daily workflows generate creation/operation IDs and obtain cursors internally; users select reported task/run IDs and reviewed plan digests, not protocol JSON or caller-generated idempotency keys. Workspace selection and run observations live in owner-only `.horseness/cli-workspace.v1.json`; the opaque grant reference is stored separately. This file is client context, never canonical authority.
 
+### Edit a breakdown before adoption
+
+`adopt` means adopting an exact reviewed task graph, not approving a canonical-state proposal. To change a ready preview, export a private editable copy before adoption:
+
+```sh
+horseness task export-plan --task TASK_ID --out plan.json
+# Edit plan.json; use the digest reported by export-plan as BASE_DIGEST.
+horseness task revise --task TASK_ID --plan BASE_DIGEST --file plan.json
+horseness task show --task TASK_ID
+# After reviewing the revised preview, use its digest as NEW_DIGEST.
+horseness task adopt --task TASK_ID --plan NEW_DIGEST
+horseness task execute --task TASK_ID --adapter pi --model PROVIDER/MODEL
+```
+
+The exported file contains only the editable data, for example:
+
+```json
+{
+  "tasks": [
+    {
+      "key": "inspect",
+      "title": "Inspect authentication",
+      "instructions": "Locate the login failure and report the responsible code paths.",
+      "acceptanceCriteria": ["Identify a reproducible failing login case."],
+      "dependsOn": []
+    },
+    {
+      "key": "fix",
+      "title": "Fix and verify",
+      "instructions": "Fix the identified defect and add a regression test.",
+      "acceptanceCriteria": ["The reproduction succeeds and the regression test passes."],
+      "dependsOn": ["inspect"]
+    }
+  ]
+}
+```
+
+Add or remove tasks, edit titles/instructions/acceptance criteria, and change keys or dependencies. Keep 1–32 tasks, unique keys, nonempty acceptance criteria, and an acyclic graph whose dependency keys all exist. Extra fields, including models, permissions, grants or completion policies, are rejected. The JSON file may be at most 1 MiB; its canonical plan data may be at most 64 KiB. File paths are relative to the invoking directory, independently of `--workspace`.
+
+`export-plan` creates an owner-only file and refuses to overwrite any existing path. It exports exact task text rather than console-redacted text, so keep that file private. Editing the file alone changes no authority state. `revise` validates and saves a new immutable preview with its own digest and recorded base/author; `task show` reports its revision provenance. The original planner preview remains unchanged. No children or native calls are created, and canonical revision is unchanged. Submitting unchanged content returns the same digest as a durable no-op. To revise again, use the newest preview digest.
+
+The source must still be draft, with no adopted plan and no active planning/execution workflow involving it. A stale base fails with `PLAN_STALE`; an adopted graph fails with `PLAN_ALREADY_ADOPTED`. Cancellation, changed source contracts, invalid graphs, concurrent observations, current grants and policy are rechecked. There is no implicit rebase, adoption or execution. Existing workspace owners missing `task.revisePlan.v1` must explicitly run `workspace enable-execution`; `init` never broadens their grant.
+
+If a revision command is interrupted, retain the original JSON content and repeat the same command to recover its saved request. Changing the file while an operation is pending fails with `OPERATION_PENDING`; it must not silently replace the content, IDs, cursor or key of the original operation.
+
 ### Native runtime prerequisites
 
 The concrete bridges verify the pinned distribution before execution: Pi `0.73.1`, OMP `17.2.15`, Claude Code `2.1.228`, and Codex `0.144.1-linux-x64`. A newer installed binary is not silently accepted. The owner daemon may select a verified executable with `HORSENESS_PI_EXECUTABLE`, `HORSENESS_OMP_EXECUTABLE`, `HORSENESS_CLAUDE_EXECUTABLE`, or `HORSENESS_CODEX_EXECUTABLE`; these are daemon configuration, never planner-provided options. Pi/OMP use the pinned distribution's `dist/cli.js` entrypoint. Starting a daemon does not install or upgrade native hosts.

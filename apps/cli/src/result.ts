@@ -76,6 +76,8 @@ export function renderCliHumanV1(result: CliResultV1, secretKeys: readonly strin
   if (safe.command === "run use") return `Current run: ${display(data.runId)} — ${quoted(data.title)}\n`;
   if (safe.command === "task add") return `Added task ${display(data.taskId)}: ${quoted(data.title)} [draft]\nRun: ${display(data.runId)}\n`;
   if (safe.command === "workspace enable-execution") return `Execution authority enabled for workspace ${display(data.workspaceId)}. No task was launched.\n`;
+  if (safe.command === "task export-plan") return `Exported plan ${display(data.planDigest)} to ${quoted(data.path)}.\nEdit the tasks JSON, then run: horseness task revise --task ${display(data.taskId)} --plan ${display(data.planDigest)} --file ${quoted(data.path)} --run ${display(data.runId)}\n`;
+  if (safe.command === "task revise") return `${data.planDigest === data.basePlanDigest ? "Unchanged" : "Revised"} preview: ${display(data.planDigest)}\nBase: ${display(data.basePlanDigest)}\nNo plan was adopted and no work was launched.\nReview: horseness task show --task ${display(data.taskId)} --run ${display(data.runId)}\nAdopt explicitly: horseness task adopt --task ${display(data.taskId)} --plan ${display(data.planDigest)} --run ${display(data.runId)}\n`;
   if (["task dispatch", "task breakdown", "task execute", "task adopt", "task cancel"].includes(safe.command)) {
     const lines = [`${safe.command}: ${display(data.status)} — task ${display(data.taskId)}`, `Operation: ${display(data.outcomeId)}`];
     if (data.workflowId !== undefined) lines.push(`Workflow: ${display(data.workflowId)}`);
@@ -101,10 +103,11 @@ export function renderCliHumanV1(result: CliResultV1, secretKeys: readonly strin
       const plan = task.plan as Readonly<Record<string, JsonValue>>;
       const adopted = plan.adoptedTaskIds as readonly string[];
       lines.push(`Plan: ${display(plan.planDigest)} [${adopted.length === 0 ? "preview — not adopted" : "adopted"}]`);
+      if (task.planRevision !== undefined && task.planRevision !== null) lines.push(`Revised from: ${display((task.planRevision as Readonly<Record<string, JsonValue>>).basePlanDigest)}`);
       for (const child of plan.tasks as readonly Readonly<Record<string, JsonValue>>[]) {
         lines.push(`  ${display(child.key)}: ${quoted(child.title)}`, `    Instructions: ${quoted(child.instructions)}`, `    Acceptance criteria: ${JSON.stringify(child.acceptanceCriteria)}`, `    Depends on: ${(child.dependsOn as readonly string[]).join(", ") || "none"}`);
       }
-      if (adopted.length === 0) lines.push(`Adopt explicitly: horseness task adopt --task ${display(task.taskId)} --plan ${display(plan.planDigest)} --run ${display(data.runId)}`);
+      if (adopted.length === 0) lines.push(`Edit a copy: horseness task export-plan --task ${display(task.taskId)} --out plan.json --run ${display(data.runId)}`, `Adopt explicitly: horseness task adopt --task ${display(task.taskId)} --plan ${display(plan.planDigest)} --run ${display(data.runId)}`);
       else lines.push(`Adopted tasks: ${adopted.join(", ")}`);
     }
     lines.push(task.output === null ? "No published output yet; an acknowledgement or worker prose is not completion." : `Published output:\n${display(task.output)}`);

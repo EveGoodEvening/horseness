@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  DomainError, NO_POLICY_DIGEST, NO_POLICY_V1, assertTaskWorkflowAdoptionV1, assertTaskWorkflowLaunchV1,
+  DomainError, NO_POLICY_DIGEST, NO_POLICY_V1, assertTaskWorkflowAdoptionV1, assertTaskWorkflowLaunchV1, assertTaskPlanRevisionV1,
   attemptContextBindingDigest, canonicalJson, completionPredicateIdentity, contextManifestCoreDigest,
   deltaAuthorityScopeDigest, dependencySatisfied, deriveSchedulability, deterministicReplay, deterministicWorkspaceReplay,
   domainDigest, parseTaskPlanOutputV1, reduceTaskExecutionV1, resolveTask, sealDependencyJoinSnapshot, sealEventEnvelope, sealForkPin, verifyAttemptReceipt,
@@ -81,7 +81,7 @@ export class TaskExecutionServiceV1 {
     const observed = this.grants.observe(actor.grantDigest), g = observed?.grant;
     if (!observed || !g || g.principalId !== actor.principalId || g.workspaceId !== this.workspaceId || !g.allowedMethods.includes(method) || g.runId !== null && g.runId !== runId || g.taskId !== null && g.taskId !== taskId) throw new DomainError("AUTHORIZATION_DENIED");
     if(adapterId!==undefined&&g.adapterId!==null&&g.adapterId!==BRIDGE_ADAPTER[adapterId])throw new DomainError("AUTHORIZATION_DENIED");
-    if((method==="task.dispatch.v1"||method==="task.breakdown.v1"||method==="task.execute.v1")&&(g.attemptId!==null||g.generation!==null||g.proposalId!==null||g.principalRole!=="authority"&&g.principalRole!=="operator"))throw new DomainError("AUTHORIZATION_DENIED");
+    if((method==="task.dispatch.v1"||method==="task.breakdown.v1"||method==="task.execute.v1"||method==="task.revisePlan.v1")&&(g.attemptId!==null||g.generation!==null||g.proposalId!==null||g.principalRole!=="authority"&&g.principalRole!=="operator"))throw new DomainError("AUTHORIZATION_DENIED");
     return observed;
   }
 
@@ -180,6 +180,11 @@ export class TaskExecutionServiceV1 {
     const receipt = attempts.find(item => item.receipt?.generation === winner)?.receipt ?? attempts.at(-1)?.receipt;
     const output = details && receipt?.outputDigest ? Buffer.from(this.authority.artifacts.readReferenced(receipt.outputDigest)).toString("utf8") : null;
     const latestPlan=view.state.latestPlansByTask[taskId],plan=latestPlan?view.state.plans[latestPlan]:undefined;
+    let previewEvent: StoredEvent["envelope"] | undefined;
+    if (details && plan) for (let index = view.runEvents.length - 1; index >= 0; index--) {
+      const candidate = view.runEvents[index]?.envelope;
+      if (candidate && (candidate.payload.eventType === "TaskPlanProposedV1" || candidate.payload.eventType === "TaskPlanRevisedV1") && candidate.payload.plan.sourceTaskId === taskId) { previewEvent = candidate; break; }
+    }
     let workflow:TaskExecutionProjectionV1["workflows"][string]|undefined,planningWorkflow:TaskExecutionProjectionV1["workflows"][string]|undefined;
     for(const candidate of Object.values(view.state.workflows)){if(candidate.authorization.targetTaskId===taskId)workflow=candidate;else if(candidate.authorization.planningSource?.taskId===taskId)planningWorkflow=candidate;}
     workflow??=planningWorkflow;
@@ -187,6 +192,7 @@ export class TaskExecutionServiceV1 {
       dependencies: view.state.edges.filter(edge => edge.dependentTaskId === taskId).map(edge => edge.sourceTaskId).sort(),
       attempts: attempts.map(item => ({ attemptId: item.prepared.attemptId, generation: item.prepared.generation, adapterId: item.prepared.profile.adapterId, model: item.prepared.profile.modelId, state: item.state.state, providerOperationId: item.receipt?.providerOperationId ?? item.state.providerHandle, receiptDigest: item.receipt?.receiptDigest ?? null, outputDigest: item.receipt?.outputDigest ?? null, failureCode: item.state.findingCodes.at(-1) ?? null })), output,
       plan: details && plan ? { ...plan, adoptedTaskIds: view.state.adopted[plan.planDigest] ?? [] } : null,
+      planRevision: previewEvent?.payload.eventType === "TaskPlanRevisedV1" ? { basePlanDigest: previewEvent.payload.basePlanDigest, principalId: previewEvent.principalId, eventSequence: previewEvent.sequence } : null,
       planRejection: view.state.planRejections[taskId] ?? null,
       workflow: workflow ? { workflowId: workflow.authorization.workflowId, state: workflow.state, reasonCode: workflow.reasonCode } : null } as unknown as JsonValue;
   }
@@ -314,6 +320,23 @@ export class TaskExecutionServiceV1 {
     this.checkPolicy(view, input.taskId, plan.planDigest);
     const resultCursor = this.append(view, [{ eventType: "TaskPlanAdoptedV1", workspaceId: this.workspaceId, runId: input.runId, taskId: input.taskId, planDigest: input.planDigest }], input.operationId, input.actor.principalId, observed.expectation,[],input.requestDigest);
     return { outcomeId: input.operationId, status: "completed", taskId: input.taskId, taskIds: this.view(input.runId).state.adopted[input.planDigest] ?? executionInvariant("EXECUTION_INVALID"), planDigest: input.planDigest, observationCursor: resultCursor as unknown as JsonValue };
+  }
+
+  revisePlan(input: { runId: string; taskId: string; basePlanDigest: string; plan: unknown; operationId: string; requestDigest: string; observationCursor: CompositeCursorV1; actor: ExecutionActorV1 }): Record<string, JsonValue> {
+    const view = this.view(input.runId), observed = this.authorize(input.actor, input.runId, input.taskId, "task.revisePlan.v1");
+    const base = view.state.plans[input.basePlanDigest];
+    if (!base || base.sourceTaskId !== input.taskId) throw new DomainError("PLAN_NOT_FOUND");
+    const output = parseTaskPlanOutputV1(input.plan);
+    if (Buffer.byteLength(canonicalJson(output as unknown as JsonValue)) > 64 * 1024) throw new DomainError("PLAN_INVALID");
+    const plan = sealTaskPlanV1(input.taskId, base.sourceContractDigest, output);
+    const recovered = this.recoveredMutationCursor(input);
+    const result = (cursor: CompositeCursorV1): Record<string, JsonValue> => ({ outcomeId: input.operationId, status: "completed", taskId: input.taskId, basePlanDigest: input.basePlanDigest, planDigest: plan.planDigest, observationCursor: cursor as unknown as JsonValue });
+    if (recovered) return result(recovered);
+    this.assertCursor(view, input.observationCursor);
+    assertTaskPlanRevisionV1(view.state, input.taskId, input.basePlanDigest);
+    this.checkPolicy(view, input.taskId, plan.planDigest);
+    if (plan.planDigest === input.basePlanDigest) return result(this.commitNoop(view, input.operationId, input.requestDigest, observed.expectation));
+    return result(this.append(view, [{ eventType: "TaskPlanRevisedV1", workspaceId: this.workspaceId, runId: input.runId, basePlanDigest: input.basePlanDigest, plan }], input.operationId, input.actor.principalId, observed.expectation, [], input.requestDigest));
   }
 
   private workflowAuthority(view: ExecutionView, authorization: TaskWorkflowAuthorizationV1): ExecutionGrantObservationV1 {

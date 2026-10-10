@@ -134,6 +134,17 @@ While the original objective is still a draft, use its ID as `TASK_ID`. Run thes
 
 `breakdown` runs only the planner, not the child tasks; `adopt` adopts the exact reviewed plan and creates its dependency graph. The original objective remains the final integration task—it is not completed merely because planning finished.
 
+Need to change the preview? **Before `adopt`**, export and edit its task JSON:
+
+```sh
+"$HORSENESS" task export-plan --task TASK_ID --out plan.json
+# Edit plan.json, then use the exported preview's digest as PLAN_DIGEST.
+"$HORSENESS" task revise --task TASK_ID --plan PLAN_DIGEST --file plan.json
+"$HORSENESS" task show --task TASK_ID
+```
+
+You can add/remove tasks and change instructions, acceptance criteria and dependencies. Revision saves a new immutable preview without launching work; review and adopt **the newly returned digest** using the adoption command above. The original preview is retained, stale bases are refused, and already-adopted graphs cannot be edited in place. See [plan editing](docs/cli.md#edit-a-breakdown-before-adoption) for the JSON format and recovery rules. Adoption is not canonical-proposal approval.
+
 ### Explicitly authorize automatic composition
 
 If step-by-step review is not needed, use this **alternative** on a draft objective rather than running it again after the sequence above:

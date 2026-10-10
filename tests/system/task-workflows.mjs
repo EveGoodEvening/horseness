@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -91,7 +91,7 @@ const provider = createServer(async (request, response) => {
       return streamResponse(response, "single file created through the native write tool");
     }
     if (task.instructions.includes("SMOKE_FIRST")) {
-      if (tools.length === 0) return streamResponse(response, "", { name: "write", arguments: { path: `${prefix}-first.txt`, content: "dependency ready\n" } });
+      if (tools.length === 0) return streamResponse(response, "", { name: "write", arguments: { path: `${prefix}-first.txt`, content: task.instructions.includes("REVISED") ? "revised dependency ready\n" : "dependency ready\n" } });
       return streamResponse(response, `${prefix} first task completed`);
     }
     if (task.instructions.includes("SMOKE_SECOND")) {
@@ -218,14 +218,67 @@ try {
   await invoke(["task","breakdown","--task",objective.taskId,"--planner","pi","--model",`local/${model}`]);
   const restoredPreview=await observeUntil(objective.taskId,task=>task.plan?.planDigest===preview.plan.planDigest&&task.workflow?.state==="succeeded");
   assert.equal(plannerCalls.get(objective.taskId),3);assert.equal(restoredPreview.lifecycle,"draft");
-  const adopted = await invoke(["task", "adopt", "--task", objective.taskId, "--plan", preview.plan.planDigest]);
+  const planFile = join(workspace, "reviewed-plan.json");
+  const exported = await invoke(["task", "export-plan", "--task", objective.taskId, "--out", planFile]);
+  assert.equal(exported.planDigest, preview.plan.planDigest);
+  assert.equal((await stat(planFile)).mode & 0o777, 0o600);
+  const editable = JSON.parse(await readFile(planFile, "utf8"));
+  assert.deepEqual(editable, { tasks: preview.plan.tasks });
+  await assertRefused(["task", "export-plan", "--task", objective.taskId, "--out", planFile], "EEXIST");
+  assert.deepEqual(JSON.parse(await readFile(planFile, "utf8")), editable);
+  const reviseArgs = ["task", "revise", "--task", objective.taskId, "--plan", exported.planDigest, "--file", planFile];
+  const beforeRevisionRequests = requests.length;
+  const unchanged = await invoke(reviseArgs);
+  assert.equal(unchanged.planDigest, exported.planDigest);
+  for (const invalid of [
+    { ...editable, grants: ["injected-authority"] },
+    { tasks: editable.tasks.map(task => ({ ...task, dependsOn: [task.key === "first" ? "second" : "first"] })) },
+    { tasks: [{ ...editable.tasks[0], dependsOn: ["missing"] }] },
+  ]) {
+    await writeFile(planFile, JSON.stringify(invalid));
+    await assertRefused(reviseArgs, "PLAN_INVALID");
+    assert.deepEqual((await show(objective.taskId)).plan, restoredPreview.plan);
+  }
+  editable.tasks[0] = { ...editable.tasks[0], key: "revised-first", title: "Revised prerequisite", instructions: "SMOKE_FIRST EXPLICIT REVISED: write explicit-first.txt containing revised dependency ready and a newline.", acceptanceCriteria: ["The first file contains revised dependency ready followed by a newline."] };
+  editable.tasks[1] = { ...editable.tasks[1], key: "revised-second", dependsOn: ["revised-first"] };
+  editable.tasks.reverse(); // Execution follows dependencies, not edited array order.
+  await writeFile(planFile, JSON.stringify(editable, null, 2));
+  const beforeRevisionState = JSON.parse(await readFile(clientStatePath, "utf8"));
+  const revision = await invoke(reviseArgs);
+  assert.notEqual(revision.planDigest, exported.planDigest);
+  const revisionOptions = { taskId: objective.taskId, basePlanDigest: exported.planDigest, plan: editable };
+  const revisionPending = { command: "task revise", title: objective.taskId, taskId: objective.taskId, runId: revision.runId, fingerprint: JSON.stringify({ runId: revision.runId, ...revisionOptions }), call: { method: "task.revisePlan.v1", workspaceId: beforeRevisionState.workspaceId, runId: revision.runId, taskId: objective.taskId, observationCursor: beforeRevisionState.runs[revision.runId], idempotencyKey: revision.outcomeId, input: { operationId: revision.outcomeId, ...revisionOptions } } };
+  const afterRevisionState = JSON.parse(await readFile(clientStatePath, "utf8"));
+  await writeFile(clientStatePath, JSON.stringify({ ...afterRevisionState, pending: revisionPending }));
+  await writeFile(planFile, JSON.stringify({ tasks: preview.plan.tasks }));
+  await assertRefused(reviseArgs, "OPERATION_PENDING");
+  assert.deepEqual(JSON.parse(await readFile(clientStatePath, "utf8")).pending, revisionPending);
+  await writeFile(planFile, JSON.stringify(editable));
+  assert.deepEqual(await invoke(reviseArgs), revision);
+  const revisedPreview = await assertUnlaunched(objective.taskId, "draft");
+  assert.equal(revisedPreview.plan.planDigest, revision.planDigest);
+  assert.deepEqual(revisedPreview.plan.tasks, editable.tasks);
+  assert.equal(revisedPreview.planRevision.basePlanDigest, exported.planDigest);
+  assert.deepEqual(revisedPreview.plan.adoptedTaskIds, []);
+  await assertRefused(reviseArgs, "PLAN_STALE");
+  await invoke(["stop", "--workspace-path", workspace]); initialized = false;
+  await invoke(["init"]); initialized = true;
+  assert.deepEqual(await show(objective.taskId), revisedPreview);
+  assert.equal(requests.length, beforeRevisionRequests);
+  assert.equal((await invoke(["status"])).run.revision, 0);
+  await assertAbsent(["explicit-first.txt", "explicit-second.txt"]);
+  const adopted = await invoke(["task", "adopt", "--task", objective.taskId, "--plan", revision.planDigest]);
+  await assertRefused(["task", "revise", "--task", objective.taskId, "--plan", revision.planDigest, "--file", planFile], "PLAN_ALREADY_ADOPTED");
+  const afterAdoptionState = JSON.parse(await readFile(clientStatePath, "utf8"));
+  await writeFile(clientStatePath, JSON.stringify({ ...afterAdoptionState, pending: revisionPending }));
+  assert.deepEqual(await invoke(reviseArgs), revision, "exact committed revision recovery survives later adoption");
   assert.equal(adopted.taskIds.length, 2);
   await invoke(["task", "execute", "--task", objective.taskId, "--adapter", "pi", "--model", `local/${model}`]);
   const integrated = await observeUntil(objective.taskId, task => task.lifecycle === "succeeded");
   assert.equal(integrated.output, "explicit integration verified");
-  assert.equal(await readFile(join(workspace, "explicit-first.txt"), "utf8"), "dependency ready\n");
+  assert.equal(await readFile(join(workspace, "explicit-first.txt"), "utf8"), "revised dependency ready\n");
   assert.equal(await readFile(join(workspace, "explicit-second.txt"), "utf8"), "dependency consumed\n");
-  console.log("explicit breakdown: preview without work, atomic adoption and dependency-ordered native execution passed");
+  console.log("explicit breakdown: private export, invalid/stale/adopted edit refusals, exact revision recovery, restart, reviewed adoption and revised dependency-ordered native execution passed");
 
   const automatic = await invoke(["task", "add", "--title", "SMOKE_OBJECTIVE AUTOMATIC: integrate the dependency results."]);
   await invoke(["task","breakdown","--task",automatic.taskId,"--planner","pi","--model",`local/${model}`]);

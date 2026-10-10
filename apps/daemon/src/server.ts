@@ -145,6 +145,11 @@ export class DaemonServer {
       if(cursor.kind!=="composite"||!body.runId||!body.taskId||value.taskId!==body.taskId||value.operationId!==request.params.idempotencyKey||typeof value.operationId!=="string"||typeof value.planDigest!=="string")throw protocolError("INVALID_PARAMS");
       return {data:this.execution.adopt({runId:body.runId,taskId:body.taskId,planDigest:value.planDigest,operationId:value.operationId,requestDigest:domainDigest("horseness.task-workflow-request.v1",{principalId:context.principalId,method:request.method,params:request.params} as unknown as JsonValue),observationCursor:cursor,actor:context})};
     });
+    this.register("task.revisePlan.v1",(request,body,context)=>{
+      const cursor=request.params.observationCursor,value=body.input.value as Record<string,unknown>;
+      if(cursor.kind!=="composite"||!body.runId||!body.taskId||value.taskId!==body.taskId||value.operationId!==request.params.idempotencyKey||typeof value.operationId!=="string"||typeof value.basePlanDigest!=="string")throw protocolError("INVALID_PARAMS");
+      return {data:this.execution.revisePlan({runId:body.runId,taskId:body.taskId,basePlanDigest:value.basePlanDigest,plan:value.plan,operationId:value.operationId,requestDigest:domainDigest("horseness.task-workflow-request.v1",{principalId:context.principalId,method:request.method,params:request.params} as unknown as JsonValue),observationCursor:cursor,actor:context})};
+    });
     this.register("task.cancel.v1",async(request,body,context)=>{
       const cursor=request.params.observationCursor,value=body.input.value as Record<string,unknown>;
       if(cursor.kind!=="composite"||!body.runId||!body.taskId||value.taskId!==body.taskId||value.operationId!==request.params.idempotencyKey||typeof value.operationId!=="string")throw protocolError("INVALID_PARAMS");

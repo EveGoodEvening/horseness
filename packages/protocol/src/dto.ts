@@ -29,6 +29,7 @@ export const METHOD_LOCAL_DTO_SHAPES_V1:Readonly<Record<string,{request:Shape;re
  "task.dispatch.v1":{request:request({taskId:"id",adapterId:"native-adapter",model:"empty-text"}),result:result({task:"object",observationCursor:"object"})},
  "task.breakdown.v1":{request:request({taskId:"id",adapterId:"native-adapter",model:"empty-text"}),result:result({taskId:"id",plannerTaskId:"id",observationCursor:"object"})},
  "task.adoptPlan.v1":{request:request({taskId:"id",planDigest:"text"}),result:result({taskId:"id",taskIds:"array",planDigest:"text",observationCursor:"object"})},
+ "task.revisePlan.v1":{request:request({taskId:"id",basePlanDigest:"text",plan:"object"}),result:result({taskId:"id",basePlanDigest:"text",planDigest:"text",observationCursor:"object"})},
  "task.execute.v1":{request:request({taskId:"id",adapterId:"native-adapter",model:"empty-text",plannerAdapterId:"native-adapter",plannerModel:"empty-text",autoPlan:"boolean"}),result:result({taskId:"id",workflowId:"id",observationCursor:"object"})},
  "task.list.v1":{request:request({states:"empty-array",limit:"integer",continuationToken:"empty-text"}),result:result({tasks:"empty-array",nextContinuationToken:"empty-text",observationCursor:"object"})},
  "dependency.list.v1":{request:request({taskId:"id",direction:"text"}),result:result({edges:"array",observationCursor:"object"})},

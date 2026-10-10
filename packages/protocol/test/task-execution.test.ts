@@ -7,6 +7,7 @@ test("explicit execution methods accept resolvable defaults and reject host or o
     ["task.dispatch.v1",{operationId:"dispatch",taskId:"task",adapterId:"pi",model:""}],
     ["task.breakdown.v1",{operationId:"breakdown",taskId:"task",adapterId:"codex",model:""}],
     ["task.adoptPlan.v1",{operationId:"adopt",taskId:"task",planDigest:"digest"}],
+    ["task.revisePlan.v1",{operationId:"revise",taskId:"task",basePlanDigest:"digest",plan:{tasks:[{key:"a",title:"A",instructions:"Build A",acceptanceCriteria:["A works"],dependsOn:[]}]}}],
     ["task.execute.v1",{operationId:"execute",taskId:"task",adapterId:"omp",model:"",plannerAdapterId:"claude",plannerModel:"",autoPlan:false}],
   ] as const;
   for(const [method,value] of requests){

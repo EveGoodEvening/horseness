@@ -347,3 +347,69 @@ void test("objective preparation requires both adopted sink resolutions, not ter
   assert.deepEqual(ready,readyBefore);
   assert.deepEqual(state,before);
 });
+
+function revisionFixture() {
+  let state = reduceTaskExecutionV1(emptyTaskExecutionProjectionV1(), { ...base, eventType: "TaskCreatedV2", contract }, 1);
+  state = reduceTaskExecutionV1(state, { ...base, eventType: "TaskCreatedV2", contract: { ...contract, taskId: "planner", kind: "planner", sourceTaskId: "root" } }, 2);
+  const plan = sealTaskPlanV1("root", taskContractDigestV2(contract), planOutput);
+  state = reduceTaskExecutionV1({ ...state, lifecycles: { ...state.lifecycles, planner: "succeeded" } }, { ...base, eventType: "TaskPlanProposedV1", plannerTaskId: "planner", plan }, 3);
+  const revised = sealTaskPlanV1("root", plan.sourceContractDigest, { tasks: [
+    { key: "a", title: "Revised A", instructions: "Build a smaller A", acceptanceCriteria: ["A satisfies the revised contract"], dependsOn: ["c"] },
+    { key: "c", title: "New prerequisite", instructions: "Prepare C instead of B", acceptanceCriteria: ["C is ready"], dependsOn: [] },
+  ] });
+  return { state, plan, revised, event: { ...base, eventType: "TaskPlanRevisedV1" as const, basePlanDigest: plan.planDigest, plan: revised } };
+}
+
+void test("revision preserves the original planner preview and only the reviewed adoption creates changed work", () => {
+  const { state, plan, revised, event } = revisionFixture(), before = structuredClone(state);
+  const next = reduceTaskExecutionV1(state, event, 4);
+  assert.deepEqual(state, before);
+  assert.deepEqual(next.plans[plan.planDigest], plan);
+  assert.deepEqual(next.plans[revised.planDigest], revised);
+  assert.equal(next.latestPlansByTask.root, revised.planDigest);
+  assert.deepEqual(next.plansByPlanner, { planner: plan.planDigest });
+  assert.deepEqual(next.contracts, state.contracts);
+  assert.deepEqual(next.edges, []);
+  assert.deepEqual(next.adopted, {});
+  assert.deepEqual(next.attempts, {});
+  const adopted = reduceTaskExecutionV1(next, { ...base, eventType: "TaskPlanAdoptedV1", taskId: "root", planDigest: revised.planDigest }, 5);
+  const children = Object.values(adopted.contracts).filter(task => task.sourceTaskId === "root" && task.kind === "work");
+  assert.deepEqual(children.map(task => ({ title: task.title, instructions: task.instructions, acceptanceCriteria: task.acceptanceCriteria })), revised.tasks.map(({ title, instructions, acceptanceCriteria }) => ({ title, instructions, acceptanceCriteria })));
+  const a = children.find(task => task.title === "Revised A"), c = children.find(task => task.title === "New prerequisite");
+  assert.ok(a); assert.ok(c);
+  assert.deepEqual(adopted.edges.map(edge => [edge.sourceTaskId, edge.dependentTaskId]), [[c.taskId, a.taskId], [a.taskId, "root"]]);
+  assert.equal(adopted.lifecycles.root, "draft");
+  assert.deepEqual(adopted.workflows, {});
+});
+
+void test("revision refuses stale, adopted, active, cancelled, foreign and changed-source plans without mutation", () => {
+  const { state, plan, event } = revisionFixture();
+  const revised = reduceTaskExecutionV1(state, event, 4);
+  assert.throws(() => reduceTaskExecutionV1(revised, event, 5), /PLAN_STALE/);
+  const adopted = reduceTaskExecutionV1(state, { ...base, eventType: "TaskPlanAdoptedV1", taskId: "root", planDigest: plan.planDigest }, 4);
+  assert.throws(() => reduceTaskExecutionV1(adopted, event, 5), /PLAN_ALREADY_ADOPTED/);
+  for (const lifecycle of ["active", "cancelled", "failed", "succeeded"] as const) assert.throws(() => reduceTaskExecutionV1({ ...state, lifecycles: { ...state.lifecycles, root: lifecycle } }, event, 4), /TASK_NOT_DRAFT/);
+  assert.throws(() => reduceTaskExecutionV1(state, { ...event, basePlanDigest: "missing" }, 4), /PLAN_NOT_FOUND/);
+  const foreign = sealTaskPlanV1("planner", plan.sourceContractDigest, planOutput);
+  assert.throws(() => reduceTaskExecutionV1(state, { ...event, plan: foreign }, 4), /PLAN_NOT_FOUND/);
+  assert.throws(() => reduceTaskExecutionV1({ ...state, contracts: { ...state.contracts, root: { ...contract, instructions: "Changed objective" } } }, event, 4), /PLAN_SOURCE_CHANGED/);
+  const substituted = sealTaskPlanV1("root", "different-contract", planOutput);
+  assert.throws(() => reduceTaskExecutionV1(state, { ...event, plan: substituted }, 4), /PLAN_SOURCE_CHANGED/);
+  assert.throws(() => reduceTaskExecutionV1(state, { ...event, plan: { ...event.plan, tasks: planOutput.tasks } }, 4), /PLAN_INVALID/);
+  assert.deepEqual(state.plans, { [plan.planDigest]: plan });
+  assert.deepEqual(state.adopted, {});
+});
+
+void test("revision cannot change a graph covered by active execution or planning consent", () => {
+  const { state, event } = revisionFixture();
+  for (const operationKind of ["execute", "breakdown"] as const) {
+    const target = operationKind === "execute" ? contract : state.contracts.planner;
+    assert.ok(target);
+    const executionProfile = { ...profile, purpose: target.kind };
+    const authorization = { schemaVersion: "1" as const, ...base, workflowId: "workflow", operationKind, requestDigest: "request", planningSource: { taskId: "root", contractDigest: taskContractDigestV2(contract) }, parentWorkflowId: null, targetTaskId: target.taskId, targetContractDigest: taskContractDigestV2(target), issuerPrincipalId: "operator", issuerGrantDigest: "grant", expiresAt: "2026-01-02T00:00:00Z", executionProfile, plannerProfile: operationKind === "execute" ? { ...profile, purpose: "planner" as const } : null, autoPlan: operationKind === "execute", graphDigest: operationKind === "execute" ? null : taskWorkflowGraphDigestV1([target], []), planDigest: null };
+    const planningState = { ...state, lifecycles: { ...state.lifecycles, planner: "draft" as const } };
+    const active = reduceTaskExecutionV1(planningState, { ...base, eventType: "TaskWorkflowStartedV1", authorization }, 4), snapshot = structuredClone(active);
+    assert.throws(() => reduceTaskExecutionV1(active, event, 5), /WORKFLOW_ALREADY_RUNNING/);
+    assert.deepEqual(active, snapshot);
+  }
+});

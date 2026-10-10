@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { closeSync, constants, fstatSync, openSync, readSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { CoordinatorCallV1, CoordinatorCursorV1 } from "@horseness/sdk";
 import { CliParseErrorV1 } from "./parser.js";
 import type { CliCommandDefinitionV1, CliCommandRegistryV1, CliInvocationV1 } from "./registry.js";
@@ -40,7 +42,9 @@ const REMEDIATION: Readonly<Record<string, string>> = {
   TASK_NOT_READY: "The task has unsatisfied dependencies or a live attempt. Inspect task show before explicitly trying again.",
   TASK_NOT_DRAFT: "This operation requires the unchanged draft source. Inspect task show; do not replace the reviewed plan or active contract.",
   PLAN_SOURCE_CHANGED: "The source contract changed since planning. Inspect the source and request a new breakdown explicitly.",
-  PLAN_INVALID: "The planner output was rejected. Inspect the planner result; no plan was adopted.",
+  PLAN_INVALID: "The plan is invalid. Use 1–32 tasks with key, title, instructions, nonempty acceptanceCriteria and valid acyclic dependsOn keys; no authority fields are allowed.",
+  PLAN_STALE: "A newer preview is current. Export and review that preview before revising it; no automatic rebase was made.",
+  PLAN_ALREADY_ADOPTED: "A plan has already been adopted for this task. Revisions are only allowed before adoption; the existing task graph was not changed.",
   AUTHORIZATION_DENIED: "Execution was denied by current authority or policy. Ask the workspace authority for access; workspace enable-execution is an explicit owner-only grant upgrade.",
   UNKNOWN_OUTCOME: "The external handoff outcome is unknown. Inspect task show and daemon reconciliation; do not launch a duplicate attempt.",
   WORKFLOW_GRAPH_CHANGED: "The dependency graph no longer matches this workflow's authorization. Inspect task show; no changed closure was launched.",
@@ -174,8 +178,41 @@ async function addTask(invocation: CliInvocationV1): Promise<JsonValue> {
   });
 }
 
-function executionOptions(invocation: CliInvocationV1): Record<string, string | boolean> {
-  const options: Record<string, string | boolean> = { taskId: text(invocation, "task") };
+function readPlanFile(invocation: CliInvocationV1): JsonValue {
+  const path = resolve(text(invocation, "file"));
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  try {
+    const stats = fstatSync(descriptor), maxBytes = 1024 * 1024;
+    if (!stats.isFile() || stats.size > maxBytes) throw new CliParseErrorV1("INVALID_INVOCATION", "--file must be a regular JSON file of at most 1 MiB.", invocation.command);
+    const bytes = Buffer.alloc(maxBytes + 1);
+    let size = 0, count: number;
+    while (size < bytes.length && (count = readSync(descriptor, bytes, size, bytes.length - size, null)) !== 0) size += count;
+    if (size > maxBytes) throw new CliParseErrorV1("INVALID_INVOCATION", "The plan file exceeds 1 MiB.", invocation.command);
+    let value: JsonValue;
+    try { value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, size))) as JsonValue; }
+    catch { throw new CliParseErrorV1("INVALID_INVOCATION", "--file must contain valid UTF-8 JSON with exactly a tasks array.", invocation.command); }
+    if (value === null || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length === 0) throw new CliParseErrorV1("INVALID_INVOCATION", "--file must contain a JSON object with a tasks array.", invocation.command);
+    return value;
+  } finally { closeSync(descriptor); }
+}
+
+async function exportPlan(invocation: CliInvocationV1): Promise<JsonValue> {
+  const taskId = text(invocation, "task"), path = resolve(text(invocation, "out"));
+  return withCliWorkspaceV1(invocation, async (session) => {
+    const runId = selectedRun(invocation, session.state), { cursor } = await observeRun(session, runId);
+    const result = await session.client.call({ method: "task.get.v1", workspaceId: session.state.workspaceId, runId, taskId, observationCursor: cursor, input: { operationId: `query:${randomUUID()}`, taskId, includeAttempts: true } });
+    const task = record(record(result.value).task);
+    if (task.plan === null || task.plan === undefined) throw Object.assign(new Error("No plan preview is ready. Run task breakdown, then inspect task show."), { code: "PLAN_NOT_READY" });
+    const plan = record(task.plan);
+    if (typeof plan.planDigest !== "string" || !Array.isArray(plan.tasks)) throw Object.assign(new Error("Invalid plan preview response."), { code: "INVALID_RESPONSE" });
+    // Explicit private export preserves exact instructions; console redaction must not alter editable content.
+    writeFileSync(path, `${JSON.stringify({ tasks: plan.tasks }, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+    return { runId, taskId, planDigest: plan.planDigest, path };
+  });
+}
+
+function executionOptions(invocation: CliInvocationV1): Record<string, JsonValue> & { taskId: string; adapterId?: string } {
+  const options: Record<string, JsonValue> & { taskId: string; adapterId?: string } = { taskId: text(invocation, "task") };
   const host = (name: string, fallback?: string): string => {
     const value = text(invocation, name, fallback);
     if (!["pi", "omp", "claude", "codex"].includes(value)) throw new CliParseErrorV1("INVALID_INVOCATION", `--${name} must be pi, omp, claude, or codex.`, invocation.command);
@@ -185,11 +222,12 @@ function executionOptions(invocation: CliInvocationV1): Record<string, string | 
   if (invocation.command === "task breakdown") options.adapterId = host("planner");
   if (options.adapterId !== undefined) options.model = invocation.options.model === undefined ? "" : text(invocation, "model");
   if (invocation.command === "task adopt") options.planDigest = text(invocation, "plan");
+  if (invocation.command === "task revise") { options.basePlanDigest = text(invocation, "plan"); options.plan = readPlanFile(invocation); }
   if (invocation.command === "task execute") {
     if (invocation.options["auto-plan"] !== undefined && invocation.options["auto-plan"] !== true) throw new CliParseErrorV1("INVALID_INVOCATION", "--auto-plan is a flag and takes no value.", invocation.command);
     options.autoPlan = invocation.options["auto-plan"] === true;
     if (!options.autoPlan && (invocation.options.planner !== undefined || invocation.options["planner-model"] !== undefined)) throw new CliParseErrorV1("INVALID_INVOCATION", "--planner and --planner-model require --auto-plan.", invocation.command);
-    options.plannerAdapterId = host("planner", String(options.adapterId));
+    options.plannerAdapterId = host("planner", options.adapterId);
     options.plannerModel = invocation.options["planner-model"] === undefined ? "" : text(invocation, "planner-model");
   }
   if (invocation.command === "task cancel") { options.reason = "operator-cancelled"; options.cascade = true; }
@@ -200,13 +238,13 @@ async function taskOperation(invocation: CliInvocationV1): Promise<JsonValue> {
   const options = executionOptions(invocation);
   return withCliWorkspaceV1(invocation, async (session) => {
     const runId = selectedRun(invocation, session.state);
-    const taskId = String(options.taskId);
+    const taskId = options.taskId;
     const fingerprint = JSON.stringify({ runId, ...options });
     let pending = pendingOperation(session, invocation.command, taskId, runId, fingerprint);
     if (pending === null) {
       const { cursor } = await observeRun(session, runId);
       const operationId = `cli:${randomUUID()}`;
-      const methods = { "task dispatch": "task.dispatch.v1", "task breakdown": "task.breakdown.v1", "task adopt": "task.adoptPlan.v1", "task execute": "task.execute.v1", "task cancel": "task.cancel.v1" } as const;
+      const methods = { "task dispatch": "task.dispatch.v1", "task breakdown": "task.breakdown.v1", "task revise": "task.revisePlan.v1", "task adopt": "task.adoptPlan.v1", "task execute": "task.execute.v1", "task cancel": "task.cancel.v1" } as const;
       const method = methods[invocation.command as keyof typeof methods];
       const call = { method, workspaceId: session.state.workspaceId, runId, taskId, observationCursor: cursor, idempotencyKey: operationId, input: { operationId, ...options } } as CoordinatorCallV1;
       pending = { command: invocation.command, title: taskId, runId, taskId, fingerprint, call };
@@ -231,7 +269,7 @@ async function enableExecution(invocation: CliInvocationV1): Promise<JsonValue> 
       if (current.length !== 1 || grant === undefined || grant.principalId !== session.state.principalId || grant.principalRole !== "authority" || grant.workspaceId !== session.state.workspaceId || grant.revoked === true || !Array.isArray(grant.allowedMethods) || !grant.allowedMethods.includes("grant.issue.v1")) throw Object.assign(new Error("Only the current workspace authority can explicitly enable execution."), { code: "METHOD_NOT_AUTHORIZED" });
       const resourceScope: Record<string, JsonValue> = { workspaceId: session.state.workspaceId, peerIdentity: String(grant.peerIdentity) };
       for (const key of ["runId", "taskId", "attemptId", "generation", "proposalId", "adapterId"] as const) if (grant[key] !== null && grant[key] !== undefined) resourceScope[key] = grant[key] as JsonValue;
-      const actions = [...new Set([...grant.allowedMethods as string[], "task.get.v1", "task.dispatch.v1", "task.breakdown.v1", "task.adoptPlan.v1", "task.execute.v1", "task.cancel.v1"])].sort();
+      const actions = [...new Set([...grant.allowedMethods as string[], "task.get.v1", "task.dispatch.v1", "task.breakdown.v1", "task.revisePlan.v1", "task.adoptPlan.v1", "task.execute.v1", "task.cancel.v1"])].sort();
       const operationId = `cli:${randomUUID()}`;
       const call: CoordinatorCallV1<"grant.issue.v1"> = { method: "grant.issue.v1", workspaceId: session.state.workspaceId, observationCursor: cursor, idempotencyKey: operationId, input: { operationId, principalId: session.state.principalId, principalRole: "authority", actions, resourceScope, expiresAt: String(grant.expiresAt) } };
       pending = { command: invocation.command, title: "enable-execution", runId: "", fingerprint: "enable-execution:v1", call };
@@ -273,6 +311,8 @@ export function registerWorkflowCommandsV1(registry: CliCommandRegistryV1): void
   register("workspace enable-execution", "Explicitly authorize task execution for this workspace", "workspace enable-execution", [], async (invocation) => cliSuccessV1(invocation.command, await enableExecution(invocation)));
   register("task dispatch", "Start one native task attempt (acknowledgement, not completion)", "task dispatch --task ID --adapter HOST [--model NAME] [--run current|ID]", ["task", "adapter", "model", "run"], async (invocation) => cliSuccessV1(invocation.command, await taskOperation(invocation)));
   register("task breakdown", "Start a planner and retain a preview for explicit adoption", "task breakdown --task ID --planner HOST [--model NAME] [--run current|ID]", ["task", "planner", "model", "run"], async (invocation) => cliSuccessV1(invocation.command, await taskOperation(invocation)));
+  register("task export-plan", "Export the current plan's editable JSON to a new private file", "task export-plan --task ID --out FILE [--run current|ID]", ["task", "out", "run"], async (invocation) => cliSuccessV1(invocation.command, await exportPlan(invocation)));
+  register("task revise", "Save an edited preview without adopting or executing it", "task revise --task ID --plan BASE_DIGEST --file FILE [--run current|ID]", ["task", "plan", "file", "run"], async (invocation) => cliSuccessV1(invocation.command, await taskOperation(invocation)));
   register("task adopt", "Adopt the exact reviewed plan preview", "task adopt --task ID --plan DIGEST [--run current|ID]", ["task", "plan", "run"], async (invocation) => cliSuccessV1(invocation.command, await taskOperation(invocation)));
   register("task execute", "Authorize serial dependency execution; planning is opt-in", "task execute --task ID --adapter HOST [--model NAME] [--auto-plan [--planner HOST] [--planner-model NAME]] [--run current|ID]", ["task", "adapter", "model", "auto-plan", "planner", "planner-model", "run"], async (invocation) => cliSuccessV1(invocation.command, await taskOperation(invocation)));
   register("task cancel", "Durably stop the target and its workflow launches", "task cancel --task ID [--run current|ID]", ["task", "run"], async (invocation) => cliSuccessV1(invocation.command, await taskOperation(invocation)));

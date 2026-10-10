@@ -134,6 +134,17 @@ flowchart TD
 
 `breakdown` 只运行规划者，不启动子任务；`adopt` 只采用你指定的计划并创建依赖图。原始目标保留为最后的集成任务，不会因为“拆解完了”就被标记完成。
 
+计划需要调整时，**先不要 `adopt`**，导出并编辑任务 JSON：
+
+```sh
+"$HORSENESS" task export-plan --task TASK_ID --out plan.json
+# 编辑 plan.json，再用导出时显示的摘要替换 PLAN_DIGEST。
+"$HORSENESS" task revise --task TASK_ID --plan PLAN_DIGEST --file plan.json
+"$HORSENESS" task show --task TASK_ID
+```
+
+可以增删子任务，修改指令、验收要求和依赖。修改只保存新的不可变预览，不启动工作；审阅后，用**新返回的摘要**执行上面的采用命令。原预览保留，过期基线会被拒绝，已经采用的任务图不能原地修改。JSON 格式和中断恢复见[计划修改说明](docs/cli.md#edit-a-breakdown-before-adoption)。采用任务计划不等于批准正式状态变更。
+
 ### 显式授权自动组合
 
 若不需要逐步审阅，可对草稿目标**改用**以下命令，而不是接着重复运行：
