@@ -4,13 +4,14 @@ import { constants, createReadStream } from "node:fs";
 import { access, lstat, mkdir, open, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, delimiter } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { domainDigest, parseTaskExecutionProfileV1, parseTaskExecutionReceiptProvenanceV1, taskExecutionProfileDigest, type TaskExecutionProfileV1, type JsonValue } from "@horseness/domain";
+import { domainDigest, parseTaskExecutionProfileV1, parseTaskExecutionReceiptProvenanceV1, taskExecutionProfileDigest, type TaskExecutionProfileV1, type TaskEffortV1, type JsonValue } from "@horseness/domain";
 import type { BoundAdapterOperationV1, WorkerAdapterV1 } from "@horseness/protocol";
 
 export interface NativeTaskProfileOptionsV1 {
  readonly workspacePath:string;
  readonly model:string|null;
  readonly purpose:"work"|"planner";
+ readonly effort?:TaskEffortV1;
  readonly executablePath?:string;
  readonly timeoutMs?:number;
 }

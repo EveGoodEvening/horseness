@@ -10,7 +10,7 @@ import { CrashInjectedError, SQLiteAuthority, createOrLoadAuthorityCredential } 
 import { TaskExecutionServiceV1, type ExecutionGrantAuthorityV1, type ExecutionHostDriverV1, type StartTaskWorkflowV1 } from "../../src/execution/service.js";
 
 const now = "2026-10-06T12:00:00.000Z";
-const profile: TaskExecutionProfileV1 = { schemaVersion: "1", adapterId: "pi", hostId: "pi", hostVersion: "0.73.1", nativeExecutablePath: "/unit/native", nativeExecutableDigest: "a".repeat(64), providerId: "unit", modelId: "exact-model", purpose: "work", timeoutMs: 30_000, maxOutputBytes: 65_536, lookup: "local-terminal-record", idempotentLaunch: false };
+const profile: TaskExecutionProfileV1 = { schemaVersion: "1", adapterId: "pi", hostId: "pi", hostVersion: "0.73.1", nativeExecutablePath: "/unit/native", nativeExecutableDigest: "a".repeat(64), providerId: "unit", modelId: "exact-model", effort: "medium", purpose: "work", timeoutMs: 30_000, maxOutputBytes: 65_536, lookup: "local-terminal-record", idempotentLaunch: false };
 
 function fixture(interruptPrepared=false,adapterId:string|null=null) {
   const root = mkdtempSync(join(tmpdir(), "horseness-execution-service-")), database = join(root, "authority.sqlite"), artifacts = join(root, "artifacts");
@@ -61,7 +61,7 @@ function fixture(interruptPrepared=false,adapterId:string|null=null) {
     async resume() { return { schemaVersion: "1", status: "unsupported", providerOperationId: null, nativeSessionId: null, details: {} }; },
   };
   const hosts: ExecutionHostDriverV1 = {
-    async resolve(_adapterId, _model, purpose) { calls.resolve++; return { ...profile, purpose }; },
+    async resolve(_adapterId, _model, purpose, effort) { calls.resolve++; return { ...profile, purpose, effort }; },
     async open() { return { adapter: native, async publication() { throw new DomainError("ARTIFACT_MISMATCH"); }, async close() {} }; },
   };
   const service = new TaskExecutionServiceV1(authority, "workspace", grantAuthority, hosts, () => now);
@@ -191,4 +191,15 @@ test("a replacement scoped issuer cannot borrow a revoked issuer's planned attem
     assert.equal(f.calls.launch,0);assert.equal(Object.values(f.state().attempts)[0]?.state,"planned");
     assert.equal(Object.values(f.state().workflows).at(-1)?.reasonCode,"AUTHORIZATION_DENIED");
   } finally {await f.close();}
+});
+
+test("native preflight cannot substitute effort after explicit workflow consent", async () => {
+  const f = fixture();
+  try {
+    f.hosts.resolve = async () => profile;
+    await assert.rejects(f.service.start({ ...f.request, effort: "high" }), /EXECUTION_PROFILE_MISMATCH/);
+    assert.deepEqual(f.state().workflows, {});
+    assert.deepEqual(f.state().prepared, {});
+    assert.equal(f.calls.launch, 0);
+  } finally { await f.close(); }
 });

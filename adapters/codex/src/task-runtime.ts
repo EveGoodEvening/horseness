@@ -1,7 +1,7 @@
 import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { createNativeTaskSpoolV1, nativeRenderedContextDigestV1, nativeExecutableDigestV1, runNativeProcessV1, type NativeTaskTerminalV1, type NativeTaskAdapterOptionsV1, type NativeTaskAdapterSessionV1, type NativeTaskProfileOptionsV1 } from "@horseness/adapter-kit";
-import { taskExecutionProfileDigest, type TaskExecutionProfileV1 } from "@horseness/domain";
+import { parseTaskEffortV1, taskExecutionProfileDigest, type TaskEffortV1, type TaskExecutionProfileV1 } from "@horseness/domain";
 import { createCodexAdapterV1, CODEX_ADAPTER_ID, CODEX_HOST_VERSION } from "./index.js";
 import type { AdapterLaunchRequestV1 } from "@horseness/protocol";
 // Reviewed npm:@openai/codex@0.144.1-linux-x64 executable identity.
@@ -14,12 +14,13 @@ function environment(): Record<string, string> {
 }
 export async function resolveCodexTaskProfileV1(options: NativeTaskProfileOptionsV1): Promise<TaskExecutionProfileV1> {
   options = structuredClone(options);
+  const effort = parseTaskEffortV1(options.effort === undefined ? "medium" : options.effort);
   if (!options.model || !/^[a-z0-9][a-z0-9.-]{1,127}$/.test(options.model) || ["default", "auto"].includes(options.model)) throw new Error("MODEL_REQUIRED");
   const path = await realpath(options.executablePath ?? join(process.env.HOME ?? "", ".local/bin/codex"));
   if (await nativeExecutableDigestV1(path) !== EXECUTABLE_DIGEST) throw new Error("UNSUPPORTED_NATIVE_HOST: expected verified Codex 0.144.1-linux-x64; configure the daemon trusted executablePath override to its pinned executable");
   const version = await runNativeProcessV1({ executablePath: path, args: ["--version"], cwd: options.workspacePath, timeoutMs: 10_000, maxOutputBytes: 4096, env: environment() });
   if (version.exitCode !== 0 || version.stdout.trim() !== "codex-cli 0.144.1") throw new Error("UNSUPPORTED_NATIVE_HOST: expected Codex 0.144.1-linux-x64; configure the daemon trusted executablePath override");
-  const observation = { advertised: false };
+  const observation = { advertised: false, effortSupported: false };
   await runNativeProcessV1({ executablePath: path, args: ["app-server", "--stdio", "--strict-config"], cwd: options.workspacePath, timeoutMs: 10_000, maxOutputBytes: 262_144, env: environment(), input: `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { clientInfo: { name: "horseness-profile", version: "0.1.0" }, capabilities: { experimentalApi: true } } })}\n`, onLine(line, write, end) {
     const message = object(JSON.parse(line));
     if (message.error !== undefined) throw new Error("NATIVE_MODEL_METADATA_UNAVAILABLE");
@@ -29,15 +30,20 @@ export async function resolveCodexTaskProfileV1(options: NativeTaskProfileOption
     } else if (message.id === 2 && message.result !== undefined) {
       const result = object(message.result);
       if (!Array.isArray(result.data)) throw new Error("NATIVE_MODEL_METADATA_UNAVAILABLE");
-      observation.advertised = result.data.some(item => object(item).model === options.model);
+      const selectedValue:unknown = result.data.find(item => object(item).model === options.model);
+      const selected = selectedValue === undefined ? undefined : object(selectedValue);
+      observation.advertised = selected !== undefined;
+      observation.effortSupported = selected !== undefined && Array.isArray(selected.supportedReasoningEfforts) && selected.supportedReasoningEfforts.some(item => object(item).reasoningEffort === effort);
       end();
     }
   } });
   if (!observation.advertised) throw new Error("UNSUPPORTED_NATIVE_MODEL: select a concrete model advertised by the supported Codex native host");
-  return Object.freeze({ schemaVersion: "1", adapterId: "codex", hostId: "codex", hostVersion: CODEX_HOST_VERSION, nativeExecutablePath: path, nativeExecutableDigest: await nativeExecutableDigestV1(path), providerId: "openai", modelId: options.model, purpose: options.purpose, timeoutMs: options.timeoutMs ?? 120_000, maxOutputBytes: 1_048_576, lookup: "local-terminal-record", idempotentLaunch: false });
+  if (!observation.effortSupported) throw new Error("UNSUPPORTED_NATIVE_EFFORT: selected model does not advertise the requested reasoning effort");
+  return Object.freeze({ schemaVersion: "1", adapterId: "codex", hostId: "codex", hostVersion: CODEX_HOST_VERSION, nativeExecutablePath: path, nativeExecutableDigest: await nativeExecutableDigestV1(path), providerId: "openai", modelId: options.model, purpose: options.purpose, effort, timeoutMs: options.timeoutMs ?? 120_000, maxOutputBytes: 1_048_576, lookup: "local-terminal-record", idempotentLaunch: false });
 }
 const object = (value: unknown): Record<string, unknown> => { if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("CODEX_PROTOCOL_INVALID"); return value as Record<string, unknown>; };
-export function createCodexTaskParserV1(model: string, context: string, cwd: string, purpose: "work" | "planner" = "work") {
+export function createCodexTaskParserV1(model: string, context: string, cwd: string, purpose: "work" | "planner" = "work", effort?: TaskEffortV1) {
+  if (effort !== undefined) parseTaskEffortV1(effort);
   let threadId = ""; let turnId = ""; let observedModel = ""; let terminal: Record<string, unknown> | null = null;
   const permissions = purpose === "work" ? ":workspace-write" : ":read-only";
   let denied = false;
@@ -68,7 +74,7 @@ export function createCodexTaskParserV1(model: string, context: string, cwd: str
         const inventory = object(message.result);
         if (!inventoryRequested || inventoryVerified || !threadId || !Array.isArray(inventory.data) || inventory.data.length !== 0 || inventory.nextCursor !== null) throw new Error("CODEX_TOOL_CONFINEMENT_FAILED");
         inventoryVerified = true; confinementFailed = false;
-        write(`${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "turn/start", params: { threadId, model, approvalPolicy: "never", permissions, environments: [], input: [{ type: "text", text: "Execute the bound task in the supplied developer context and return its final output.", text_elements: [] }] } })}\n`);
+        write(`${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "turn/start", params: { threadId, model, ...(effort === undefined ? {} : { effort }), approvalPolicy: "never", permissions, environments: [], input: [{ type: "text", text: "Execute the bound task in the supplied developer context and return its final output.", text_elements: [] }] } })}\n`);
       } else if (message.id === 3 && message.result !== undefined) {
         if (!inventoryVerified) { confinementFailed = true; throw new Error("CODEX_TOOL_CONFINEMENT_FAILED"); }
         const turn = object(object(message.result).turn);
@@ -121,7 +127,7 @@ export async function createCodexTaskAdapterV1(options: NativeTaskAdapterOptions
       if (await nativeExecutableDigestV1(profile.nativeExecutablePath) !== EXECUTABLE_DIGEST) throw new Error("NATIVE_EXECUTABLE_CHANGED");
       await spool.begin();
       const launching = (async () => {
-        const startedAt = new Date().toISOString(); const parser = createCodexTaskParserV1(profile.modelId, options.renderedContext, options.workspacePath, profile.purpose);
+        const startedAt = new Date().toISOString(); const parser = createCodexTaskParserV1(profile.modelId, options.renderedContext, options.workspacePath, profile.purpose, profile.effort);
         const wire = await runNativeProcessV1({ executablePath: profile.nativeExecutablePath, args: ["app-server", "--stdio", "--strict-config"], input: parser.initialize, onLine: parser.onLine, cwd: options.workspacePath, env: environment(), timeoutMs: profile.timeoutMs, maxOutputBytes: profile.maxOutputBytes, signal: controller.signal });
         const parsed = parser.finish(wire.exitCode);
         const outputDigest = parsed.outcome === "succeeded" ? await spool.publish(Buffer.from(parsed.output), options.purpose === "planner" ? "application/json" : "text/plain") : null;

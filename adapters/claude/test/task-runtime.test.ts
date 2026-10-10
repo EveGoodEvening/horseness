@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseClaudeTaskTerminalV1, resolveClaudeTaskProfileV1 } from "../src/task-runtime.js";
+import type { TaskEffortV1 } from "@horseness/domain";
 const model = "claude-sonnet-4-20250514";
 const init = { type: "system", subtype: "init", model, session_id: "native-session" };
 const terminal = { type: "result", subtype: "success", is_error: false, session_id: "native-session", result: "arbitrary task output" };
@@ -21,4 +22,7 @@ void test("Claude rejects missing, duplicate, conflicting and unobservable nativ
 });
 void test("Claude unresolved default and mutable aliases fail before executable inspection", async () => {
   for (const selected of [null, "sonnet", "default"]) await assert.rejects(resolveClaudeTaskProfileV1({ workspacePath: "/unused", model: selected, purpose: "work", executablePath: "/does-not-exist" }), /MODEL_REQUIRED/);
+});
+void test("Claude rejects invalid effort before native inspection",async()=>{
+ for(const effort of [null,"off","max",1])await assert.rejects(resolveClaudeTaskProfileV1({workspacePath:"/unused",model,purpose:"work",executablePath:"/does-not-exist",effort:effort as TaskEffortV1}),{code:"EXECUTION_INVALID"});
 });

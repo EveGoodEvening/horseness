@@ -64,7 +64,7 @@ void test("changed execution options cannot replay a saved mutation; definitive 
     const { state, directory } = fixture(root);
     const runId = "run:one", taskId = "task:one";
     const cursor = { ...state.workspaceCursor, kind: "composite" as const, runId, runSequence: 1, runEnvelopeHash: "run-genesis", runContextEpoch: 0 };
-    const options = { taskId, adapterId: "pi", model: "concrete", autoPlan: true, plannerAdapterId: "claude", plannerModel: "planner-concrete" };
+    const options = { taskId, adapterId: "pi", model: "concrete", effort: "high", autoPlan: true, plannerAdapterId: "claude", plannerModel: "planner-concrete", plannerEffort: "medium" };
     const call = { method: "task.execute.v1", workspaceId: state.workspaceId, runId, taskId, observationCursor: cursor, idempotencyKey: "operation:retained", input: { operationId: "operation:retained", ...options } } as CoordinatorCallV1;
     const pending = { command: "task execute", title: taskId, runId, taskId, fingerprint: JSON.stringify({ runId, ...options }), call };
     const file = join(directory, "cli-workspace.v1.json");
@@ -74,9 +74,9 @@ void test("changed execution options cannot replay a saved mutation; definitive 
     CoordinatorClientV1.prototype.call = (request) => { calls += 1; received.push(request); return Promise.reject(new SdkError("TRANSPORT_FAILURE", "AUTHORIZATION_DENIED: denied")); };
     const output: string[] = [];
     const dependencies = { transport: { request(): Promise<never> { return Promise.reject(new Error("unused")); } }, credential: { schemaVersion: "1" as const, kind: "host-reference" as const, reference: "grant:test", scope: { workspaceId: state.workspaceId, adapterId: "cli", purpose: "workspace" } }, stdout: (text: string) => output.push(text), stderr: (text: string) => output.push(text) };
-    const argv = ["task", "execute", "--workspace", root, "--task", taskId, "--adapter", "pi", "--model", "concrete", "--auto-plan", "--planner", "claude", "--planner-model", "planner-concrete", "--json"];
-    for (const [name, value] of [["--model", "different"], ["--adapter", "omp"], ["--planner", "codex"], ["--planner-model", "different"]] as const) {
-      const changed = [...argv]; changed[changed.indexOf(name) + 1] = value;
+    const argv = ["task", "execute", "--workspace", root, "--task", taskId, "--adapter", "pi", "--model", "concrete", "--effort", "high", "--auto-plan", "--planner", "claude", "--planner-model", "planner-concrete", "--json"];
+    for (const [name, value] of [["--model", "different"], ["--adapter", "omp"], ["--planner", "codex"], ["--planner-model", "different"], ["--effort", "low"], ["--planner-effort", "high"]] as const) {
+      const changed = [...argv]; if (changed.includes(name)) changed[changed.indexOf(name) + 1] = value; else changed.push(name, value);
       assert.equal(await runCliV1(changed, dependencies), 1, output.at(-1));
       assert.equal((JSON.parse(output.pop() ?? "") as { error: { code: string } }).error.code, "OPERATION_PENDING");
       assert.deepEqual((JSON.parse(readFileSync(file, "utf8")) as CliWorkspaceV1).pending, pending);
@@ -119,8 +119,43 @@ void test("execution flags reject malformed and unrelated automatic planning bef
     ["task", "execute", "--task", "task:one", "--adapter", "pi", "--auto-plan=false"],
     ["task", "execute", "--task", "task:one", "--adapter", "pi", "--planner", "claude"],
     ["task", "dispatch", "--task", "task:one", "--adapter", "other"],
+    ["task", "dispatch", "--task", "task:one", "--adapter", "pi", "--effort"],
+    ["task", "breakdown", "--task", "task:one", "--planner", "pi", "--effort", "HIGH"],
+    ["task", "execute", "--task", "task:one", "--adapter", "pi", "--effort", ""],
+    ["task", "execute", "--task", "task:one", "--adapter", "pi", "--planner-effort", "medium"],
+    ["task", "execute", "--task", "task:one", "--adapter", "pi", "--auto-plan", "--planner-effort"],
+    ["task", "execute", "--task", "task:one", "--adapter", "pi", "--auto-plan", "--planner-effort", "max"],
   ]) assert.equal(await runCliV1(args, dependencies), 2);
-  assert.equal(output.length, 4);
+  assert.equal(output.length, 10);
+});
+
+void test("omitted task effort recovers the same explicit medium pending operation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "horseness-effort-default-"));
+  const original = Object.getOwnPropertyDescriptor(CoordinatorClientV1.prototype, "call");
+  assert.ok(original);
+  try {
+    const { state, directory } = fixture(root);
+    const runId = "run:one", taskId = "task:one";
+    const cursor = { ...state.workspaceCursor, kind: "composite" as const, runId, runSequence: 1, runEnvelopeHash: "run-genesis", runContextEpoch: 0 };
+    const options = { taskId, adapterId: "pi", model: "", effort: "medium" };
+    const call = { method: "task.dispatch.v1", workspaceId: state.workspaceId, runId, taskId, observationCursor: cursor, idempotencyKey: "retained", input: { operationId: "retained", ...options } } as CoordinatorCallV1;
+    const pending = { command: "task dispatch", title: taskId, runId, taskId, fingerprint: JSON.stringify({ runId, ...options }), call };
+    const file = join(directory, "cli-workspace.v1.json");
+    writeFileSync(file, JSON.stringify({ ...state, currentRunId: runId, runs: { [runId]: cursor }, pending }));
+    let calls = 0;
+    CoordinatorClientV1.prototype.call = () => { calls++; return Promise.reject(new SdkError("TRANSPORT_FAILURE", "AUTHORIZATION_DENIED: denied")); };
+    const output: string[] = [];
+    const dependencies = { transport: { request(): Promise<never> { return Promise.reject(new Error("unused")); } }, credential: { schemaVersion: "1" as const, kind: "host-reference" as const, reference: "grant:test", scope: { workspaceId: state.workspaceId, adapterId: "cli", purpose: "workspace" } }, stdout: (text: string) => output.push(text), stderr: (text: string) => output.push(text) };
+    const args = ["task", "dispatch", "--workspace", root, "--task", taskId, "--adapter", "pi", "--json"];
+    assert.equal(await runCliV1([...args, "--effort", "high"], dependencies), 1);
+    assert.equal((JSON.parse(output.pop() ?? "") as { error: { code: string } }).error.code, "OPERATION_PENDING");
+    assert.equal(calls, 0);
+    assert.deepEqual((JSON.parse(readFileSync(file, "utf8")) as CliWorkspaceV1).pending, pending);
+    assert.equal(await runCliV1(args, dependencies), 1);
+    assert.equal((JSON.parse(output.pop() ?? "") as { error: { code: string } }).error.code, "AUTHORIZATION_DENIED");
+    assert.equal(calls, 1);
+    assert.equal((JSON.parse(readFileSync(file, "utf8")) as CliWorkspaceV1).pending, null);
+  } finally { Object.defineProperty(CoordinatorClientV1.prototype, "call", original); rmSync(root, { recursive: true, force: true }); }
 });
 
 void test("task detail exposes dependency, receipt, stopped workflow and unadopted plan state", () => {

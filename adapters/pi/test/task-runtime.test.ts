@@ -6,11 +6,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createNativeTaskSpoolV1, type NativeTaskAdapterOptionsV1, type NativeTaskTerminalV1 } from "@horseness/adapter-kit";
 import { taskExecutionProfileDigest, verifyAttemptReceipt } from "@horseness/domain";
+import type { TaskEffortV1 } from "@horseness/domain";
 
 void test("Pi requires a concrete provider/model before executable resolution",async()=>{
  for(const model of [null,"sonnet","anthropic/*","anthropic/claude-sonnet:high"]){
   await assert.rejects(resolvePiTaskProfileV1({workspacePath:"/unavailable",executablePath:"/unavailable/pi",model,purpose:"work"}),error=>error instanceof Error&&"code" in error&&error.code==="MODEL_REQUIRED");
  }
+});
+void test("Pi rejects invalid effort before native inspection",async()=>{
+ for(const effort of [null,"off","max",1])await assert.rejects(resolvePiTaskProfileV1({workspacePath:"/unused",model:"provider/model",purpose:"work",executablePath:"/does-not-exist",effort:effort as TaskEffortV1}),{code:"EXECUTION_INVALID"});
 });
 for(const outcome of ["failed","cancelled"] as const)void test(`Pi collects retained ${outcome} receipts with diagnostic evidence`,async()=>{
  const stateDirectory=await mkdtemp(join(tmpdir(),"horseness-pi-terminal-"));
@@ -19,7 +23,7 @@ for(const outcome of ["failed","cancelled"] as const)void test(`Pi collects reta
   const spool=await createNativeTaskSpoolV1(options);await spool.begin();const bytes=Buffer.from(JSON.stringify({content:[{type:"text",text:"partial native diagnostic"}],errorMessage:"provider rejected request"}));const digest=await spool.publish(bytes,"application/json");
   const provenance={profileDigest:taskExecutionProfileDigest(options.profile),observedHostId:"pi",observedHostVersion:"0.73.1",observedProviderId:"provider",observedModelId:"model",nativeSessionId:"native-session",exitCode:1};
   const record:NativeTaskTerminalV1={providerOperationId:"native-session",nativeSessionId:"native-session",startedAt:"2026-10-06T00:00:00Z",finishedAt:"2026-10-06T00:01:00Z",outcome,outputDigest:null,evidence:[{digest,mediaType:"application/json",size:bytes.byteLength}],provenance};await spool.save(record);
-  const session=await createPiTaskAdapterV1(options);
+  const session=await createPiTaskAdapterV1({...options,effort:"high"});
   try{const receipt=await session.adapter.collectReceipt(options.binding);verifyAttemptReceipt(receipt);assert.equal(receipt.outcome,outcome);assert.equal(receipt.outputDigest,null);assert.deepEqual(receipt.provenance,provenance);assert.deepEqual((await session.publication(digest)).bytes,bytes);assert.deepEqual(await session.adapter.collectReceipt(options.binding),receipt);
    await assert.rejects(async()=>session.adapter.collectReceipt({...options.binding,attemptId:"other"}),{code:"BINDING_SUBSTITUTED"});await writeFile(join(stateDirectory,digest+".bytes"),"substituted");await assert.rejects(session.adapter.collectReceipt(options.binding),/PUBLICATION_DIGEST_MISMATCH/);
   }finally{await session.close();}

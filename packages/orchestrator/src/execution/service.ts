@@ -4,11 +4,11 @@ import {
   attemptContextBindingDigest, canonicalJson, completionPredicateIdentity, contextManifestCoreDigest,
   deltaAuthorityScopeDigest, dependencySatisfied, deriveSchedulability, deterministicReplay, deterministicWorkspaceReplay,
   domainDigest, parseTaskPlanOutputV1, reduceTaskExecutionV1, resolveTask, sealDependencyJoinSnapshot, sealEventEnvelope, sealForkPin, verifyAttemptReceipt,
-  sealTaskPlanV1, taskContractDigestV2, taskDependencyClosureV1, taskExecutionProfileDigest, taskWorkflowGraphDigestV1,
+  sealTaskPlanV1, taskContractDigestV2, taskDependencyClosureV1, taskExecutionProfileDigest, taskWorkflowGraphDigestV1, parseTaskEffortV1,
   type AttemptReceiptEnvelopeV1, type CanonicalDocument, type CompositeCursorV1, type ContextManifestCoreV1, type ContextVersionV1,
   type DependencyOutcomeV1, type DispatchInputV1, type JsonValue, type NativeTaskAdapterIdV1, type RunEventPayloadV1,
   type TaskContractV2, type TaskExecutionEventV1, type TaskExecutionPreparedDataV1, type TaskExecutionProfileV1, type TaskExecutionProjectionV1,
-  type TaskWorkflowAuthorizationV1, type WorkspaceState,
+  type TaskWorkflowAuthorizationV1, type WorkspaceState, type TaskEffortV1,
 } from "@horseness/domain";
 import { evaluateExecutionPolicy, parsePolicySlotV1, policySlotDigest, type PolicySlotV1 } from "@horseness/policy";
 import type { AuthenticatedGrantV1, BoundAdapterOperationV1, ProtocolMethodV1, WorkerAdapterV1 } from "@horseness/protocol";
@@ -25,13 +25,14 @@ export interface ExecutionGrantAuthorityV1 {
 export interface ExecutionPublicationV1 { readonly digest: string; readonly mediaType: string; readonly bytes: Uint8Array }
 export interface ExecutionHostSessionV1 { readonly adapter: WorkerAdapterV1; publication(digest: string): Promise<ExecutionPublicationV1>; close(): Promise<void> }
 export interface ExecutionHostDriverV1 {
-  resolve(adapterId: NativeTaskAdapterIdV1, model: string | null, purpose: "work" | "planner"): Promise<TaskExecutionProfileV1>;
+  resolve(adapterId: NativeTaskAdapterIdV1, model: string | null, purpose: "work" | "planner", effort: TaskEffortV1): Promise<TaskExecutionProfileV1>;
   open(prepared: TaskExecutionPreparedDataV1, binding: BoundAdapterOperationV1): Promise<ExecutionHostSessionV1>;
 }
 export interface StartTaskWorkflowV1 {
   readonly operationKind: "dispatch" | "breakdown" | "execute";
   readonly operationId: string; readonly requestDigest: string; readonly observationCursor: CompositeCursorV1;
   readonly taskId: string; readonly actor: ExecutionActorV1; readonly adapterId: NativeTaskAdapterIdV1; readonly model: string | null;
+  readonly effort?: TaskEffortV1; readonly plannerEffort?: TaskEffortV1;
   readonly autoPlan?: boolean; readonly plannerAdapterId?: NativeTaskAdapterIdV1; readonly plannerModel?: string | null;
 }
 interface ExecutionView {
@@ -190,7 +191,7 @@ export class TaskExecutionServiceV1 {
     workflow??=planningWorkflow;
     return { taskId, title: task.title, lifecycle, schedulability, kind: task.kind,
       dependencies: view.state.edges.filter(edge => edge.dependentTaskId === taskId).map(edge => edge.sourceTaskId).sort(),
-      attempts: attempts.map(item => ({ attemptId: item.prepared.attemptId, generation: item.prepared.generation, adapterId: item.prepared.profile.adapterId, model: item.prepared.profile.modelId, state: item.state.state, providerOperationId: item.receipt?.providerOperationId ?? item.state.providerHandle, receiptDigest: item.receipt?.receiptDigest ?? null, outputDigest: item.receipt?.outputDigest ?? null, failureCode: item.state.findingCodes.at(-1) ?? null })), output,
+      attempts: attempts.map(item => ({ attemptId: item.prepared.attemptId, generation: item.prepared.generation, adapterId: item.prepared.profile.adapterId, model: item.prepared.profile.modelId, effort: item.prepared.profile.effort ?? null, state: item.state.state, providerOperationId: item.receipt?.providerOperationId ?? item.state.providerHandle, receiptDigest: item.receipt?.receiptDigest ?? null, outputDigest: item.receipt?.outputDigest ?? null, failureCode: item.state.findingCodes.at(-1) ?? null })), output,
       plan: details && plan ? { ...plan, adoptedTaskIds: view.state.adopted[plan.planDigest] ?? [] } : null,
       planRevision: previewEvent?.payload.eventType === "TaskPlanRevisedV1" ? { basePlanDigest: previewEvent.payload.basePlanDigest, principalId: previewEvent.principalId, eventSequence: previewEvent.sequence } : null,
       planRejection: view.state.planRejections[taskId] ?? null,
@@ -279,8 +280,14 @@ export class TaskExecutionServiceV1 {
     if ((input.operationKind === "breakdown" || input.autoPlan) && (view.state.lifecycles[input.taskId] !== "draft" || this.taskAttempts(view, input.taskId).length)) throw new DomainError("TASK_NOT_DRAFT");
     let profile: TaskExecutionProfileV1, plannerProfile: TaskExecutionProfileV1 | null = null;
     try {
-      profile = await this.hosts.resolve(input.adapterId, input.model, input.operationKind === "breakdown" ? "planner" : "work");
-      if (input.autoPlan) { const plannerAdapterId=input.plannerAdapterId??input.adapterId;plannerProfile = await this.hosts.resolve(plannerAdapterId, input.plannerModel ?? (plannerAdapterId===input.adapterId?input.model:null), "planner"); }
+      const { effort = "medium", plannerEffort = "medium" } = input;
+      profile = await this.hosts.resolve(input.adapterId, input.model, input.operationKind === "breakdown" ? "planner" : "work", parseTaskEffortV1(effort));
+      if (profile.effort !== effort) throw new DomainError("EXECUTION_PROFILE_MISMATCH");
+      if (input.autoPlan) {
+        const plannerAdapterId = input.plannerAdapterId ?? input.adapterId;
+        plannerProfile = await this.hosts.resolve(plannerAdapterId, input.plannerModel ?? (plannerAdapterId === input.adapterId ? input.model : null), "planner", parseTaskEffortV1(plannerEffort));
+        if (plannerProfile.effort !== plannerEffort) throw new DomainError("EXECUTION_PROFILE_MISMATCH");
+      }
     } catch (error) { throw new DomainError(failureCode(error) === "MODEL_REQUIRED" ? "MODEL_REQUIRED" : "EXECUTION_PREFLIGHT_FAILED", error instanceof Error ? error.message : "native preflight failed"); }
     if(this.isStopping())throw new DomainError("WORKFLOW_STOPPED");
     view = this.view(view.cursor.runId); this.assertCursor(view, input.observationCursor);

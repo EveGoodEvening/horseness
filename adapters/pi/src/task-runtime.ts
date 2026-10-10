@@ -1,12 +1,13 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { AdapterKitError, createBindingGuard, createNativeTaskSpoolV1, nativeRenderedContextDigestV1, nativeExecutableDigestV1, resolveNativeExecutablePathV1, runNativeProcessV1, type NativeTaskAdapterOptionsV1, type NativeTaskAdapterSessionV1, type NativeTaskProfileOptionsV1, type NativeTaskTerminalV1 } from "@horseness/adapter-kit";
-import { taskExecutionProfileDigest, type TaskExecutionProfileV1 } from "@horseness/domain";
+import { parseTaskEffortV1, taskExecutionProfileDigest, type TaskExecutionProfileV1 } from "@horseness/domain";
 import { createPiAdapterV1, PI_ADAPTER_ID, PI_HOST_VERSION } from "./index.js";
 import type { AdapterCancelRequestV1, AdapterLaunchRequestV1, AdapterReconcileRequestV1, AdapterResumeRequestV1, WorkerAdapterV1 } from "@horseness/protocol";
 
 export async function resolvePiTaskProfileV1(options:NativeTaskProfileOptionsV1):Promise<TaskExecutionProfileV1>{
  options={...options};
+ const effort=parseTaskEffortV1(options.effort===undefined?"medium":options.effort);
  if(options.model===null||!/^[-a-zA-Z0-9_.]+\/[^\s:*?]+$/.test(options.model))throw new AdapterKitError("MODEL_REQUIRED","Specify exact provider/model; configured or fuzzy defaults cannot be frozen safely");
  const slash=options.model.indexOf("/"); const executablePath=await resolveNativeExecutablePathV1("pi",options.executablePath);
  const nativeExecutableDigest=await nativeExecutableDigestV1(executablePath);
@@ -19,7 +20,7 @@ export async function resolvePiTaskProfileV1(options:NativeTaskProfileOptionsV1)
  const exact=listing.exitCode===0&&(listing.stdout+"\n"+listing.stderr).split("\n").some(line=>{const columns=line.trim().split(/\s+/u);return columns.length===6&&columns[0]===providerId&&columns[1]===modelId;});
  if(!exact)throw new AdapterKitError("MODEL_UNAVAILABLE","Requested provider/model is not exposed exactly by the native nonsecret catalog");
  const timeoutMs=options.timeoutMs??300000;if(!Number.isSafeInteger(timeoutMs)||timeoutMs<1||timeoutMs>3600000)throw new Error("NATIVE_TIMEOUT_INVALID");
- return {schemaVersion:"1",adapterId:"pi",hostId:"pi",hostVersion:PI_HOST_VERSION,nativeExecutablePath:executablePath,nativeExecutableDigest,providerId:options.model.slice(0,slash),modelId:options.model.slice(slash+1),purpose:options.purpose,timeoutMs,maxOutputBytes:1048576,lookup:"local-terminal-record",idempotentLaunch:false};
+ return {schemaVersion:"1",adapterId:"pi",hostId:"pi",hostVersion:PI_HOST_VERSION,nativeExecutablePath:executablePath,nativeExecutableDigest,providerId:options.model.slice(0,slash),modelId:options.model.slice(slash+1),purpose:options.purpose,effort,timeoutMs,maxOutputBytes:1048576,lookup:"local-terminal-record",idempotentLaunch:false};
 }
 export async function createPiTaskAdapterV1(options:NativeTaskAdapterOptionsV1):Promise<NativeTaskAdapterSessionV1>{
  options={...structuredClone(options),renderedContext:options.renderedContext.normalize("NFC")};const profile=Object.freeze(options.profile);
@@ -28,7 +29,8 @@ export async function createPiTaskAdapterV1(options:NativeTaskAdapterOptionsV1):
  const spool=await createNativeTaskSpoolV1(options);let verified:TaskExecutionProfileV1=profile;
  if(!await spool.handedOff()){
   if(await nativeExecutableDigestV1(profile.nativeExecutablePath)!==profile.nativeExecutableDigest)throw new Error("NATIVE_PROFILE_MISMATCH");
-  verified=await resolvePiTaskProfileV1({...options,model:profile.providerId+"/"+profile.modelId,executablePath:profile.nativeExecutablePath,timeoutMs:profile.timeoutMs});
+  const resolved=await resolvePiTaskProfileV1({...options,effort:profile.effort??"medium",model:profile.providerId+"/"+profile.modelId,executablePath:profile.nativeExecutablePath,timeoutMs:profile.timeoutMs});
+  if(profile.effort===undefined){const legacy={...resolved};delete legacy.effort;verified=legacy;}else verified=resolved;
  }
  if(taskExecutionProfileDigest(verified)!==taskExecutionProfileDigest(profile))throw new Error("NATIVE_PROFILE_MISMATCH");
  if(Buffer.byteLength(options.renderedContext)>1048576)throw new Error("NATIVE_CONTEXT_LIMIT");
@@ -41,7 +43,7 @@ export async function createPiTaskAdapterV1(options:NativeTaskAdapterOptionsV1):
  await writeFile(nativeGuardPath,`import {readFileSync,writeFileSync} from "node:fs"; export default function(api){const config=JSON.parse(readFileSync(new URL("./identity-config.json",import.meta.url),"utf8"));api.on("session_start",(_event,ctx)=>{if(ctx.model?.provider!==config.providerId||ctx.model?.id!==config.modelId)process.exit(23);writeFileSync(new URL("./native-observation.json",import.meta.url),JSON.stringify({profileDigest:config.profileDigest,providerId:ctx.model.provider,modelId:ctx.model.id,nativeSessionId:ctx.sessionManager.getSessionId()}),{mode:0o600,flag:"wx"});});api.on("before_agent_start",(_event,ctx)=>{if(ctx.model?.provider!==config.providerId||ctx.model?.id!==config.modelId)process.exit(23);});}`,{mode:0o600,flag:"wx"});
  await spool.begin();active=(async()=>{
  const startedAt=new Date().toISOString();
- const result=await runNativeProcessV1({executablePath:profile.nativeExecutablePath,args:["--print","--mode","json","--provider",profile.providerId,"--model",profile.modelId,"--thinking","off","--session-dir",options.stateDirectory,"--no-extensions","--extension",nativeGuardPath,"--no-skills","--no-prompt-templates",...(profile.purpose==="planner"?["--no-tools"]:[])],cwd:options.workspacePath,input:options.renderedContext,timeoutMs:profile.timeoutMs,maxOutputBytes:profile.maxOutputBytes,signal:controller.signal});
+ const result=await runNativeProcessV1({executablePath:profile.nativeExecutablePath,args:["--print","--mode","json","--provider",profile.providerId,"--model",profile.modelId,"--thinking",profile.effort??"off","--session-dir",options.stateDirectory,"--no-extensions","--extension",nativeGuardPath,"--no-skills","--no-prompt-templates",...(profile.purpose==="planner"?["--no-tools"]:[])],cwd:options.workspacePath,input:options.renderedContext,timeoutMs:profile.timeoutMs,maxOutputBytes:profile.maxOutputBytes,signal:controller.signal});
  let header:Record<string,unknown>|undefined,end:Record<string,unknown>|undefined;
  for(let offset=0;offset<result.stdout.length;){
   const newline=result.stdout.indexOf("\n",offset);const boundary=newline<0?result.stdout.length:newline;

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { attemptContextBindingDigest, contextManifestCoreDigest, domainDigest, emptyTaskExecutionProjectionV1, parseTaskExecutionEventV1, parseTaskExecutionProfileV1, parseTaskPlanOutputV1, reduceTaskExecutionV1, resolveTask, sealAttemptReceipt, sealDependencyJoinSnapshot, sealForkPin, sealTaskPlanV1, derivePlanAdoptionV1, taskContractDigestV2, taskExecutionProfileDigest, taskWorkflowGraphDigestV1, assertTaskWorkflowLaunchV1, assertTaskWorkflowAdoptionV1, deterministicReplay, sealEventEnvelope, type HashedEventEnvelopeV1, type TaskContractV2, type TaskExecutionPreparedDataV1, type TaskExecutionProfileV1, type CompositeCursorV1 } from "../src/index.js";
 import { deriveSchedulability, evaluateDependencies, type DependencyOutcomeV1, type TaskLifecycle, type TaskResolution } from "../src/index.js";
+import type { JsonValue } from "../src/index.js";
 
 const cursor: CompositeCursorV1 = {schemaVersion:"1",kind:"composite",workspaceId:"ws",runId:"run",workspaceSequence:1,workspaceEnvelopeHash:"wh",workspaceContextEpoch:0,runSequence:1,runEnvelopeHash:"rh",runContextEpoch:0};
 const version = {schemaVersion:"1" as const,kind:"composite" as const,workspaceContextEpoch:0,runContextEpoch:0,observationCursor:cursor};
@@ -41,12 +42,19 @@ void test("profile parsing closes options and binds concrete model identity",()=
   assert.throws(()=>parseTaskExecutionProfileV1({...profile,modelId:""}));
   assert.throws(()=>parseTaskExecutionProfileV1({...profile,launchOptions:{}}));
   assert.notEqual(taskExecutionProfileDigest(profile),taskExecutionProfileDigest({...profile,modelId:"other"}));
+  assert.equal(Object.hasOwn(parseTaskExecutionProfileV1(profile), "effort"), false);
+  assert.equal(taskExecutionProfileDigest(profile), domainDigest("horseness.task-execution-profile.v1", profile as unknown as JsonValue));
+  const medium = { ...profile, effort: "medium" as const };
+  assert.notEqual(taskExecutionProfileDigest(profile), taskExecutionProfileDigest(medium));
+  assert.notEqual(taskExecutionProfileDigest(medium), taskExecutionProfileDigest({ ...profile, effort: "high" }));
+  for (const effort of [undefined, null, "", "HIGH", "max", 1]) assert.throws(() => parseTaskExecutionProfileV1({ ...profile, effort }));
 });
 void test("prepared events bind exact rendered bytes and frozen profile manifest source",()=>{
   const p=prepared();
   assert.doesNotThrow(()=>parseTaskExecutionEventV1({...base,eventType:"TaskExecutionPreparedV1",prepared:p}));
   assert.throws(()=>parseTaskExecutionEventV1({...base,eventType:"TaskExecutionPreparedV1",prepared:{...p,renderedContext:"changed"}}));
   assert.throws(()=>parseTaskExecutionEventV1({...base,eventType:"TaskExecutionPreparedV1",prepared:{...p,profile:{...profile,modelId:"other"}}}));
+  assert.throws(()=>parseTaskExecutionEventV1({...base,eventType:"TaskExecutionPreparedV1",prepared:{...p,profile:{...profile,effort:"high"}}}));
   assert.throws(()=>parseTaskExecutionEventV1({...base,eventType:"TaskExecutionPreparedV1",prepared:{...p,manifest:{...p.manifest,extraAuthority:true}}}));
   for (const lease of [{...p.lease,fenceToken:0},{...p.lease,durationMs:999},{...p.lease,issuedAt:"2026-02-30T00:00:00Z"},{...p.lease,observationCursor:{...cursor,runSequence:2}}]) assert.throws(()=>parseTaskExecutionEventV1({...base,eventType:"TaskExecutionPreparedV1",prepared:{...p,lease}}));
 });

@@ -29,3 +29,19 @@ test("execute does not coerce opt-in automatic planning and requires the complet
   const {plannerModel:_,...incomplete}=value;
   assert.throws(()=>definition.parseInput({schemaVersion:"1",requestType:"task.execute.v1",value:incomplete}),ProtocolError);
 });
+test("effort is optional without identity mutation and validates each supplied enum",()=>{
+  for(const method of ["task.dispatch.v1","task.breakdown.v1","task.execute.v1"] as const){
+    const definition=methodDefinition(method)!;
+    const value={operationId:"operation",taskId:"task",adapterId:"pi",model:"",...(method==="task.execute.v1"?{plannerAdapterId:"pi",plannerModel:"",autoPlan:true}:{})};
+    const input={schemaVersion:"1",requestType:method,value};
+    assert.deepEqual(definition.parseInput(input),input);
+    for(const field of method==="task.execute.v1"?["effort","plannerEffort"]:["effort"]){
+      for(const effort of ["low","medium","high"]){
+        const explicit={...input,value:{...value,[field]:effort}};
+        assert.deepEqual(definition.parseInput(explicit),explicit);
+      }
+      for(const effort of [undefined,null,"","HIGH","max",0,true,[],{}])assert.throws(()=>definition.parseInput({...input,value:{...value,[field]:effort}}),ProtocolError);
+    }
+    assert.throws(()=>definition.parseInput({...input,value:{...value,effort:"medium",unknown:true}}),ProtocolError);
+  }
+});

@@ -5,7 +5,7 @@ import {METHOD_LOCAL_DTO_SHAPES_V1,METHOD_REGISTRY_V1,isAuthorizedMethod,Protoco
 const ROLES=["authority","approver","operator","worker","adapter"] as const;
 
 test("registered method DTOs reject missing fields, wrong types, and additional fields",()=>{
- const sample=(contract:Readonly<Record<string,string>>):Record<string,unknown>=>Object.fromEntries(Object.entries(contract).map(([key,kind])=>[key,kind==="task-contract-v2"?{schemaVersion:"2",taskId:"task",title:"Task",instructions:"Do work",acceptanceCriteria:[],kind:"work",sourceTaskId:null,completionPolicy:{schemaVersion:"1",kind:"predicate",predicate:{kind:"receipt-only"}}}:kind==="native-adapter"?"pi":kind==="integer"?1:kind==="boolean"?true:kind==="object"?{digest:"value"}:kind==="array"?["value"]:kind==="empty-array"?[]:kind==="empty-text"?"":kind==="status"?"completed":`${key}-value`]));
+ const sample=(contract:Readonly<Record<string,string>>):Record<string,unknown>=>Object.fromEntries(Object.entries(contract).map(([key,kind])=>[key,kind==="task-contract-v2"?{schemaVersion:"2",taskId:"task",title:"Task",instructions:"Do work",acceptanceCriteria:[],kind:"work",sourceTaskId:null,completionPolicy:{schemaVersion:"1",kind:"predicate",predicate:{kind:"receipt-only"}}}:kind==="optional-effort"?"medium":kind==="native-adapter"?"pi":kind==="integer"?1:kind==="boolean"?true:kind==="object"?{digest:"value"}:kind==="array"?["value"]:kind==="empty-array"?[]:kind==="empty-text"?"":kind==="status"?"completed":`${key}-value`]));
  const substitute=(kind:string):unknown=>kind==="integer"?"1":kind==="boolean"?"true":kind==="object"?["wrong"]:kind==="array"||kind==="empty-array"?{wrong:true}:kind==="status"?"unknown":0;
  for(const definition of METHOD_REGISTRY_V1){
   assert.notEqual(definition.inputMapping,null,`${definition.method} input mapping`);
@@ -20,7 +20,8 @@ test("registered method DTOs reject missing fields, wrong types, and additional 
    assert.deepEqual(parse(valid),valid,`${definition.method} valid ${direction}`);
    for(const key of Object.keys(contract)){
     const {[key]:_missing,...missing}=value;
-    assert.throws(()=>parse({...shell,value:missing}),ProtocolError,`${definition.method} ${direction} requires ${key}`);
+    if(contract[key]==="optional-effort")assert.deepEqual(parse({...shell,value:missing}),{...shell,value:missing});
+    else assert.throws(()=>parse({...shell,value:missing}),ProtocolError,`${definition.method} ${direction} requires ${key}`);
     assert.throws(()=>parse({...shell,value:{...value,[key]:substitute(contract[key]!)}}),ProtocolError,`${definition.method} ${direction} types ${key}`);
    }
    assert.throws(()=>parse({...shell,value:{...value,extra:true}}),ProtocolError);

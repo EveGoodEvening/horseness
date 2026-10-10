@@ -1,7 +1,7 @@
 import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { createNativeTaskSpoolV1, nativeRenderedContextDigestV1, nativeExecutableDigestV1, runNativeProcessV1, type NativeTaskTerminalV1, type NativeTaskAdapterOptionsV1, type NativeTaskAdapterSessionV1, type NativeTaskProfileOptionsV1 } from "@horseness/adapter-kit";
-import { taskExecutionProfileDigest, type TaskExecutionProfileV1 } from "@horseness/domain";
+import { parseTaskEffortV1, taskExecutionProfileDigest, type TaskExecutionProfileV1 } from "@horseness/domain";
 import { createClaudeAdapterV1, CLAUDE_ADAPTER_ID, CLAUDE_HOST_VERSION } from "./index.js";
 import type { AdapterLaunchRequestV1 } from "@horseness/protocol";
 
@@ -15,12 +15,13 @@ function environment(): Record<string, string> {
 }
 export async function resolveClaudeTaskProfileV1(options: NativeTaskProfileOptionsV1): Promise<TaskExecutionProfileV1> {
   options = structuredClone(options);
+  const effort = parseTaskEffortV1(options.effort === undefined ? "medium" : options.effort);
   if (!options.model || !/^claude-[a-z0-9]+(?:-[a-z0-9]+)*-\d{8}$/.test(options.model)) throw new Error("MODEL_REQUIRED");
   const path = await realpath(options.executablePath ?? join(process.env.HOME ?? "", ".local/bin/claude"));
   if (await nativeExecutableDigestV1(path) !== EXECUTABLE_DIGEST) throw new Error("UNSUPPORTED_NATIVE_HOST: expected verified Claude Code 2.1.228; configure the daemon trusted executablePath override to its pinned executable");
   const version = await runNativeProcessV1({ executablePath: path, args: ["--version"], cwd: options.workspacePath, timeoutMs: 10_000, maxOutputBytes: 4096, env: environment() });
   if (version.exitCode !== 0 || version.stdout.trim() !== `${CLAUDE_HOST_VERSION} (Claude Code)`) throw new Error("UNSUPPORTED_NATIVE_HOST: expected Claude Code 2.1.228; configure the daemon trusted executablePath override");
-  return Object.freeze({ schemaVersion: "1", adapterId: "claude", hostId: "claude", hostVersion: CLAUDE_HOST_VERSION, nativeExecutablePath: path, nativeExecutableDigest: await nativeExecutableDigestV1(path), providerId: "anthropic", modelId: options.model, purpose: options.purpose, timeoutMs: options.timeoutMs ?? 120_000, maxOutputBytes: 1_048_576, lookup: "local-terminal-record", idempotentLaunch: false });
+  return Object.freeze({ schemaVersion: "1", adapterId: "claude", hostId: "claude", hostVersion: CLAUDE_HOST_VERSION, nativeExecutablePath: path, nativeExecutableDigest: await nativeExecutableDigestV1(path), providerId: "anthropic", modelId: options.model, purpose: options.purpose, effort, timeoutMs: options.timeoutMs ?? 120_000, maxOutputBytes: 1_048_576, lookup: "local-terminal-record", idempotentLaunch: false });
 }
 export function parseClaudeTaskTerminalV1(stdout: string, model: string, exitCode: number | null) {
   const messages: Record<string, unknown>[] = stdout.split("\n").filter(line => line.trim()).map(line => {
@@ -69,7 +70,7 @@ export async function createClaudeTaskAdapterV1(options: NativeTaskAdapterOption
       await spool.begin();
       active = (async () => {
         const startedAt = new Date().toISOString();
-        const wire = await runNativeProcessV1({ executablePath: profile.nativeExecutablePath, args: ["-p", "--output-format", "stream-json", "--verbose", "--model", profile.modelId, ...(profile.purpose === "planner" ? ["--tools", ""] : ["--permission-mode", "acceptEdits"]), "--strict-mcp-config", "--mcp-config", "{\"mcpServers\":{}}", "--setting-sources", "", "--disable-slash-commands"], input: options.renderedContext, cwd: options.workspacePath, env: environment(), timeoutMs: profile.timeoutMs, maxOutputBytes: profile.maxOutputBytes, signal: controller.signal });
+        const wire = await runNativeProcessV1({ executablePath: profile.nativeExecutablePath, args: ["-p", "--output-format", "stream-json", "--verbose", "--model", profile.modelId, ...(profile.effort === undefined ? [] : ["--effort", profile.effort]), ...(profile.purpose === "planner" ? ["--tools", ""] : ["--permission-mode", "acceptEdits"]), "--strict-mcp-config", "--mcp-config", "{\"mcpServers\":{}}", "--setting-sources", "", "--disable-slash-commands"], input: options.renderedContext, cwd: options.workspacePath, env: environment(), timeoutMs: profile.timeoutMs, maxOutputBytes: profile.maxOutputBytes, signal: controller.signal });
         const parsed = parseClaudeTaskTerminalV1(wire.stdout, profile.modelId, wire.exitCode);
         const outputDigest = parsed.outcome === "succeeded" ? await spool.publish(Buffer.from(parsed.output), options.purpose === "planner" ? "application/json" : "text/plain") : null;
         const evidenceBytes = Buffer.from(JSON.stringify({ schemaVersion: 1, profileDigest: taskExecutionProfileDigest(profile), hostId: profile.hostId, hostVersion: profile.hostVersion, modelId: parsed.model, nativeSessionId: parsed.nativeSessionId, terminal: parsed.terminal, exitCode: wire.exitCode, ...(parsed.outcome === "succeeded" ? {} : { diagnostics: parsed.output }) }));

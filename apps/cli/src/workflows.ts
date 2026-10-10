@@ -218,17 +218,23 @@ function executionOptions(invocation: CliInvocationV1): Record<string, JsonValue
     if (!["pi", "omp", "claude", "codex"].includes(value)) throw new CliParseErrorV1("INVALID_INVOCATION", `--${name} must be pi, omp, claude, or codex.`, invocation.command);
     return value;
   };
+  const effort = (name: string): string => {
+    const value = text(invocation, name, "medium");
+    if (!["low", "medium", "high"].includes(value)) throw new CliParseErrorV1("INVALID_INVOCATION", `--${name} must be low, medium, or high.`, invocation.command);
+    return value;
+  };
   if (invocation.command === "task dispatch" || invocation.command === "task execute") options.adapterId = host("adapter");
   if (invocation.command === "task breakdown") options.adapterId = host("planner");
-  if (options.adapterId !== undefined) options.model = invocation.options.model === undefined ? "" : text(invocation, "model");
+  if (options.adapterId !== undefined) { options.model = invocation.options.model === undefined ? "" : text(invocation, "model"); options.effort = effort("effort"); }
   if (invocation.command === "task adopt") options.planDigest = text(invocation, "plan");
   if (invocation.command === "task revise") { options.basePlanDigest = text(invocation, "plan"); options.plan = readPlanFile(invocation); }
   if (invocation.command === "task execute") {
     if (invocation.options["auto-plan"] !== undefined && invocation.options["auto-plan"] !== true) throw new CliParseErrorV1("INVALID_INVOCATION", "--auto-plan is a flag and takes no value.", invocation.command);
     options.autoPlan = invocation.options["auto-plan"] === true;
-    if (!options.autoPlan && (invocation.options.planner !== undefined || invocation.options["planner-model"] !== undefined)) throw new CliParseErrorV1("INVALID_INVOCATION", "--planner and --planner-model require --auto-plan.", invocation.command);
+    if (!options.autoPlan && (invocation.options.planner !== undefined || invocation.options["planner-model"] !== undefined || invocation.options["planner-effort"] !== undefined)) throw new CliParseErrorV1("INVALID_INVOCATION", "--planner, --planner-model and --planner-effort require --auto-plan.", invocation.command);
     options.plannerAdapterId = host("planner", options.adapterId);
     options.plannerModel = invocation.options["planner-model"] === undefined ? "" : text(invocation, "planner-model");
+    options.plannerEffort = effort("planner-effort");
   }
   if (invocation.command === "task cancel") { options.reason = "operator-cancelled"; options.cascade = true; }
   return options;
@@ -309,12 +315,12 @@ export function registerWorkflowCommandsV1(registry: CliCommandRegistryV1): void
   });
   register("task add", "Add a durable draft task to a run", "task add --title TEXT [--run current|ID]", ["title", "run"], async (invocation) => cliSuccessV1("task add", await addTask(invocation)));
   register("workspace enable-execution", "Explicitly authorize task execution for this workspace", "workspace enable-execution", [], async (invocation) => cliSuccessV1(invocation.command, await enableExecution(invocation)));
-  register("task dispatch", "Start one native task attempt (acknowledgement, not completion)", "task dispatch --task ID --adapter HOST [--model NAME] [--run current|ID]", ["task", "adapter", "model", "run"], async (invocation) => cliSuccessV1(invocation.command, await taskOperation(invocation)));
-  register("task breakdown", "Start a planner and retain a preview for explicit adoption", "task breakdown --task ID --planner HOST [--model NAME] [--run current|ID]", ["task", "planner", "model", "run"], async (invocation) => cliSuccessV1(invocation.command, await taskOperation(invocation)));
+  register("task dispatch", "Start one native task attempt (effort defaults to medium)", "task dispatch --task ID --adapter HOST [--model NAME] [--effort low|medium|high] [--run current|ID]", ["task", "adapter", "model", "effort", "run"], async (invocation) => cliSuccessV1(invocation.command, await taskOperation(invocation)));
+  register("task breakdown", "Start a planner and retain a preview (effort defaults to medium)", "task breakdown --task ID --planner HOST [--model NAME] [--effort low|medium|high] [--run current|ID]", ["task", "planner", "model", "effort", "run"], async (invocation) => cliSuccessV1(invocation.command, await taskOperation(invocation)));
   register("task export-plan", "Export the current plan's editable JSON to a new private file", "task export-plan --task ID --out FILE [--run current|ID]", ["task", "out", "run"], async (invocation) => cliSuccessV1(invocation.command, await exportPlan(invocation)));
   register("task revise", "Save an edited preview without adopting or executing it", "task revise --task ID --plan BASE_DIGEST --file FILE [--run current|ID]", ["task", "plan", "file", "run"], async (invocation) => cliSuccessV1(invocation.command, await taskOperation(invocation)));
   register("task adopt", "Adopt the exact reviewed plan preview", "task adopt --task ID --plan DIGEST [--run current|ID]", ["task", "plan", "run"], async (invocation) => cliSuccessV1(invocation.command, await taskOperation(invocation)));
-  register("task execute", "Authorize serial dependency execution; planning is opt-in", "task execute --task ID --adapter HOST [--model NAME] [--auto-plan [--planner HOST] [--planner-model NAME]] [--run current|ID]", ["task", "adapter", "model", "auto-plan", "planner", "planner-model", "run"], async (invocation) => cliSuccessV1(invocation.command, await taskOperation(invocation)));
+  register("task execute", "Authorize serial dependency execution; task and planner effort independently default to medium", "task execute --task ID --adapter HOST [--model NAME] [--effort low|medium|high] [--auto-plan [--planner HOST] [--planner-model NAME] [--planner-effort low|medium|high]] [--run current|ID]", ["task", "adapter", "model", "effort", "auto-plan", "planner", "planner-model", "planner-effort", "run"], async (invocation) => cliSuccessV1(invocation.command, await taskOperation(invocation)));
   register("task cancel", "Durably stop the target and its workflow launches", "task cancel --task ID [--run current|ID]", ["task", "run"], async (invocation) => cliSuccessV1(invocation.command, await taskOperation(invocation)));
   register("task show", "Observe task attempts, result, dependencies, plan and workflow", "task show --task ID [--run current|ID]", ["task", "run"], async (invocation) => withCliWorkspaceV1(invocation, async (session) => {
     const taskId = text(invocation, "task");

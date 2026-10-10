@@ -22,9 +22,9 @@ const HOSTS: Record<NativeTaskAdapterIdV1, {
 /** Executable overrides come from the owner daemon environment, never task or planner data. */
 export function createTaskHostDriverV1(workspacePath: string, stateRoot: string): ExecutionHostDriverV1 {
   return {
-    async resolve(adapterId, model, purpose) {
+    async resolve(adapterId, model, purpose, effort) {
       const host = HOSTS[adapterId], executablePath = process.env[host.executableVariable];
-      return host.resolve({ workspacePath, model, purpose, ...(executablePath ? { executablePath } : {}) });
+      return host.resolve({ workspacePath, model, purpose, effort, ...(executablePath ? { executablePath } : {}) });
     },
     async open(prepared, binding) {
       const profile = prepared.profile;
@@ -32,7 +32,7 @@ export function createTaskHostDriverV1(workspacePath: string, stateRoot: string)
       return HOSTS[profile.adapterId].create({ binding, profile, workspacePath, stateDirectory: join(stateRoot, "task-attempts", directory), renderedContext: prepared.renderedContext,
         producerPrincipalId: prepared.binding.allowedProducerPrincipalId, producerGrantDigest: prepared.binding.allowedProducerGrantDigest,
         model: profile.adapterId === "pi" || profile.adapterId === "omp" ? `${profile.providerId}/${profile.modelId}` : profile.modelId,
-        purpose: profile.purpose, executablePath: profile.nativeExecutablePath, timeoutMs: profile.timeoutMs });
+        ...(profile.effort === undefined ? {} : { effort: profile.effort }), purpose: profile.purpose, executablePath: profile.nativeExecutablePath, timeoutMs: profile.timeoutMs });
     },
   };
 }

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createCodexTaskParserV1, resolveCodexTaskProfileV1 } from "../src/task-runtime.js";
+import type { TaskEffortV1 } from "@horseness/domain";
 const model = "gpt-5.4";
 function started(purpose: "work" | "planner" = "work") {
   const parser = createCodexTaskParserV1(model, "bound context", "/authority/workspace", purpose);
@@ -92,4 +93,10 @@ void test("Codex refuses ambient MCP servers, incomplete inventories, and unsupp
   assert.throws(() => { unsupported.onLine(JSON.stringify({ id: 4, error: { code: -32601 } }), write, () => { return; }); }, /RPC_ERROR/);
   assert.throws(() => { unsupported.onLine(JSON.stringify({ id: 4, result: { data: [], nextCursor: null } }), write, () => { return; }); }, /CONFINEMENT_FAILED/);
   assert.equal(requests.includes("turn/start"), false);
+});
+void test("Codex rejects invalid effort before native inspection or protocol initialization",async()=>{
+ for(const effort of [null,"off","max",1]){
+  await assert.rejects(resolveCodexTaskProfileV1({workspacePath:"/unused",model,purpose:"work",executablePath:"/does-not-exist",effort:effort as TaskEffortV1}),{code:"EXECUTION_INVALID"});
+  assert.throws(()=>createCodexTaskParserV1(model,"context","/workspace","work",effort as TaskEffortV1),{code:"EXECUTION_INVALID"});
+ }
 });

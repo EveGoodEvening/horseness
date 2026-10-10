@@ -5,7 +5,8 @@ import { assertAcyclic, dependencySatisfied, reduceDispatch, reduceTaskLifecycle
 import { verifyAttemptReceipt, type AttemptReceiptEnvelopeV1 } from "./receipt.js";
 
 export type NativeTaskAdapterIdV1 = "pi" | "omp" | "claude" | "codex";
-export interface TaskExecutionProfileV1 { schemaVersion: "1"; adapterId: NativeTaskAdapterIdV1; hostId: string; hostVersion: string; nativeExecutablePath: string; nativeExecutableDigest: string; providerId: string; modelId: string; purpose: "work" | "planner"; timeoutMs: number; maxOutputBytes: number; lookup: "local-terminal-record" | "native"; idempotentLaunch: boolean }
+export type TaskEffortV1 = "low" | "medium" | "high";
+export interface TaskExecutionProfileV1 { schemaVersion: "1"; adapterId: NativeTaskAdapterIdV1; hostId: string; hostVersion: string; nativeExecutablePath: string; nativeExecutableDigest: string; providerId: string; modelId: string; effort?: TaskEffortV1; purpose: "work" | "planner"; timeoutMs: number; maxOutputBytes: number; lookup: "local-terminal-record" | "native"; idempotentLaunch: boolean }
 export interface TaskContractV2 { schemaVersion: "2"; taskId: string; title: string; instructions: string; acceptanceCriteria: string[]; kind: "work" | "planner"; sourceTaskId: string | null; completionPolicy: { schemaVersion: "1"; kind: "predicate"; predicate: { kind: "receipt-only" } } }
 function fail(code = "EXECUTION_INVALID"): never { throw new DomainError(code); }
 function closed(value: unknown, keys: readonly string[], code = "EXECUTION_INVALID"): Record<string, unknown> { if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) fail(code); const r = value as Record<string, unknown>; if (Object.keys(r).length !== keys.length || keys.some(k => !Object.hasOwn(r, k))) fail(code); return r; }
@@ -13,7 +14,18 @@ function text(value: unknown, code = "EXECUTION_INVALID"): asserts value is stri
 function texts(value: unknown, nonempty = false, code = "EXECUTION_INVALID"): asserts value is string[] { if (!Array.isArray(value) || (nonempty && !value.length)) fail(code); for (const item of value) text(item, code); }
 function positive(value: unknown): void { if (!Number.isSafeInteger(value) || (value as number) < 1) fail(); }
 function choice(value: unknown, choices: readonly string[]): void { if (typeof value !== "string" || !choices.includes(value)) fail(); }
-export function parseTaskExecutionProfileV1(value: unknown): TaskExecutionProfileV1 { const r = closed(value, ["schemaVersion","adapterId","hostId","hostVersion","nativeExecutablePath","nativeExecutableDigest","providerId","modelId","purpose","timeoutMs","maxOutputBytes","lookup","idempotentLaunch"]); if (r.schemaVersion !== "1") fail(); choice(r.adapterId,["pi","omp","claude","codex"]); choice(r.purpose,["work","planner"]); choice(r.lookup,["local-terminal-record","native"]); for (const key of ["hostId","hostVersion","nativeExecutablePath","nativeExecutableDigest","providerId","modelId"]) text(r[key]); positive(r.timeoutMs); positive(r.maxOutputBytes); if (typeof r.idempotentLaunch !== "boolean") fail(); return value as TaskExecutionProfileV1; }
+export function parseTaskEffortV1(value: unknown): TaskEffortV1 { choice(value, ["low", "medium", "high"]); return value as TaskEffortV1; }
+export function parseTaskExecutionProfileV1(value: unknown): TaskExecutionProfileV1 {
+  // Omission belongs to historical profiles: never inject a default into their digest.
+  const hasEffort = value !== null && typeof value === "object" && Object.hasOwn(value, "effort");
+  const r = closed(value, ["schemaVersion","adapterId","hostId","hostVersion","nativeExecutablePath","nativeExecutableDigest","providerId","modelId","purpose","timeoutMs","maxOutputBytes","lookup","idempotentLaunch", ...(hasEffort ? ["effort"] : [])]);
+  if (r.schemaVersion !== "1") fail();
+  choice(r.adapterId,["pi","omp","claude","codex"]); choice(r.purpose,["work","planner"]); choice(r.lookup,["local-terminal-record","native"]);
+  if (hasEffort) parseTaskEffortV1(r.effort);
+  for (const key of ["hostId","hostVersion","nativeExecutablePath","nativeExecutableDigest","providerId","modelId"]) text(r[key]);
+  positive(r.timeoutMs); positive(r.maxOutputBytes); if (typeof r.idempotentLaunch !== "boolean") fail();
+  return value as TaskExecutionProfileV1;
+}
 export function taskExecutionProfileDigest(profile: TaskExecutionProfileV1): string { return domainDigest("horseness.task-execution-profile.v1", parseTaskExecutionProfileV1(profile) as unknown as JsonValue); }
 export function parseTaskContractV2(value: unknown): TaskContractV2 { const r = closed(value,["schemaVersion","taskId","title","instructions","acceptanceCriteria","kind","sourceTaskId","completionPolicy"]); if (r.schemaVersion !== "2") fail(); for (const key of ["taskId","title","instructions"]) text(r[key]); texts(r.acceptanceCriteria); choice(r.kind,["work","planner"]); if (r.sourceTaskId !== null) text(r.sourceTaskId); if (r.kind === "planner" && r.sourceTaskId === null) fail(); const p = closed(r.completionPolicy,["schemaVersion","kind","predicate"]); if (p.schemaVersion !== "1" || p.kind !== "predicate" || closed(p.predicate,["kind"]).kind !== "receipt-only") fail(); return value as TaskContractV2; }
 export function taskContractDigestV2(contract: TaskContractV2): string { return domainDigest("horseness.task-contract.v2", parseTaskContractV2(contract) as unknown as JsonValue); }
