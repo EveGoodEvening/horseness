@@ -96,7 +96,7 @@ cd /absolute/path/to/your/project
 
 执行前须准备受支持版本的原生宿主及其认证会话。上例选择 Pi，也可显式选择 `omp`、`claude` 或 `codex`；模型标识依宿主而定，不会自动换宿主或模型。具体版本和授权要求见 [CLI 前置条件](docs/cli.md#native-runtime-prerequisites)。
 
-`dispatch`、`breakdown` 和 `execute` 都支持 `--effort low|medium|high`，不填写时使用 `medium`。例如，加上 `--effort high` 可向支持推理的模型请求更高的推理强度。
+`dispatch`、`breakdown` 和 `execute` 都支持 `--effort off|none|low|medium|high|xhigh|max`，不填写时使用 `medium`。可按所用模型自行选择；`off` 和 `none` 都表示显式关闭推理，具体支持以原生宿主为准。
 
 > **启动确认 ≠ 任务完成 ≠ 结论被接纳。** `dispatch` 返回持久化启动确认；用 `task show` 查看执行进度、经过验证的回执和输出。日常新建任务默认按有效回执判定完成，不要求无关的正式状态变更；需要变更被接纳的任务，必须满足它声明的完成条件。
 
@@ -157,7 +157,7 @@ flowchart TD
 
 它组合规划、采用和执行；默认使用同一宿主与模型规划。自动模式不会绕过权限、策略、配额、依赖或取消，遇到依赖失败、拒绝或未知结果会停止。
 
-可用 `--planner-effort low|medium|high` 单独设置自动规划的推理强度。它默认使用 `medium`，不会继承执行任务的 `--effort`。
+可用 `--planner-effort off|none|low|medium|high|xhigh|max` 单独设置自动规划的推理强度。它默认使用 `medium`，不会继承执行任务的 `--effort`。
 
 ## 适用场景与边界
 

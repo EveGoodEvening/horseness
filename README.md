@@ -96,7 +96,7 @@ In the same terminal, replace `TASK_ID` with an ID from `task list` and `PROVIDE
 
 Prepare a supported native host version and its authentication session first. This example selects Pi; `omp`, `claude`, and `codex` are also explicit choices. Model identifiers are host-specific; there is no automatic host or model substitution. See [CLI prerequisites](docs/cli.md#native-runtime-prerequisites) for versions and authorization requirements.
 
-`dispatch`, `breakdown`, and `execute` accept `--effort low|medium|high`; omitted effort is `medium`. For example, add `--effort high` to request more reasoning from a model that supports it.
+`dispatch`, `breakdown`, and `execute` accept `--effort off|none|low|medium|high|xhigh|max`; omitted effort is `medium`. Choose the level for your native model; both `off` and `none` explicitly request no reasoning. Native-host support still applies.
 
 > **Launch acknowledgement ≠ task completion ≠ accepted conclusion.** `dispatch` returns a durable launch acknowledgement; use `task show` to inspect progress, authenticated receipts, and output. Daily CLI tasks default to receipt-only completion, without requiring an unrelated canonical change; tasks that require an accepted change must satisfy that declared completion condition.
 
@@ -157,7 +157,7 @@ If step-by-step review is not needed, use this **alternative** on a draft object
 
 It combines planning, adoption, and execution, using the same host and model for planning by default. Automatic mode does not bypass grants, policy, quota, dependencies, or cancellation; it stops on failed dependencies, denial, or an unknown outcome.
 
-Use `--planner-effort low|medium|high` to set automatic planning effort separately. It defaults to `medium` even when worker `--effort` is different.
+Use `--planner-effort off|none|low|medium|high|xhigh|max` to configure automatic planning separately. It defaults to `medium` even when worker `--effort` is different.
 
 ## When to use it—and its limits
 
