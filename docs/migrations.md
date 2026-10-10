@@ -56,6 +56,8 @@ The existing command-dedup and authority-consumption tables retain exact request
 
 Native attempt spool directories are private workspace state under `.horseness/task-attempts/`. Keep them with the authority database and artifact directory. Removing an uncompleted spool is not evidence that a host did no work; it creates an unknown outcome, not permission to launch again. Never delete `.horseness` to repair a denied or uncertain operation.
 
+Execution effort requires no SQLite schema change. New authorizations persist explicit `low`, `medium` or `high`, with independent medium defaults for work and automatic planning. Historical profiles without effort retain their exact digest and launch settings (Pi/OMP thinking off; Claude/Codex native effort unspecified). Existing receipts/spools and workflow restart use those frozen profiles, never a new ambient default. Older readers cannot consume effort-bearing profiles; upgrade the matching train before new execution. Resolve older pending CLI execution requests with their originating CLI before upgrading: never edit their payloads or recovery fingerprints to add effort.
+
 ## Immutable plan revision state
 
 `TaskPlanRevisedV1` is additive to the existing run stream and requires no SQLite migration. Replay retains old previews and their planner bindings, stores the revised content-addressed preview, and advances only the latest-preview pointer and operational cursor. Its base digest and authenticated event author preserve revision lineage; revision is not planner output, adoption, execution consent or canonical acceptance.

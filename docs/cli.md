@@ -35,6 +35,10 @@ horseness task cancel --task TASK_ID
 
 `dispatch` explicitly starts one native attempt. Supported hosts are `pi`, `omp`, `claude` and `codex`; no host or model is silently substituted. Omit `--model` only when the daemon can resolve a concrete configured default through supported non-secret metadata; otherwise `MODEL_REQUIRED` requests a concrete model. Missing runtime, access, policy or quota fails explicitly. The CLI only calls the daemon protocol; it never starts native workers itself.
 
+`dispatch`, `breakdown` and `execute` accept `--effort low|medium|high`, defaulting to `medium` when omitted. On `breakdown` this controls the planner; on `execute` it controls the objective and its dependency work. The selected value is frozen into the execution profile, its digest and the CLI's exact-recovery request. `task show --json` reports each attempt's `effort` (`null` for historical profiles that predate this setting). Changing effort is not an exact retry of a pending operation.
+
+Pi and OMP receive native `--thinking`, Claude receives `--effort`, and Codex receives reasoning `effort` on `turn/start`. These levels are native reasoning requests, not portable token budgets; the selected model/provider determines support. Invalid CLI levels fail before a workspace mutation; Codex preflight also requires the selected model to advertise that reasoning effort.
+
 `dispatch`, `breakdown` and `execute` return a **durable acknowledgement**, not a completed task or successful worker result. There is no CLI polling loop. `task show` observes dependencies, schedulability, attempt generation/state and authenticated receipt/output digests, published output, plan preview and workflow state/reason. Only authority-backed task resolution means completion; prose and a start acknowledgement do not. Unknown outcomes must be inspected, never implicitly relaunched.
 
 `breakdown` runs a separate planner; it does not activate or complete the objective, adopt children or launch their work. Inspect the preview's instructions, human acceptance criteria and dependency keys, then explicitly `adopt` its exact digest. Adoption checks the unchanged draft source contract and creates its dependency graph atomically. The objective remains the final integration task, depending on terminal child tasks. Invalid planner output is rejected, not converted into fake tasks. Human-language acceptance criteria are guidance, not claimed automatic semantic verification.
@@ -42,11 +46,13 @@ horseness task cancel --task TASK_ID
 `execute` durably authorizes **serial dependency-ordered execution** of the exact target closure. Optional automatic planning/adoption is explicit:
 
 ```sh
-horseness task execute --task TASK_ID --adapter pi --model PROVIDER/MODEL \
-  --auto-plan --planner claude --planner-model CONCRETE_PLANNER_MODEL
+horseness task execute --task TASK_ID --adapter pi --model PROVIDER/MODEL --effort high \
+  --auto-plan --planner claude --planner-model CONCRETE_PLANNER_MODEL --planner-effort low
 ```
 
 `--auto-plan` is a valueless flag, defaults off and is invalid on other commands. `--planner` defaults to the execution adapter. With the same adapter, omitted `--planner-model` reuses the chosen execution model; a different planner host never inherits another host's model selection and needs its own concrete model if no safe default is available. Planner flags require `--auto-plan`. Automatic authorization does not bypass grants, policy, quota, dependencies or cancellation; execution stops on failed dependencies, denial or unknown outcome. `cancel` durably stops the target/workflow's future launches, including after restart; it is not a claim that already handed-off external work was undone.
+
+`--planner-effort low|medium|high` requires `--auto-plan`. Its omitted-value default is independently `medium`: `--effort high --auto-plan` uses high effort for work and medium effort for planning. Omission and explicitly writing `medium` produce the same new CLI recovery request.
 
 Existing initialized workspace grants are not upgraded by `init`. An owner whose current authority grant permits `grant.issue.v1` can explicitly request a same-principal replacement:
 
